@@ -17,7 +17,7 @@
 | 机制唯一化注册表（M1–M13） | `docs/MECHANISMS.md` |
 | 决策记录制度 | `.agents/notes/README.md` |
 | 门禁唯一入口 | `scripts/run-gates.ps1` |
-| 规则文档全集（十一份规范） | `AGENTS.md` 文档纪律第 5 条索引 |
+| 规则文档全集（十二份规范） | `AGENTS.md` 文档纪律第 5 条索引 |
 | 环境陷阱登记 | `docs/architecture/环境陷阱.md` |
 
 ## 一句话说明

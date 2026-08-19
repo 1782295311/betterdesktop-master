@@ -1,0 +1,30 @@
+root = true
+
+# 全仓：UTF-8、LF、末尾换行、去尾部空白
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+
+# C#：4 空格缩进、大括号换行（Allman）
+[*.cs]
+indent_style = space
+indent_size = 4
+csharp_new_line_before_open_brace = all
+dotnet_sort_system_directives_first = true
+dotnet_diagnostic.CA2000.severity = warning
+
+# XAML / 工程文件 / JSON：2 空格
+[*.{xaml,xml,csproj,props,targets,json}]
+indent_style = space
+indent_size = 2
+
+# PowerShell：4 空格
+[*.ps1]
+indent_style = space
+indent_size = 4
+
+# Markdown：不强制换行（门禁 md-wrap 另有规则）
+[*.md]
+trim_trailing_whitespace = true

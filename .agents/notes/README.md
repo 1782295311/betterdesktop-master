@@ -25,6 +25,12 @@ Status: <生命周期>[ — 补充说明]
 - `implemented`：`## Problem` / `## Decision` / `## Alternatives considered` / `## Consequences`（**禁止**残留 `## Proposal`、`## Plan` 等提议期标题）
 - `rejected`：`## Problem` / `## Proposal` / `## Alternatives considered`
 
+## 与 ADR 的分工
+
+- 影响冻结项（TFM / 分层 / 资产边界）、机制替换、内核 API 方向 → 开 ADR（`docs/architecture/ADR-NNN.md`）。
+- 其余非平凡设计决策 → 本目录 Agent Note。
+- 拿不准时先写 Agent Note，经评审 / 主理人判定需要升格时再升格为 ADR。
+
 ## 归档
 
 - 不再指导未来工作的记录 → 移到 `.agents/notes/archived/` 对应类别目录。

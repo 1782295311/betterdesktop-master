@@ -26,7 +26,7 @@ host/           薄宿主 exe（P2 起）
 2. 每个包（`packages/**/*.csproj`）必须有同目录 `README.md`，且含 `## Known Limitations` 小节（至少一条 `- ` 列表项）。覆盖率 100%，由 `verify-package-readme` 棘轮强制。
 3. 关键文档有字数预算（`scripts/manifests/doc-budgets.manifest.json`）。超限先精简；确实要放宽上限，必须在决策记录中说明理由。
 4. 决策记录写进 `.agents/notes/`；事故写进 `docs/postmortem/NNNN-title.md`。两者格式由门禁强制。
-5. 规则文档索引（均强制，按域取用）：`docs/coding-standards.md`（代码）/ `docs/TERMINOLOGY.md`（命名）/ `docs/ui-foundation.md`（UI）/ `docs/reuse-rules.md`（复用）/ `docs/extension-rules.md`（扩展契约）/ `docs/pluginization.md`（插件化行为）/ `docs/testing.md`（测试）/ `docs/runtime-health.md`（运行时）/ `docs/security.md`（安全）/ `docs/build-release.md`（构建发布）/ `docs/product-quality.md`（质量）。
+5. 规则文档索引（均强制，按域取用）：`docs/coding-standards.md`（代码）/ `docs/TERMINOLOGY.md`（命名）/ `docs/ui-foundation.md`（UI）/ `docs/reuse-rules.md`（复用）/ `docs/extension-rules.md`（扩展契约）/ `docs/pluginization.md`（插件化行为）/ `docs/testing.md`（测试）/ `docs/runtime-health.md`（运行时）/ `docs/security.md`（安全）/ `docs/build-release.md`（构建发布）/ `docs/product-quality.md`（质量）/ `docs/code-review.md`（评审）。
 
 ## 门禁纪律
 
@@ -44,6 +44,7 @@ host/           薄宿主 exe（P2 起）
 1. 新增/替换横切机制 → 先登记 `docs/MECHANISMS.md`；替换已登记机制 → 新开 ADR。
 2. 非平凡设计决策必须伴随决策记录；没有决策记录的变更可以被打回。
 3. 提交信息用中文，前缀标明范围（如 `gates:` / `docs:` / `kernel:`）。
+4. 分支与合并：main 受保护——禁止直接 push、禁止 force push；合入须经 `docs/code-review.md` 评审；主干破坏优先回滚再前修（ADR-001 R2 同口径）。
 
 ## 命名
 

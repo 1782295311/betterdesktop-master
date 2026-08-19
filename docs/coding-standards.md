@@ -8,7 +8,7 @@
 - 目标框架：`net8.0-windows`（ADR-001 D2 冻结，禁止任何包写其它 TFM）。
 - `<Nullable>enable</Nullable>`、`<ImplicitUsings>enable</ImplicitUsings>`、`<TreatWarningsAsErrors>true</TreatWarningsAsErrors>`、`<Platforms>x64</Platforms>`。
 - 依赖选型：**内核基础包（kernel/kernel）原则上零第三方运行时依赖**；确需引入的依赖（含 MS DI 等）必须在 ADR-002 或对应决策记录中写明理由与边界。
-- 文件编码 UTF-8；换行 LF（与文档一致）。
+- 文件编码 UTF-8；换行 LF；代码格式唯一来源 = 根 `.editorconfig`（P1 起 `dotnet format --verify-no-changes` 入门禁）。
 - 每包一个 csproj + 同目录 README.md（门禁 `package-readme` 强制，含 `## Known Limitations`）。
 
 ## 二、目录与命名
@@ -37,6 +37,15 @@
 - 内核三机制（服务图、依赖驱动重载、托管清理）必须有独立测试物证（对应 P1 验收判据）。
 - 包粒度与拆包判据见 `docs/reuse-rules.md`；对外扩展点声明义务见 `docs/extension-rules.md`。
 
-## 五、诚实标注原则
+## 五、并发与线程模型
+
+1. UI 线程唯一：一切 UI 操作在 STA 主线程，后台一律经内核 Dispatcher 服务封送（禁止清单第 4 条的执行细则）。
+2. 禁止 sync-over-async：UI 线程上禁 `.Result` / `.Wait()` / `.GetAwaiter().GetResult()`——死锁第一来源。
+3. 异步方法 `Async` 后缀；取消令牌全程传播；禁 `async void`（事件处理器除外，且必须整体 try/catch 并上报）。
+4. 禁裸 `new Thread`：后台工作走内核调度或 `Task`，线程必须命名并登记用途。
+5. 锁纪律：锁内禁异步等待；共享可变状态优先 `Channel` 或不可变快照，而非裸锁。
+6. `IDisposable` / `IAsyncDisposable` 必须确定性释放；禁止依赖终结器兜底（ALC 可卸载的前提）。
+
+## 六、诚实标注原则
 
 每条禁止项要么有对应门禁/测试（标注名称），要么如实标注「暂无机检，靠评审」。禁止把纸面规则写成像有机检的样子（老仓「假绿」教训，ADR-001 R4 配套）。
