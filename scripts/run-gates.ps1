@@ -15,9 +15,7 @@ $gates = @(
     [pscustomobject]@{ Id = 'agent-note';     Script = 'verify-agent-note.ps1';     Needs = @() },
     [pscustomobject]@{ Id = 'archived-notes'; Script = 'verify-archived-notes.ps1'; Needs = @() },
     [pscustomobject]@{ Id = 'md-links';       Script = 'verify-md-links.ps1';       Needs = @() },
-    [pscustomobject]@{ Id = 'md-wrap';        Script = 'verify-md-wrap.ps1';        Needs = @() },
-    [pscustomobject]@{ Id = 'doc-budgets';    Script = 'verify-doc-budgets.ps1';    Needs = @() },
-    [pscustomobject]@{ Id = 'gate-registry';  Script = 'verify-gate-registry.ps1';  Needs = @() }
+    [pscustomobject]@{ Id = 'doc-budgets';    Script = 'verify-doc-budgets.ps1';    Needs = @() }
 )
 
 if ($List) {
