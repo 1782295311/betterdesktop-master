@@ -2,7 +2,7 @@
 
 > 地位：「一个关注点一套机制」裁决的**唯一真相源**。任何新增/替换机制的提案必须先登记或引用本表。
 > 与 ADR-001 的关系：ADR-001 是宪法，本表是宪法的机制清单；任一方改动时必须当场确认另一方仍指得通。
-> 版本：v0.3 · 2026-08-20（v0.3: 补 M9–M13 测试/运行时/安全/构建/质量五域规则）
+> 版本：v0.4 · 2026-08-20（v0.4: 补 M14 插件化行为规范）
 
 ## 登记表
 
@@ -21,6 +21,7 @@
 | M11 | 安全与供应链 | [`docs/security.md`](security.md)（插件最小权限 / 依赖锁定与漏洞扫描 / 许可证合规 / 敏感信息 / 更新签名） | 未审计依赖、敏感信息入库、fail-open 授权、裸拷 vendoring | P1：`dotnet list package --vulnerable`；P2：secrets 扫描 + notices 生成 |
 | M12 | 构建与发布 | [`docs/build-release.md`](build-release.md)（SemVer 单一来源 / SDK 锁定 / 发布门禁 / CHANGELOG / 插件禁 AOT） | 手工散改版本号、产物混装、无门禁发布 | P1：SDK 锁定检查；P2：release 门禁 |
 | M13 | 产品质量 | [`docs/product-quality.md`](product-quality.md)（性能预算 / 可访问性 / 本地化 / 设置单一来源与迁移 / 隐私） | 硬编码文案、第二套设置源、无迁移 schema 变更、无预算性能回归 | P1：设置单一来源架构测试；P2：硬编码字符串扫描 + benchmark |
+| M14 | 插件化行为 | [`docs/pluginization.md`](pluginization.md)（角色插槽 / 先立后破替换 / 崩溃隔离分级 / 熔断回退 / 回退锚点） | 中间态替换、插件崩溃拖垮外壳、无回退路径、静默拒绝加载 | P2：替换演练 + 崩溃注入演练（物证制） |
 
 ## 流程
 

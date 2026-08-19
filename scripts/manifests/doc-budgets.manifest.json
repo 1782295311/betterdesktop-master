@@ -1,12 +1,12 @@
 {
   "schema": 1,
-  "note": "关键文档字数预算（计数口径：CJK 字符 + 拉丁词序列）。放宽上限必须先经决策记录说明理由。历史调整：AGENTS.md 900→1100（记录 2026-08-19-handoff-hardening）；MECHANISMS.md 700→900→1400（记录 2026-08-20-design-health-rules 与 2026-08-20-project-health-complete）。",
+  "note": "关键文档字数预算（计数口径：CJK 字符 + 拉丁词序列）。放宽上限必须先经决策记录说明理由。历史调整：AGENTS.md 900→1100（记录 2026-08-19-handoff-hardening）；MECHANISMS.md 700→900→1400（记录 2026-08-20-design-health-rules 与 2026-08-20-project-health-complete）；TERMINOLOGY.md 900→1100（记录 2026-08-20-pluginization-behavior）。",
   "doc-budgets": {
     "AGENTS.md": 1100,
     "docs/architecture.md": 550,
     "docs/MECHANISMS.md": 1400,
     "docs/architecture/ADR-001.md": 1900,
-    "docs/TERMINOLOGY.md": 900,
+    "docs/TERMINOLOGY.md": 1100,
     "docs/coding-standards.md": 850,
     "docs/architecture/STATUS.md": 500,
     "docs/cookbook/会话交接.md": 450,
@@ -19,6 +19,7 @@
     "docs/security.md": 650,
     "docs/build-release.md": 550,
     "docs/product-quality.md": 650,
-    "docs/architecture/环境陷阱.md": 550
+    "docs/architecture/环境陷阱.md": 550,
+    "docs/pluginization.md": 1350
   }
 }

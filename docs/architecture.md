@@ -17,6 +17,7 @@ Better Desktop Cordis = **Cordis 内核（C# 复刻）+ 外壳功能包（一切
 | Events | 五种分发：emit / parallel / serial / bail / waterfall（洋葱模型） |
 | Loader | 声明式插件树（cordis.yml），**不做拓扑排序**，依赖排序交给 inject |
 | HMR | 双 AssemblyLoadContext 切换 + 旧配置迁移 + 状态迁移接口 + 失败回滚 |
+| 替换 | 角色插槽：同名服务 provide 即替换；先立后破原子切换；崩溃熔断回退（`docs/pluginization.md`） |
 
 ## 包分层（规划）
 

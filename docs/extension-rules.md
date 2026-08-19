@@ -1,6 +1,7 @@
 # extension-rules.md — 扩展性与社区契约
 
 > 地位：让 Better Desktop Cordis 像 DeepSeek Harness 一样**高扩展、可社区**的对外契约（MECHANISMS.md M8 的唯一真相源）。
+> 分工：本文件管契约（清单字段/扩展点声明/兼容策略）；替换、隔离、熔断、回退等**行为面**见 `docs/pluginization.md`（M14）。
 > 目标形态：第三方开发者只读本文件与各包 README，就能写插件、提贡献，不需要问任何人。
 
 ## 一、扩展点显式化
