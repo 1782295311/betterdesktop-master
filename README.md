@@ -18,6 +18,7 @@
 | 决策记录制度 | `.agents/notes/README.md` |
 | 门禁唯一入口 | `scripts/run-gates.ps1` |
 | 规则文档全集（十三份规范） | `AGENTS.md` 文档纪律第 5 条索引 |
+| 通用工程经验（踩坑抽象） | `docs/lessons.md` |
 | 环境陷阱登记 | `docs/architecture/环境陷阱.md` |
 
 ## 一句话说明

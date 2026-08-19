@@ -7,12 +7,12 @@
 
 | 项 | 值 |
 |---|---|
-| 当前阶段 | **P1 内核进行中**：内核核心已落地（服务图/依赖重载/effect/事件五分发），契约测试 15 例全绿，ADR-002 已冻结 API |
-| 当前 HEAD | `3b9616a`（P1 内核首增 + dotnet-format 门禁红证） |
-| 门禁 | 8 道（含 dotnet-format），8 份变红物证齐全 |
-| 设计健康规则 | 十三份规范（清单见 `AGENTS.md` 文档纪律第 5 条索引，M6–M16 登记）+ `.editorconfig` + `CONTRIBUTING.md`；机检状态逐条标注 |
+| 当前阶段 | **P1 全部交付**：kernel / kernel-loader / kernel-timer + 27 例契约测试 + 架构守护 + 覆盖棘轮（83/91/98%），待用户验收 |
+| 当前 HEAD | `1647795`（test-coverage 红证后） |
+| 门禁 | 9 道（含 dotnet-format / test-coverage），9 份变红物证齐全 |
+| 设计健康规则 | 十三份规范（清单见 `AGENTS.md` 文档纪律第 5 条索引，M6–M16 登记）+ `.editorconfig` + `CONTRIBUTING.md` + `docs/lessons.md`；机检状态逐条标注 |
 | 更新时间 | 2026-08-20 |
-| 下一步 | P1 剩余：kernel-loader 与 kernel-timer 包 + 单测；覆盖棘轮与架构测试机检；验收后进 P2 |
+| 下一步 | P1 验收（用户确认）→ P2：薄宿主 + 最小外壳 + HMR + 角色替换演练 |
 
 ## 交接检查清单（动手前按序完成）
 
