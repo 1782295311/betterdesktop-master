@@ -4,8 +4,7 @@
 
 ## 一句话架构
 
-Better Desktop Cordis = **Cordis 内核（C# 复刻）+ 外壳功能包（一切皆插件）+ 薄宿主**。
-内核不区分「内置功能」与「第三方插件」：loader、HMR、logger、ShellBar、Taskbar 全部走同一条插件通道。
+Better Desktop Cordis = **Cordis 内核（C# 复刻）+ 外壳功能包（一切皆插件）+ 薄宿主**。内核不区分「内置功能」与「第三方插件」：loader、HMR、logger、ShellBar、Taskbar 全部走同一条插件通道。
 
 ## 内核要点（P1 目标，方向已冻结于 ADR-001）
 
@@ -29,8 +28,7 @@ host/        薄宿主 exe：装配内核 + 加载插件树 + 启动自检
 
 ## 工程纪律（双重纠错）
 
-第一层：文档贴近代码（包级 README 100% 覆盖 + Known Limitations；决策记录；事后分析）。
-第二层：机器对齐（`scripts/run-gates.ps1` 统一门禁；每条门禁必须有变红物证）。
+第一层：文档贴近代码（包级 README 100% 覆盖 + Known Limitations；决策记录；事后分析）。第二层：机器对齐（`scripts/run-gates.ps1` 统一门禁；每条门禁必须有变红物证）。
 
 ## 关键入口
 

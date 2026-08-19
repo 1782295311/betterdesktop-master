@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <Platforms>x64</Platforms>
+    <RootNamespace>BetterDesktop.Kernel</RootNamespace>
+    <AssemblyName>BetterDesktop.Kernel</AssemblyName>
+  </PropertyGroup>
+
+</Project>

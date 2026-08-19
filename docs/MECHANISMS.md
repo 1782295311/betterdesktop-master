@@ -10,7 +10,7 @@
 |---|---|---|---|---|
 | M1 | 门禁执行入口 | `scripts/run-gates.ps1`（门禁注册表 + 依赖 + 失败聚合） | 各处自写门禁跑法、绕过 run-gates 的 CI 脚本 | run-gates 自身即护栏；每条门禁须有变红物证 |
 | M2 | 决策记录 | `.agents/notes/{proposed,implemented,rejected}/{class}/`（格式与归档由门禁强制） | 另立 `decisions/`、根目录散落的决定文档、任何 INDEX 索引 | `verify-agent-note` / `verify-archived-notes` |
-| M3 | 文档机器校验 | `scripts/verify-*.ps1` 门禁集（README 棘轮 / 决策记录 / 归档密封 / 链接锚点 / 字数预算） | 手写一次性检查脚本、人肉核对文档一致性 | run-gates 注册表 |
+| M3 | 文档机器校验 | `scripts/verify-*.ps1` 门禁集 + `run-gates.ps1` 注册表（**注册表是唯一清单，本文不复述枚举**） | 手写一次性检查脚本、人肉核对文档一致性 | run-gates 注册表 |
 | M4 | 旧仓资产借用 | 白名单登记制：仅个别**原生结构体布局**可借鉴（逐条 ABI 核对后登记） | 复制旧仓逻辑代码 / 主题 / 图标 / XAML 资源 | ADR-001 红线 R5；白名单见本表附录 A |
 | M5 | 插件内核 | Cordis 内核 C# 复刻（P1 落地，此处为规划登记） | 第二套插件机制、MEF、外挂式扩展宿主模型 | P1 起 `kernel` 包 + 内核测试集 |
 
