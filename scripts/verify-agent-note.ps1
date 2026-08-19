@@ -18,6 +18,15 @@ $forbidden = @{ 'implemented' = @('## Proposal', '## Plan') }
 
 $fails = @()
 
+# 类别目录必须存在（git 不跟踪空目录，缺失即红——与归档门禁口径一致）
+foreach ($lc in $lifecycles) {
+    foreach ($cls in $classes) {
+        if (-not (Test-Path (Join-Path $notes "$lc\$cls"))) {
+            $fails += ".agents/notes/$lc/$cls — 缺少类别目录"
+        }
+    }
+}
+
 $idx = @(Get-ChildItem $notes -Recurse -Filter 'INDEX.md' -File -ErrorAction SilentlyContinue)
 foreach ($i in $idx) { $fails += "$(Get-RelPath $i.FullName) — 决策记录树禁止 INDEX.md（以目录树浏览与仓库搜索替代）" }
 
