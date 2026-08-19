@@ -1,0 +1,10 @@
+<Solution>
+  <Folder Name="/packages/" />
+  <Folder Name="/packages/kernel/" />
+  <Folder Name="/packages/kernel/kernel-tests/">
+    <Project Path="packages/kernel/kernel-tests/BetterDesktop.Kernel.Tests.csproj" />
+  </Folder>
+  <Folder Name="/packages/kernel/kernel/">
+    <Project Path="packages/kernel/kernel/BetterDesktop.Kernel.csproj" />
+  </Folder>
+</Solution>

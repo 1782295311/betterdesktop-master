@@ -1,41 +1,22 @@
-// BetterDesktop.Kernel — IPlugin 接口定义
-// 插件基础接口（Plugin 术语定义见 docs/TERMINOLOGY.md）
+// BetterDesktop.Kernel — IPlugin 接口定义（ADR-002 D1 冻结面）
+// 插件基础接口（术语定义见 docs/TERMINOLOGY.md）
 
 namespace BetterDesktop.Kernel.Contracts;
 
 /// <summary>
-/// 插件基础接口。一切功能的唯一形态：内置功能与第三方扩展同一条通道。
+/// 插件基础接口：一切功能的唯一形态，内置能力与第三方扩展同一条通道。
 /// </summary>
 public interface IPlugin
 {
-    /// <summary>
-    /// 插件名称（唯一标识）。
-    /// </summary>
+    /// <summary>显示名（日志与状态中心展示）。</summary>
     string Name { get; }
 
-    /// <summary>
-    /// 插件版本。
-    /// </summary>
-    string Version { get; }
-
-    /// <summary>
-    /// 插件声明的依赖服务类型列表。
-    /// 依赖可用前插件保持 PENDING 状态，服务变化时自动重载。
-    /// </summary>
+    /// <summary>声明的必需依赖服务类型；全部可用前内核保持 PENDING，任一变化时自动重载。</summary>
     IReadOnlyList<Type> Inject { get; }
 
-    /// <summary>
-    /// 插件加载时调用。
-    /// 在此方法中注册服务、效果和事件处理器。
-    /// </summary>
-    /// <param name="context">插件运行时上下文</param>
-    /// <param name="cancellationToken">取消令牌</param>
+    /// <summary>插件加载：注册服务、事件与清理器。抛异常 → Failed 状态。</summary>
     Task LoadAsync(IContext context, CancellationToken cancellationToken = default);
 
-    /// <summary>
-    /// 插件卸载时调用。
-    /// 在此方法中清理资源（或通过 Effect 注册清理器）。
-    /// </summary>
-    /// <param name="cancellationToken">取消令牌</param>
+    /// <summary>插件卸载：effect 清理器之外的补充清理。抛异常被记录且不阻断卸载。</summary>
     Task UnloadAsync(CancellationToken cancellationToken = default);
 }

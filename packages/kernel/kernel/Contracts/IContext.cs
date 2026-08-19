@@ -1,47 +1,44 @@
-// BetterDesktop.Kernel — IContext 接口定义
-// 服务图与插件生命周期的容器（Context 术语定义见 docs/TERMINOLOGY.md）
+// BetterDesktop.Kernel — IContext 接口定义（ADR-002 D1 冻结面）
+// 服务图与插件生命周期的容器（术语定义见 docs/TERMINOLOGY.md）
 
 namespace BetterDesktop.Kernel.Contracts;
 
 /// <summary>
 /// 服务图与插件生命周期的容器。
-/// 提供/读取服务、extend/isolate/intercept、托管 effect 与事件。
+/// 服务读取为显式 Get（无透明代理）；Provide 的变更会通知依赖者并触发自动重载。
 /// </summary>
 public interface IContext
 {
     /// <summary>
-    /// 从服务图中获取指定类型的服务实例。
+    /// 沿父链解析服务；未注册返回 null（可选依赖）。
+    /// 声明了必需依赖的插件由内核在依赖可用前保持 PENDING。
     /// </summary>
-    /// <typeparam name="T">服务类型</typeparam>
-    /// <returns>服务实例，未注册时返回 null</returns>
     T? Get<T>() where T : class;
 
     /// <summary>
-    /// 向服务图注册服务实例。
+    /// 注册服务实例并返回撤销句柄。
+    /// 同一实例重复提供不触发通知；实例变化会触发依赖此服务的插件自动重载。
     /// </summary>
-    /// <typeparam name="T">服务类型</typeparam>
-    /// <param name="service">服务实例</param>
-    void Provide<T>(T service) where T : class;
+    IDisposable Provide<T>(T service) where T : class;
 
     /// <summary>
-    /// 派生一个新的子上下文（extend 语义）。
-    /// 子上下文继承父上下文的服务，并可覆盖或新增服务。
+    /// 派生一个子上下文（父链继承语义：子可见父的服务，父不可见子的）。
     /// </summary>
-    /// <returns>新的子上下文</returns>
     IContext Extend();
 
     /// <summary>
-    /// 创建一个隔离的上下文（isolate 语义）。
-    /// 隔离上下文不继承父上下文的服务。
+    /// 注册插件并按其依赖状态调度（「一切皆插件」的唯一通道）。
     /// </summary>
-    /// <returns>隔离的上下文</returns>
-    IContext Isolate();
+    IPluginHandle Plugin(IPlugin plugin);
 
     /// <summary>
-    /// 拦截服务解析（intercept 语义）。
-    /// 在服务解析链中插入拦截器，可修改或替换解析结果。
+    /// 注册托管清理器：execute 立即执行并返回 disposer，fiber 卸载时逆序并行执行、单条异常隔离。
     /// </summary>
-    /// <typeparam name="T">服务类型</typeparam>
-    /// <param name="interceptor">拦截器函数</param>
-    void Intercept<T>(Func<T?, T?> interceptor) where T : class;
+    IDisposable Effect(Func<IDisposable> execute, string? label = null);
+
+    /// <summary>内核事件服务（五种分发 + 强类型载荷，ADR-002 D4）。</summary>
+    IEventBus Events { get; }
+
+    /// <summary>内核日志服务（M10 单一管道；P2 宿主接文件 sink）。</summary>
+    IKernelLogger Logger { get; }
 }

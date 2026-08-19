@@ -1,28 +1,21 @@
 # BetterDesktop.Kernel
 
-Cordis 风格插件内核的 C# 复刻：提供服务图、插件运行时、托管生命周期与事件分发能力。
+Cordis 风格插件内核的 C# 复刻：服务图、插件运行时、托管清理与事件分发（API 面由 `docs/architecture/ADR-002.md` 冻结）。
 
 ## 依赖
 
-本包是内核基础包，不依赖其他 BetterDesktop 包。它为所有插件提供以下核心服务：
-
-- Context 服务图（依赖注入与服务解析）
-- Plugin 生命周期管理（PENDING→LOADING→ACTIVE→FAILED→UNLOADING→DISPOSED）
-- Effect 托管清理器（卸载时逆序并行执行）
-- Events 事件分发（emit/parallel/serial/bail/waterfall）
+本包零第三方运行时依赖（ADR-002 D2）；仅 BCL。
 
 ## 扩展点
 
-本包对其他插件开放以下接口：
-
-- IContext：服务图与插件生命周期的容器
-- IPlugin：插件基础接口
-- IEffectManager：托管清理器注册与执行
-- IEventBus：事件分发服务
+- `IContext`：服务图与插件生命周期容器（Get / Provide / Extend / Plugin / Effect）
+- `IPlugin` / `IPluginHandle`：插件与运行时句柄（状态机 Pending→Loading→Active→Failed→Unloading→Disposed）
+- `IEventBus`：事件名「域/动作」+ 强类型载荷 + 五种分发（emit / parallel / serial / bail / waterfall）
+- `CapabilityAttribute`：能力元数据声明位（M16 前置）
 
 ## Known Limitations
 
-- 当前为骨架实现，仅包含接口定义与基础类型，实际服务图逻辑待 P1 实现
-- HMR（热模块重载）支持在 P2 阶段实现，当前仅提供基础框架
-- 线程模型与 STA 封送服务待完善，当前未实现 WPF Dispatcher 集成
-- 依赖选型未冻结：当前未引入任何第三方运行时依赖；是否引入 Microsoft DI 等由 ADR-002 裁定
+- v1 无 HMR、无进程外隔离、无配置拦截合并、无 transient 作用域（P2 范畴，见 ADR-002 D1/D3）
+- 依赖重载为整实例粒度：依赖类型任一实例变化即触发依赖者重载，完整 epoch 去重在 P1 后续版本
+- 日志默认无持久化 sink（P2 宿主接文件管道，见 `docs/runtime-health.md`）
+- 事件载荷类型与事件名不匹配抛 InvalidCastException（调用方契约错误，见 ADR-002 D4）
