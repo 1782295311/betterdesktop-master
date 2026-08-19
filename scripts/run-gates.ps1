@@ -18,7 +18,8 @@ $gates = @(
     [pscustomobject]@{ Id = 'md-wrap';        Script = 'verify-md-wrap.ps1';        Needs = @() },
     [pscustomobject]@{ Id = 'doc-budgets';    Script = 'verify-doc-budgets.ps1';    Needs = @() },
     [pscustomobject]@{ Id = 'gate-registry';  Script = 'verify-gate-registry.ps1';  Needs = @() },
-    [pscustomobject]@{ Id = 'dotnet-format';  Script = 'verify-dotnet-format.ps1';  Needs = @() }
+    [pscustomobject]@{ Id = 'dotnet-format';  Script = 'verify-dotnet-format.ps1';  Needs = @() },
+    [pscustomobject]@{ Id = 'test-coverage';  Script = 'verify-test-coverage.ps1';  Needs = @('dotnet-format') }
 )
 
 if ($List) {

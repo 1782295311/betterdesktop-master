@@ -1,0 +1,10 @@
+# cordis.yml 示例：声明式插件树（v1）
+# id 稳定标识；name = 宿主注册的内置工厂名；enabled 缺省 true
+
+plugins:
+  - id: shell.bar
+    name: builtin.shell-bar
+    enabled: true
+  - id: shell.tray
+    name: builtin.shell-tray
+    enabled: false

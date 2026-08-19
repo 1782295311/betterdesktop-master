@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <Platforms>x64</Platforms>
+    <RootNamespace>BetterDesktop.Kernel.Timer</RootNamespace>
+    <AssemblyName>BetterDesktop.Kernel.Timer</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\kernel\BetterDesktop.Kernel.csproj" />
+  </ItemGroup>
+
+</Project>

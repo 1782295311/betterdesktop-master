@@ -1,8 +1,28 @@
 <Solution>
   <Folder Name="/packages/" />
   <Folder Name="/packages/kernel/" />
+  <Folder Name="/packages/kernel/kernel-loader-tests/">
+    <Project Path="packages/kernel/kernel-loader-tests/BetterDesktop.Kernel.Loader.Tests.csproj">
+      <Platform Project="x64" />
+    </Project>
+  </Folder>
+  <Folder Name="/packages/kernel/kernel-loader/">
+    <Project Path="packages/kernel/kernel-loader/BetterDesktop.Kernel.Loader.csproj">
+      <Platform Project="x64" />
+    </Project>
+  </Folder>
   <Folder Name="/packages/kernel/kernel-tests/">
     <Project Path="packages/kernel/kernel-tests/BetterDesktop.Kernel.Tests.csproj" />
+  </Folder>
+  <Folder Name="/packages/kernel/kernel-timer-tests/">
+    <Project Path="packages/kernel/kernel-timer-tests/BetterDesktop.Kernel.Timer.Tests.csproj">
+      <Platform Project="x64" />
+    </Project>
+  </Folder>
+  <Folder Name="/packages/kernel/kernel-timer/">
+    <Project Path="packages/kernel/kernel-timer/BetterDesktop.Kernel.Timer.csproj">
+      <Platform Project="x64" />
+    </Project>
   </Folder>
   <Folder Name="/packages/kernel/kernel/">
     <Project Path="packages/kernel/kernel/BetterDesktop.Kernel.csproj" />

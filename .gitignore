@@ -6,5 +6,6 @@ obj/
 *.binlog
 artifacts/
 publish/
+**/TestResults/
 .DS_Store
 Thumbs.db
