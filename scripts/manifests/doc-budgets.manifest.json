@@ -1,0 +1,10 @@
+{
+  "schema": 1,
+  "note": "关键文档字数预算（计数口径：CJK 字符 + 拉丁词序列）。放宽上限必须先经决策记录说明理由。",
+  "doc-budgets": {
+    "AGENTS.md": 900,
+    "docs/architecture.md": 550,
+    "docs/MECHANISMS.md": 700,
+    "docs/architecture/ADR-001.md": 1900
+  }
+}

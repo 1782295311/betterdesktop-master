@@ -1,0 +1,7 @@
+{
+  "schema": 1,
+  "note": "README 覆盖率棘轮：允许缺失 README 的包白名单，只能减不能增（多闸锁定）。",
+  "LOCKED-MAX-COUNT": 0,
+  "LOCKED-COUNT": 0,
+  "allowlist": []
+}
