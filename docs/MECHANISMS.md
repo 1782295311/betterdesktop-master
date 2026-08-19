@@ -2,7 +2,7 @@
 
 > 地位：「一个关注点一套机制」裁决的**唯一真相源**。任何新增/替换机制的提案必须先登记或引用本表。
 > 与 ADR-001 的关系：ADR-001 是宪法，本表是宪法的机制清单；任一方改动时必须当场确认另一方仍指得通。
-> 版本：v0.2 · 2026-08-20（v0.2: 补 M6–M8 设计健康规则；M3 枚举改为指向 run-gates 注册表）
+> 版本：v0.3 · 2026-08-20（v0.3: 补 M9–M13 测试/运行时/安全/构建/质量五域规则）
 
 ## 登记表
 
@@ -16,6 +16,11 @@
 | M6 | 统一 UI 地基 | 单一 `packages/shell/shell-foundation` 包 + [`docs/ui-foundation.md`](ui-foundation.md)（字体三令牌 / 统一 ShellWindow / 语义令牌 / 公共控件唯一来源） | 各包自建窗口体系、硬编码字体/颜色/圆角、第二套主题令牌、重复控件/转换器 | P2 机检（`verify-ui-hardcoded` / `verify-token-coverage`） |
 | M7 | 功能复用与反臃肿 | [`docs/reuse-rules.md`](reuse-rules.md)（单一实现 / 共享层上移 / 包粒度判据 / 禁复制 / 依赖单向） | 复制粘贴、同义实现并存、越层依赖、包无节制膨胀 | P1 机检（`verify-code-duplication` + 架构测试） |
 | M8 | 扩展性与社区契约 | [`docs/extension-rules.md`](extension-rules.md)（扩展点显式化 / plugin.json v1 草案 / API 兼容与弃用 / 文档义务）+ [`../CONTRIBUTING.md`](../CONTRIBUTING.md) | 隐式扩展点、破坏性变更静默、无文档能力、第二套扩展机制 | `package-readme` 已强制扩展点节；其余 P1/P2 逐步机检 |
+| M9 | 测试与取证 | [`docs/testing.md`](testing.md)（金字塔 / 契约优先 / 禁 --no-build / flaky 处置 / 性能基准） | 无基准的「绿」、拷贝产物取证、Skip 了事 | P1：覆盖棘轮 + 架构测试；P2：benchmark 门禁 |
+| M10 | 运行时健康 | [`docs/runtime-health.md`](runtime-health.md)（日志单管道 / 崩溃三入口 / 启动自检 fail-fast / 降级上报 / fail-closed / 超时上限） | `Console.WriteLine`、吞异常、静默降级、第二套日志、默认放行守卫 | P1：日志/吞异常文本扫描 + 架构测试 |
+| M11 | 安全与供应链 | [`docs/security.md`](security.md)（插件最小权限 / 依赖锁定与漏洞扫描 / 许可证合规 / 敏感信息 / 更新签名） | 未审计依赖、敏感信息入库、fail-open 授权、裸拷 vendoring | P1：`dotnet list package --vulnerable`；P2：secrets 扫描 + notices 生成 |
+| M12 | 构建与发布 | [`docs/build-release.md`](build-release.md)（SemVer 单一来源 / SDK 锁定 / 发布门禁 / CHANGELOG / 插件禁 AOT） | 手工散改版本号、产物混装、无门禁发布 | P1：SDK 锁定检查；P2：release 门禁 |
+| M13 | 产品质量 | [`docs/product-quality.md`](product-quality.md)（性能预算 / 可访问性 / 本地化 / 设置单一来源与迁移 / 隐私） | 硬编码文案、第二套设置源、无迁移 schema 变更、无预算性能回归 | P1：设置单一来源架构测试；P2：硬编码字符串扫描 + benchmark |
 
 ## 流程
 

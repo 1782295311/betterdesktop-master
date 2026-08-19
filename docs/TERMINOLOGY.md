@@ -27,6 +27,10 @@
 | 语义令牌 | Token | 颜色/字体/圆角/间距等设计值的命名引用 | 不叫「变量」 |
 | UI 地基 | UI Foundation | 统一 UI 资产的唯一来源规范与包 | — |
 | 外壳窗口基类 | ShellWindow | 全部外壳窗口的统一基类 | 禁止裸用 `Window` |
+| 降级上报 | Degradation Report | 能力不可用时显式报告而非静默 | — |
+| 默认拒绝 | Fail-Closed | 未显式放行即拒绝的安全原则 | 反义：默认放行 fail-open |
+| 冒烟测试 | Smoke Test | 发布/启动最小可用性验证 | — |
+| 语义化版本 | SemVer | Major.Minor.Patch 版本契约 | — |
 
 ## 二、命名映射（目录 ↔ 命名空间 ↔ 程序集）
 
