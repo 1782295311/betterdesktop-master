@@ -10,6 +10,7 @@
 | 当前阶段 | **P0 完成（含交接增强与无记忆会话实测），P1 未开工** |
 | 当前 HEAD | `61d2a73`（交接增强后的全绿基线） |
 | 门禁 | 7 道（含 md-wrap 硬换行 / gate-registry 注册一致性），7 份变红物证齐全 |
+| 设计健康规则 | `docs/ui-foundation.md`（统一 UI 地基）/ `docs/reuse-rules.md`（复用反臃肿）/ `docs/extension-rules.md`（扩展与社区契约）+ `CONTRIBUTING.md` 已落地（M6–M8 登记） |
 | 更新时间 | 2026-08-20 |
 | 下一步 | P1 内核：先开 ADR-002 冻结内核 API（**含依赖选型裁定**），再完善 `packages/kernel/*` 包与单测；`kernel/kernel` 骨架为交接实测产物，接口是否保留由 ADR-002 裁定 |
 

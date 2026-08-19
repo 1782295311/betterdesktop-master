@@ -27,12 +27,15 @@
 6. 禁止 `[Obsolete]` 同名垫片与「搬家留垫片」——迁移即改调用方（老仓 R4 教训）。
 7. 禁止复制旧仓 `cairoshell原版` 的任何逻辑代码；结构体布局仅限 `docs/MECHANISMS.md` M4 白名单。
 8. 插件卸载必须可完成：effect 注册的清理器必须释放全部句柄与事件订阅（HMR 的前提）。
+9. 禁止 UI 硬编码：字体 / 颜色 / 圆角 / 窗口属性一律走统一地基令牌，禁止自建 Window 派生体系（`docs/ui-foundation.md`）。
+10. 禁止复制粘贴与重复实现：复用先于新建，共享逻辑必须上移（`docs/reuse-rules.md`）。
 
 ## 四、包结构与测试规范
 
 - 包内布局：`Services/`（服务实现）、`Plugins/`（插件入口）、`Contracts/`（对外接口，可选）、`Resources/`（资产）。
 - 测试：xUnit，工程名 `*.Tests`；**契约测试优先**——先写「服务图解析/epoch 去重/effect 逆序清理」三类内核契约测试，再写实现。
 - 内核三机制（服务图、依赖驱动重载、托管清理）必须有独立测试物证（对应 P1 验收判据）。
+- 包粒度与拆包判据见 `docs/reuse-rules.md`；对外扩展点声明义务见 `docs/extension-rules.md`。
 
 ## 五、诚实标注原则
 

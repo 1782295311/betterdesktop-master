@@ -26,7 +26,7 @@ host/           薄宿主 exe（P2 起）
 2. 每个包（`packages/**/*.csproj`）必须有同目录 `README.md`，且含 `## Known Limitations` 小节（至少一条 `- ` 列表项）。覆盖率 100%，由 `verify-package-readme` 棘轮强制。
 3. 关键文档有字数预算（`scripts/manifests/doc-budgets.manifest.json`）。超限先精简；确实要放宽上限，必须在决策记录中说明理由。
 4. 决策记录写进 `.agents/notes/`；事故写进 `docs/postmortem/NNNN-title.md`。两者格式由门禁强制。
-5. C# 代码编写规则见 `docs/coding-standards.md`；命名一律以 `docs/TERMINOLOGY.md` 为准。
+5. C# 代码编写规则见 `docs/coding-standards.md`；命名以 `docs/TERMINOLOGY.md` 为准；UI 资产统一见 `docs/ui-foundation.md`；复用与反臃肿见 `docs/reuse-rules.md`；扩展与社区契约见 `docs/extension-rules.md`。
 
 ## 门禁纪律
 

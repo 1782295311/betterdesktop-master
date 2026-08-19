@@ -23,6 +23,10 @@
 | 棘轮 | Ratchet | 白名单/基线只能减不能增的单向锁 | — |
 | 决策记录 | Agent Note | `.agents/notes/` 中的决策文档 | 不叫「会议纪要」 |
 | 事后分析 | Post-mortem | `docs/postmortem/NNNN-*.md` 事故复盘 | — |
+| 扩展点 | Extension Point | 包对外声明、允许第三方接插的接口/插槽 | 不叫「钩子 Hook」（易与拦截混淆） |
+| 语义令牌 | Token | 颜色/字体/圆角/间距等设计值的命名引用 | 不叫「变量」 |
+| UI 地基 | UI Foundation | 统一 UI 资产的唯一来源规范与包 | — |
+| 外壳窗口基类 | ShellWindow | 全部外壳窗口的统一基类 | 禁止裸用 `Window` |
 
 ## 二、命名映射（目录 ↔ 命名空间 ↔ 程序集）
 
