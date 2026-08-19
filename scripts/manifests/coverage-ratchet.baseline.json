@@ -3,8 +3,9 @@
   "note": "覆盖棘轮：各生产程序集最低行覆盖率，只能升不能降（LOCKED-COUNT 与条目数逐值相等）。基线于 P1 首增实测后锁定。",
   "LOCKED-COUNT": 3,
   "baselines": {
-    "BetterDesktop.Kernel": 0.80,
+    "BetterDesktop.Kernel": 0.95,
     "BetterDesktop.Kernel.Loader": 0.90,
     "BetterDesktop.Kernel.Timer": 0.95
   }
 }
+
