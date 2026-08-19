@@ -3,7 +3,8 @@
 #   1. 每个 scripts/verify-*.ps1 必须登记进 run-gates.ps1 的 $gates 注册表（漏登记 = 门禁永不运行 = 假绿）
 #   2. 注册表中每个 Script 必须真实存在
 #   3. 每个已登记门禁必须有变红物证 docs/guard-redproof/<gate-id>-redproof.md
-#   4. 物证必须完整：含 ①②③ 三要素小节，且不得含「待填写」占位符（未完成的物证视为无物证——交接实测发现的假绿路径）
+#   4. 物证必须完整：含 ①②③ 三要素小节，且含完成结论「红/绿双向验证通过」。
+#      （用正向完成标记而非扫描「待填写」：红跑原样输出里可能合法地出现该词，反向扫描会误伤）
 . (Join-Path $PSScriptRoot 'lib\common.ps1')
 $root = Get-RepoRoot
 $fails = @()
@@ -21,7 +22,7 @@ foreach ($s in $registered) {
     else {
         $c = Get-Content $proof -Raw
         if ($c -notmatch '## ①' -or $c -notmatch '## ②' -or $c -notmatch '## ③') { $fails += "$gateId — 物证缺少 ①②③ 三要素小节" }
-        if ($c -match '待填写') { $fails += "$gateId — 物证仍含占位符「待填写」（未完成的物证视为无物证）" }
+        if ($c -notmatch '红/绿双向验证通过') { $fails += "$gateId — 物证缺少完成结论「红/绿双向验证通过」（未完成的物证视为无物证）" }
     }
 }
 if ($fails.Count -gt 0) { Write-GateFail 'gate-registry' $fails }

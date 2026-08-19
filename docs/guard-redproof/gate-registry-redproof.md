@@ -16,7 +16,8 @@
 注入文件完整内容：
 
 ```
-fatal: path '.scripts/verify-orphan.ps1' does not exist in '7db5b05'
+# 未登记的门禁脚本（注入用）
+Write-Output 'orphan'
 
 ```
 
@@ -32,10 +33,10 @@ fatal: path '.scripts/verify-orphan.ps1' does not exist in '7db5b05'
 
 ## ③ 撤销证明与恢复验证
 
-撤销方式：`git revert --no-edit 7db5b05`，撤销 commit = `8161142`。撤销后重跑（退出码见最终版补充）：
+撤销方式：`git revert --no-edit 7db5b05`，撤销 commit = `8161142`。撤销后重跑（退出码 0）：
 
 ```
-[FAIL] gate-registry — gate-registry — 物证仍含占位符「待填写」（未完成的物证视为无物证）
+[PASS] gate-registry — verify 脚本 7 个全部登记，物证齐全
 
 ```
 
