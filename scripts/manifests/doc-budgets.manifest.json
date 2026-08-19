@@ -1,10 +1,14 @@
 {
   "schema": 1,
-  "note": "关键文档字数预算（计数口径：CJK 字符 + 拉丁词序列）。放宽上限必须先经决策记录说明理由。",
+  "note": "关键文档字数预算（计数口径：CJK 字符 + 拉丁词序列）。放宽上限必须先经决策记录说明理由。AGENTS.md 上限 2026-08-19 由 900 放宽至 1100，理由见决策记录 2026-08-19-handoff-hardening。",
   "doc-budgets": {
-    "AGENTS.md": 900,
+    "AGENTS.md": 1100,
     "docs/architecture.md": 550,
     "docs/MECHANISMS.md": 700,
-    "docs/architecture/ADR-001.md": 1900
+    "docs/architecture/ADR-001.md": 1900,
+    "docs/TERMINOLOGY.md": 900,
+    "docs/coding-standards.md": 850,
+    "docs/architecture/STATUS.md": 500,
+    "docs/cookbook/会话交接.md": 450
   }
 }

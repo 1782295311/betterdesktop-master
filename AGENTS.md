@@ -22,16 +22,22 @@ host/           薄宿主 exe（P2 起）
 
 ## 文档纪律
 
-1. 一段一行物理行（不手工硬换行）；相对链接只指向仓库内文件；锚点链接先确保目标标题存在。
+1. 一段一行物理行（不手工硬换行，`verify-md-wrap` 机检）；相对链接只指向仓库内文件（`verify-md-links` 机检）；锚点链接先确保目标标题存在。
 2. 每个包（`packages/**/*.csproj`）必须有同目录 `README.md`，且含 `## Known Limitations` 小节（至少一条 `- ` 列表项）。覆盖率 100%，由 `verify-package-readme` 棘轮强制。
 3. 关键文档有字数预算（`scripts/manifests/doc-budgets.manifest.json`）。超限先精简；确实要放宽上限，必须在决策记录中说明理由。
 4. 决策记录写进 `.agents/notes/`；事故写进 `docs/postmortem/NNNN-title.md`。两者格式由门禁强制。
+5. C# 代码编写规则见 `docs/coding-standards.md`；命名一律以 `docs/TERMINOLOGY.md` 为准。
 
 ## 门禁纪律
 
-1. 唯一入口：`scripts/run-gates.ps1`。新增门禁 = 新增 `verify-*.ps1` + 登记进 `run-gates.ps1` 注册表，同一变更落地。
-2. 每条门禁必须有变红物证（落盘 `docs/guard-redproof/`，三要素 + 取证环境 E1–E4，见该目录 README）。
-3. 门禁失败即阻断：退出码非 0 一律视为失败；禁止注释掉门禁、禁止在 CI 中跳过门禁。
+1. 唯一入口：`scripts/run-gates.ps1`。新增门禁 = 新增 `verify-*.ps1` + 登记进 `run-gates.ps1` 注册表，同一变更落地（注册一致性由 `verify-gate-registry` 机检，漏登记即红）。
+2. **唯一合法解释器是 PowerShell 7（`pwsh`）**：Windows PowerShell 5.1 会把仓库内 UTF-8 无 BOM 脚本读成乱码导致解析失败。全量检查命令：`pwsh -NoProfile -ExecutionPolicy Bypass scripts/run-gates.ps1`。每次改动收工前必须全绿。
+3. 每条门禁必须有变红物证（落盘 `docs/guard-redproof/`，三要素 + 取证环境 E1–E4，见该目录 README）。
+4. 门禁失败即阻断：退出码非 0 一律视为失败；禁止注释掉门禁、禁止在 CI 中跳过门禁。
+
+## 会话交接（新会话接手的第一件事）
+
+新 AI 会话 / 新成员动手前按序完成：① 读 `docs/architecture/STATUS.md`（当前阶段与下一步）；② 读本文件、最新 ADR、`docs/MECHANISMS.md`、`docs/coding-standards.md`；③ 用 PowerShell 7 跑一遍全量门禁确认基线绿；④ 浏览 `.agents/notes/implemented/` 最近决策记录。标准流程见 `docs/cookbook/会话交接.md`。
 
 ## 变更纪律
 
@@ -42,4 +48,4 @@ host/           薄宿主 exe（P2 起）
 ## 命名
 
 - 根命名空间 `BetterDesktop.*`；包目录 `packages/<域>/<名>`（如 `packages/kernel/kernel`）。
-- 术语表 `docs/TERMINOLOGY.md` 将在 P1 前落地，成为命名的唯一真相源。
+- 术语表 = `docs/TERMINOLOGY.md`（已落地，命名的唯一真相源）。
