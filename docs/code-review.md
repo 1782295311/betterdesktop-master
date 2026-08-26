@@ -4,7 +4,7 @@
 
 ## 一、评审检查单（每次 PR 逐项过）
 
-1. 门禁全绿（`run-gates.ps1` exit 0），改门禁则变红物证齐备。
+1. 门禁全绿（`run-gates.ps1` exit 0），改门禁则门禁单测齐备（`verify-*.Tests.ps1`）。
 2. 决策记录齐备：非平凡决策已落 `.agents/notes/`；涉及机制/红线已登记或已开 ADR。
 3. 规范符合性逐域速查：代码 → coding-standards（含并发纪律）；UI → ui-foundation；复用 → reuse-rules；插件 → extension-rules + pluginization；安全 → security；测试 → testing。
 4. 红线复查：ADR-001 七条红线无触线；旧仓零复制（M4 白名单外）；无 `[Obsolete]` 垫片；无隐式扩展点。

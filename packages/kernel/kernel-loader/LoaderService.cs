@@ -34,7 +34,7 @@ public sealed class LoaderService : IPlugin
         LoaderConfig config;
         try
         {
-            var text = File.ReadAllText(_options.ConfigPath);
+            var text = File.ReadAllText(ResolveConfigPath(_options.ConfigPath));
             var deserializer = new DeserializerBuilder().Build();
             config = deserializer.Deserialize<LoaderConfig>(text) ?? new LoaderConfig();
         }
@@ -77,6 +77,24 @@ public sealed class LoaderService : IPlugin
 
         Reports = reports;
         return Task.CompletedTask;
+    }
+
+    /// <summary>
+    /// 解析配置路径：绝对路径原样返回；相对路径先按当前工作目录，找不到则回退到程序基目录，
+    /// 避免「从任意工作目录启动都找不到 cordis.yml」的启动期故障。
+    /// </summary>
+    private static string ResolveConfigPath(string configPath)
+    {
+        if (Path.IsPathRooted(configPath))
+        {
+            return configPath;
+        }
+        var cwdCandidate = Path.Combine(Environment.CurrentDirectory, configPath);
+        if (File.Exists(cwdCandidate))
+        {
+            return cwdCandidate;
+        }
+        return Path.Combine(AppContext.BaseDirectory, configPath);
     }
 
     /// <inheritdoc />

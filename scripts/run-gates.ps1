@@ -11,15 +11,18 @@ param(
 )
 
 $gates = @(
-    [pscustomobject]@{ Id = 'package-readme'; Script = 'verify-package-readme.ps1'; Needs = @() },
-    [pscustomobject]@{ Id = 'agent-note';     Script = 'verify-agent-note.ps1';     Needs = @() },
-    [pscustomobject]@{ Id = 'archived-notes'; Script = 'verify-archived-notes.ps1'; Needs = @() },
-    [pscustomobject]@{ Id = 'md-links';       Script = 'verify-md-links.ps1';       Needs = @() },
-    [pscustomobject]@{ Id = 'md-wrap';        Script = 'verify-md-wrap.ps1';        Needs = @() },
-    [pscustomobject]@{ Id = 'doc-budgets';    Script = 'verify-doc-budgets.ps1';    Needs = @() },
-    [pscustomobject]@{ Id = 'gate-registry';  Script = 'verify-gate-registry.ps1';  Needs = @() },
-    [pscustomobject]@{ Id = 'dotnet-format';  Script = 'verify-dotnet-format.ps1';  Needs = @() },
-    [pscustomobject]@{ Id = 'test-coverage';  Script = 'verify-test-coverage.ps1';  Needs = @('dotnet-format') }
+    [pscustomobject]@{ Id = 'package-readme';    Script = 'verify-package-readme.ps1';    Needs = @() },
+    [pscustomobject]@{ Id = 'agent-note';        Script = 'verify-agent-note.ps1';        Needs = @() },
+    [pscustomobject]@{ Id = 'archived-notes';    Script = 'verify-archived-notes.ps1';    Needs = @() },
+    [pscustomobject]@{ Id = 'md-links';          Script = 'verify-md-links.ps1';          Needs = @() },
+    [pscustomobject]@{ Id = 'md-wrap';           Script = 'verify-md-wrap.ps1';           Needs = @() },
+    [pscustomobject]@{ Id = 'doc-budgets';       Script = 'verify-doc-budgets.ps1';       Needs = @() },
+    [pscustomobject]@{ Id = 'gate-registry';     Script = 'verify-gate-registry.ps1';     Needs = @() },
+    [pscustomobject]@{ Id = 'architecture-guard'; Script = 'verify-architecture-guard.ps1'; Needs = @() },
+    [pscustomobject]@{ Id = 'host-log-sink';     Script = 'verify-host-log-sink.ps1';     Needs = @() },
+    [pscustomobject]@{ Id = 'dotnet-format';     Script = 'verify-dotnet-format.ps1';     Needs = @() },
+    [pscustomobject]@{ Id = 'test-coverage';     Script = 'verify-test-coverage.ps1';     Needs = @('dotnet-format') },
+    [pscustomobject]@{ Id = 'smoke-test';        Script = 'verify-smoke-test.ps1';        Needs = @() }
 )
 
 if ($List) {

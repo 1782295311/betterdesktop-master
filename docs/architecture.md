@@ -30,7 +30,7 @@ host/        薄宿主 exe：装配内核 + 加载插件树 + 启动自检
 
 ## 工程纪律（双重纠错）
 
-第一层：文档贴近代码（包级 README 100% 覆盖 + Known Limitations；决策记录；事后分析）。第二层：机器对齐（`scripts/run-gates.ps1` 统一门禁；每条门禁必须有变红物证）。
+第一层：文档贴近代码（包级 README 100% 覆盖 + Known Limitations；决策记录；事后分析）。第二层：机器对齐（`scripts/run-gates.ps1` 统一门禁；每条门禁必须有门禁单测 `verify-*.Tests.ps1`）。
 
 ## 关键入口
 

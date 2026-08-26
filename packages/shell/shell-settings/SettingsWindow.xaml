@@ -1,0 +1,123 @@
+﻿<core:ShellWindow x:Class="BetterDesktop.Shell.Settings.SettingsWindow"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:core="clr-namespace:BetterDesktop.Shell.Core.Surface;assembly=BetterDesktop.Shell.Core"
+    Title="BetterDesktop 设置"
+    Width="900" Height="640" MinWidth="760" MinHeight="520"
+    FontFamily="Segoe UI, Microsoft YaHei, PingFang SC, sans-serif"
+    WindowStartupLocation="CenterScreen">
+
+    <core:ShellWindow.Resources>
+        <!-- 导航项模板：图标 + 标题（图标托盘与文字色均跟随主题令牌，随模式切换） -->
+        <DataTemplate x:Key="SectionItemTemplate">
+            <Grid Margin="0,1">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="24" />
+                    <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
+                <Border Grid.Column="0" Width="22" Height="22" CornerRadius="7"
+                        Background="{DynamicResource ControlBackgroundHover}" VerticalAlignment="Center" HorizontalAlignment="Center">
+                    <TextBlock Text="⚙" FontSize="13" Foreground="{DynamicResource ThemeForeground}"
+                               HorizontalAlignment="Center" VerticalAlignment="Center" />
+                </Border>
+                <TextBlock Grid.Column="1" Text="{Binding Title}" FontSize="13.5"
+                           Foreground="{DynamicResource ThemeForeground}"
+                           VerticalAlignment="Center" Margin="10,0,0,0" />
+            </Grid>
+        </DataTemplate>
+
+        <!-- 导航项容器样式：macOS 风柔和选中态（hover/selected 背景跟随控件画刷，随模式切换） -->
+        <Style x:Key="SectionItemStyle" TargetType="ListBoxItem">
+            <Setter Property="FontSize" Value="13.5" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="Foreground" Value="{DynamicResource ThemeForeground}" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ListBoxItem">
+                        <Border x:Name="Bd" Background="Transparent"
+                                Padding="9,7" CornerRadius="7" SnapsToDevicePixels="True">
+                            <ContentPresenter />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Bd" Property="Background" Value="{DynamicResource ControlBackgroundHover}" />
+                            </Trigger>
+                            <Trigger Property="IsSelected" Value="True">
+                                <Setter TargetName="Bd" Property="Background" Value="{DynamicResource ControlBackgroundPressed}" />
+                                <Setter Property="Foreground" Value="{DynamicResource ThemeForeground}" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </core:ShellWindow.Resources>
+
+    <!-- 根 Border：与 AppGrabber 一致——背景跟随皮肤（SkinBackgroundBrush，与描边同一 DynamicResource 机制，
+         一处改、全局窗口自动跟随），无皮肤时为半透明托盘，透出基类毛玻璃；极简视觉树。
+         对齐统一基类/FrostedGlassDemo：显式声明圆角 8 + 1.5px 描边（受光面对角渐变，随主题刷新）。 -->
+    <Border x:Name="RootBorder"
+            Background="{DynamicResource SkinBackgroundBrush}"
+            Padding="0"
+            CornerRadius="8"
+            BorderThickness="1.5"
+            BorderBrush="{DynamicResource CardBorderBrush}">
+        <Grid>
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="220" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+
+            <!-- 左侧导航（托盘，颜色由主题令牌统一驱动，跟随外观模式，零代码补色） -->
+            <Border x:Name="SideBorder" Grid.Column="0"
+                    Background="{DynamicResource ThemePanelBackground}"
+                    BorderBrush="{DynamicResource ThemeSeparator}" BorderThickness="0,0,1,0">
+                <DockPanel LastChildFill="True">
+                    <StackPanel DockPanel.Dock="Top" Margin="18,18,18,12">
+                        <TextBlock x:Name="HeaderTitle" Text="设置" FontSize="20" FontWeight="SemiBold"
+                                   Foreground="{DynamicResource ThemeForeground}" />
+                        <TextBlock x:Name="HeaderSubtitle" Text="BetterDesktop" FontSize="11.5" Margin="0,2,0,0"
+                                   Foreground="{DynamicResource ThemeMutedForeground}" />
+                    </StackPanel>
+                    <ListBox x:Name="SectionList" DockPanel.Dock="Top"
+                             Background="Transparent" BorderThickness="0"
+                             ItemContainerStyle="{StaticResource SectionItemStyle}"
+                             ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                             Margin="10,2,10,10"
+                             SelectionChanged="OnSectionSelectionChanged" />
+                </DockPanel>
+            </Border>
+
+            <!-- 右侧内容区：所有分区一次性构建，用 Visibility 切换（不重建视觉树，避免卡顿） -->
+            <Grid Grid.Column="1">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="*" />
+                </Grid.RowDefinitions>
+
+                <!-- 标题栏（含关闭） -->
+                <Grid Grid.Row="0" x:Name="TitleBar" Background="Transparent"
+                      MouseLeftButtonDown="TitleBar_MouseLeftButtonDown" Height="46">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <TextBlock Grid.Column="0" x:Name="TitleText" Text=""
+                               FontSize="14" FontWeight="SemiBold"
+                               Foreground="{DynamicResource ThemeForeground}"
+                               VerticalAlignment="Center" Margin="18,0" />
+                    <Button Grid.Column="1" x:Name="CloseButton" Width="34" Height="30"
+                            Background="Transparent" BorderThickness="0" Content="✕"
+                            Foreground="{DynamicResource ThemeForeground}" FontSize="13" Cursor="Hand"
+                            Click="CloseButton_Click" Margin="0,0,12,0" />
+                </Grid>
+
+                <!-- 内容滚动区：所有分区容器平铺于此，按选中显隐 -->
+                <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto"
+                              HorizontalScrollBarVisibility="Disabled" Margin="0,0,0,8">
+                    <StackPanel x:Name="ContentPanel" Orientation="Vertical" />
+                </ScrollViewer>
+            </Grid>
+        </Grid>
+    </Border>
+</core:ShellWindow>

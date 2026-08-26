@@ -24,7 +24,103 @@
       <Platform Project="x64" />
     </Project>
   </Folder>
+  <Folder Name="/packages/kernel/kernel-hmr/">
+    <Project Path="packages/kernel/kernel-hmr/BetterDesktop.Kernel.Hmr.csproj">
+      <Platform Project="x64" />
+    </Project>
+  </Folder>
+  <Folder Name="/packages/kernel/kernel-hmr-tests/">
+    <Project Path="packages/kernel/kernel-hmr-tests/BetterDesktop.Kernel.Hmr.Tests.csproj">
+      <Platform Project="x64" />
+    </Project>
+  </Folder>
   <Folder Name="/packages/kernel/kernel/">
     <Project Path="packages/kernel/kernel/BetterDesktop.Kernel.csproj" />
+  </Folder>
+  <Folder Name="/packages/shell/shell-core/">
+    <Project Path="packages/shell/shell-core/BetterDesktop.Shell.Core.csproj">
+      <Platform Project="x64" />
+    </Project>
+  </Folder>
+  <Folder Name="/packages/shell/" />
+  <Folder Name="/packages/shell/shell-plugin-sdk/">
+    <Project Path="packages/shell/shell-plugin-sdk/BetterDesktop.Shell.PluginSdk.csproj">
+      <Platform Project="x64" />
+    </Project>
+  </Folder>
+  <Folder Name="/packages/shell/shell-core-tests/">
+    <Project Path="packages/shell/shell-core-tests/BetterDesktop.Shell.Core.Tests.csproj">
+      <Platform Project="x64" />
+    </Project>
+  </Folder>
+  <Folder Name="/host/">
+    <Project Path="host/BetterDesktop.Host.csproj">
+      <Platform Project="x64" />
+    </Project>
+  </Folder>
+  <Folder Name="/watchdog/">
+    <Project Path="watchdog/BetterDesktop.Watchdog.csproj">
+      <Platform Project="x64" />
+    </Project>
+  </Folder>
+  <Folder Name="/recovery/">
+    <Project Path="recovery/BetterDesktop.Recovery.csproj">
+      <Platform Project="x64" />
+    </Project>
+  </Folder>
+  <Folder Name="/packages/shell/shell-dock/">
+    <Project Path="packages/shell/shell-dock/BetterDesktop.Shell.Dock.csproj">
+      <Platform Project="x64" />
+    </Project>
+  </Folder>
+  <Folder Name="/packages/shell/shell-window-tracker/">
+    <Project Path="packages/shell/shell-window-tracker/BetterDesktop.Shell.WindowTracker.csproj">
+      <Platform Project="x64" />
+    </Project>
+  </Folder>
+  <Folder Name="/packages/shell/shell-pinning/">
+    <Project Path="packages/shell/shell-pinning/BetterDesktop.Shell.Pinning.csproj">
+      <Platform Project="x64" />
+    </Project>
+  </Folder>
+  <Folder Name="/packages/shell/shell-notification/">
+    <Project Path="packages/shell/shell-notification/BetterDesktop.Shell.Notification.csproj">
+      <Platform Project="x64" />
+    </Project>
+  </Folder>
+  <Folder Name="/packages/shell/shell-search/">
+    <Project Path="packages/shell/shell-search/BetterDesktop.Shell.Search.csproj">
+      <Platform Project="x64" />
+    </Project>
+  </Folder>
+  <Folder Name="/packages/shell/shell-search-tests/">
+    <Project Path="packages/shell/shell-search-tests/BetterDesktop.Shell.Search.Tests.csproj">
+      <Platform Project="x64" />
+    </Project>
+  </Folder>
+  <Folder Name="/packages/shell/shell-recent/">
+    <Project Path="packages/shell/shell-recent/BetterDesktop.Shell.Recent.csproj">
+      <Platform Project="x64" />
+    </Project>
+  </Folder>
+  <Folder Name="/packages/shell/shell-settings/">
+    <Project Path="packages/shell/shell-settings/BetterDesktop.Shell.Settings.csproj">
+      <Platform Project="x64" />
+    </Project>
+  </Folder>
+  <Folder Name="/packages/shell/shell-settings-tests/">
+    <Project Path="packages/shell/shell-settings-tests/BetterDesktop.Shell.Settings.Tests.csproj">
+      <Platform Project="x64" />
+    </Project>
+  </Folder>
+  <Folder Name="/packages/shell/Taskbar/">
+    <Project Path="packages/shell/Taskbar/BetterDesktop.Shell.Taskbar.csproj">
+      <Platform Project="x64" />
+    </Project>
+  </Folder>
+  <Folder Name="/packages/shell/shell-start-menu/">
+    <Project Path="packages/shell/shell-start-menu/BetterDesktop.Shell.StartMenu.csproj">
+      <Platform Project="x64" />
+    </Project>
   </Folder>
 </Solution>

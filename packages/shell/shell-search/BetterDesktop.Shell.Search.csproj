@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0-windows10.0.19041.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <Platforms>x64</Platforms>
+    <UseWPF>false</UseWPF>
+    <RootNamespace>BetterDesktop.Shell.Search</RootNamespace>
+    <AssemblyName>BetterDesktop.Shell.Search</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\kernel\kernel\BetterDesktop.Kernel.csproj" />
+    <ProjectReference Include="..\shell-app-source\BetterDesktop.Shell.AppSource.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- 供 shell-search-tests 访问 internal（子序列打分等实现细节，无需改 public）。 -->
+    <InternalsVisibleTo Include="BetterDesktop.Shell.Search.Tests" />
+  </ItemGroup>
+
+</Project>

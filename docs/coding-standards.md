@@ -49,3 +49,7 @@
 ## 六、诚实标注原则
 
 每条禁止项要么有对应门禁/测试（标注名称），要么如实标注「暂无机检，靠评审」。禁止把纸面规则写成像有机检的样子（老仓「假绿」教训，ADR-001 R4 配套）。
+
+## 七、工程铁律与防御性模式
+
+跨域通用工程铁律（注册即 effect / 失败大声报错 / ID 强类型 / UI 呈现即日志等）见 [`docs/engineering-conventions.md`](engineering-conventions.md)；生命周期 / 并发 / 进程 / 清理类防复发规则见 [`docs/defensive-patterns.md`](defensive-patterns.md)。

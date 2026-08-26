@@ -1,0 +1,39 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0-windows10.0.19041.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <Platforms>x64</Platforms>
+    <UseWPF>true</UseWPF>
+    <OutputType>WinExe</OutputType>
+    <RootNamespace>BetterDesktop.Host</RootNamespace>
+    <AssemblyName>BetterDesktop.Host</AssemblyName>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <!-- 主程序构建版本时间戳：每次编译以当前 UTC 时间自动生成（yyyy.MM.dd.HHmm），
+         落入 文件版本 FileVersion 与 信息版本 InformationalVersion，保证"编译版本"始终新鲜；
+         AssemblyVersion 保持默认稳定值，避免运行时引用绑定随每次构建漂移。 -->
+    <BuildStamp>$([System.DateTime]::UtcNow.ToString("yyyy.MM.dd.HHmm"))</BuildStamp>
+    <FileVersion>$(BuildStamp)</FileVersion>
+    <InformationalVersion>1.0-$(BuildStamp)</InformationalVersion>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\packages\kernel\kernel\BetterDesktop.Kernel.csproj" />
+    <ProjectReference Include="..\packages\kernel\kernel-hmr\BetterDesktop.Kernel.Hmr.csproj" />
+    <ProjectReference Include="..\packages\kernel\kernel-loader\BetterDesktop.Kernel.Loader.csproj" />
+    <ProjectReference Include="..\packages\kernel\kernel-timer\BetterDesktop.Kernel.Timer.csproj" />
+    <ProjectReference Include="..\packages\shell\shell-core\BetterDesktop.Shell.Core.csproj" />
+    <ProjectReference Include="..\packages\shell\shell-dock\BetterDesktop.Shell.Dock.csproj" />
+    <ProjectReference Include="..\packages\shell\shell-notification\BetterDesktop.Shell.Notification.csproj" />
+    <ProjectReference Include="..\packages\shell\shell-recent\BetterDesktop.Shell.Recent.csproj" />
+    <ProjectReference Include="..\packages\shell\shell-search\BetterDesktop.Shell.Search.csproj" />
+    <ProjectReference Include="..\packages\shell\shell-settings\BetterDesktop.Shell.Settings.csproj" />
+    <ProjectReference Include="..\packages\shell\Taskbar\BetterDesktop.Shell.Taskbar.csproj" />
+    <ProjectReference Include="..\packages\shell\shell-start-menu\BetterDesktop.Shell.StartMenu.csproj" />
+  </ItemGroup>
+
+</Project>

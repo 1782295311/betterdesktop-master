@@ -71,4 +71,25 @@ public sealed class DependencyReloadTests
         await healthyHandle.AwaitAsync();
         Assert.Equal(PluginState.Active, healthyHandle.State);
     }
+
+    [Fact(DisplayName = "已释放插件忽略服务变化，不幽灵重启")]
+    public async Task DisposedPlugin_IgnoresServiceChanges()
+    {
+        using var context = new CordisContext();
+        context.Provide<IService>(new Service());
+        var plugin = new TestPlugin("dependent") { Inject = new[] { typeof(IService) } };
+        var handle = context.Plugin(plugin);
+        await handle.AwaitAsync();
+        Assert.Equal(PluginState.Active, handle.State);
+        Assert.Equal(1, plugin.LoadCount);
+
+        await handle.DisposeAsync();
+        Assert.Equal(PluginState.Disposed, handle.State);
+
+        context.Provide<IService>(new Service());
+        await Task.Delay(100);
+        Assert.Equal(PluginState.Disposed, handle.State);
+        Assert.Equal(1, plugin.LoadCount);
+        Assert.Equal(1, plugin.UnloadCount);
+    }
 }

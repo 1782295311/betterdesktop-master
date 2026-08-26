@@ -12,6 +12,7 @@ public sealed class PluginHandle : IPluginHandle
     private readonly IPlugin _plugin;
     private readonly List<EffectRegistration> _effects = new();
     private readonly object _gate = new();
+    private readonly SemaphoreSlim _restartGate = new(1, 1);
     private PluginState _state = PluginState.Pending;
     private Task? _current;
 
@@ -32,6 +33,9 @@ public sealed class PluginHandle : IPluginHandle
             }
         }
     }
+
+    /// <summary>诊断用：插件名称。</summary>
+    public string PluginName => _plugin.Name;
 
     /// <summary>登记 effect（由 Context.Effect 在加载期调用）。</summary>
     internal void AddEffect(EffectRegistration registration)
@@ -58,7 +62,11 @@ public sealed class PluginHandle : IPluginHandle
         {
             return;
         }
-        _current = RestartCoreAsync();
+        if (State is PluginState.Disposed or PluginState.Unloading)
+        {
+            return;
+        }
+        _ = RestartSerializedAsync();
     }
 
     /// <summary>首次启动：依赖已满足则加载，否则保持 PENDING 等待通知。</summary>
@@ -71,8 +79,7 @@ public sealed class PluginHandle : IPluginHandle
                 return _current ?? Task.CompletedTask;
             }
         }
-        _current = ReloadAsync();
-        return _current;
+        return RestartSerializedAsync();
     }
 
     /// <inheritdoc />
@@ -92,8 +99,22 @@ public sealed class PluginHandle : IPluginHandle
     /// <inheritdoc />
     public Task RestartAsync()
     {
-        _current = RestartCoreAsync();
-        return _current;
+        return RestartSerializedAsync();
+    }
+
+    /// <summary>串行化重启，避免并发服务变化导致多个 RestartCoreAsync 互相覆盖 _current（A2）。</summary>
+    private async Task RestartSerializedAsync()
+    {
+        await _restartGate.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            _current = RestartCoreAsync();
+            await _current.ConfigureAwait(false);
+        }
+        finally
+        {
+            _restartGate.Release();
+        }
     }
 
     /// <inheritdoc />
@@ -101,6 +122,7 @@ public sealed class PluginHandle : IPluginHandle
     {
         await UnloadInternalAsync().ConfigureAwait(false);
         SetState(PluginState.Disposed);
+        _context.RemovePlugin(this);
     }
 
     private async Task RestartCoreAsync()
@@ -167,6 +189,7 @@ public sealed class PluginHandle : IPluginHandle
         catch (Exception ex)
         {
             _context.Logger.Error($"插件 {_plugin.Name} 加载失败：{ex}");
+            DiagnosticLog.Trace("Plugin", $"FAILED {_plugin.Name}: {ex.GetType().Name}: {ex.Message}");
             SetState(PluginState.Failed);
         }
     }

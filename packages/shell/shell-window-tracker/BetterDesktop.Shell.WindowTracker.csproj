@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0-windows10.0.19041.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <Platforms>x64</Platforms>
+    <UseWPF>true</UseWPF>
+    <RootNamespace>BetterDesktop.Shell.WindowTracker</RootNamespace>
+    <AssemblyName>BetterDesktop.Shell.WindowTracker</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\kernel\kernel\BetterDesktop.Kernel.csproj" />
+    <ProjectReference Include="..\shell-app-source\BetterDesktop.Shell.AppSource.csproj" />
+  </ItemGroup>
+
+</Project>

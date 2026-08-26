@@ -9,3 +9,19 @@ publish/
 **/TestResults/
 .DS_Store
 Thumbs.db
+
+# 本机构建产物（非 bin/obj 命名）
+host/Debug/
+host/Release/
+
+# 旧代码快照目录（本地保留，不入库）
+backups/
+
+# 内部自动化状态
+.workbuddy/
+
+# 反编译/本地工具缓存与二进制
+tools/ilspy/
+
+# 历史遗留垃圾构建目录
+**/obj2*/

@@ -1,0 +1,82 @@
+<surface:ShellWindow x:Class="BetterDesktop.Shell.Dock.DockWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:surface="clr-namespace:BetterDesktop.Shell.Core.Surface;assembly=BetterDesktop.Shell.Core"
+        Title="Dock"
+        SizeToContent="WidthAndHeight"
+        AllowsTransparency="True"
+        WindowStyle="None"
+        WindowStartupLocation="Manual">
+    <!-- 根 Border：背景跟随皮肤（SkinBackgroundBrush）。无激活皮肤时由代码改为透明，
+         让 DWM 毛玻璃（Acrylic/BlurBehind）主导视觉，避免叠灰 tint 显得不透明。
+         BorderBrush 跟随主题描边。 -->
+    <Border x:Name="RootBorder"
+            Padding="12,8,12,8"
+            CornerRadius="8"
+            BorderThickness="1.5"
+            BorderBrush="{DynamicResource CardBorderBrush}">
+        <!-- 三列 Grid（Auto/Auto/*）：固定区与分隔线按内容宽，运行区占剩余列。
+             关键：不能用 Horizontal StackPanel——它给子 ScrollViewer 无限宽(宽=内容宽)，
+             内容超 MaxWidth 时 ScrollViewer 永不滚动、边缘渐隐永不触发(滚动列表/渐隐形同虚设)。
+             Grid 的 * 列在窗口受限时收缩，运行区 ScrollViewer 宽度被约束 → 内容超宽时真正水平滚动 + 边缘渐隐生效。
+             SizeToContent 无界测量下 * 列按内容宽，窗口正常包内容（headless 验证：无界=内容宽,受限=可滚动）。 -->
+        <Grid x:Name="RootRow"
+              HorizontalAlignment="Center"
+              VerticalAlignment="Center">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
+            <!-- 左端「开始」图标：点击切换自绘开始菜单，右键唤出系统开始菜单（Win+X）样式右键菜单。 -->
+            <StackPanel x:Name="StartPanel"
+                        Grid.Column="0"
+                        Orientation="Horizontal"
+                        HorizontalAlignment="Center"
+                        VerticalAlignment="Center"
+                        Margin="0,0,4,0"/>
+            <ScrollViewer x:Name="PinnedScrollViewer"
+                        Grid.Column="1"
+                        HorizontalScrollBarVisibility="Auto"
+                        VerticalScrollBarVisibility="Disabled"
+                        CanContentScroll="False"
+                        Focusable="False"
+                        HorizontalContentAlignment="Center"
+                        PreviewMouseWheel="OnHorizontalWheel">
+                <StackPanel x:Name="PinnedPanel"
+                            Orientation="Horizontal"
+                            HorizontalAlignment="Center"/>
+            </ScrollViewer>
+
+            <Rectangle x:Name="Separator"
+                       Grid.Column="2"
+                       Width="1"
+                       Fill="{DynamicResource ThemeSeparator}"
+                       Margin="8,10,8,10"/>
+
+                <ScrollViewer x:Name="RunningScrollViewer"
+                            Grid.Column="3"
+                            HorizontalScrollBarVisibility="Auto"
+                            VerticalScrollBarVisibility="Disabled"
+                            CanContentScroll="False"
+                            Focusable="False"
+                            HorizontalContentAlignment="Center"
+                            PreviewMouseWheel="OnHorizontalWheel">
+                    <StackPanel x:Name="RunningPanel"
+                                Orientation="Horizontal"
+                                HorizontalAlignment="Center"/>
+                </ScrollViewer>
+
+                <!-- 系统功能区：此电脑 / 网络 / 回收站 / 控制面板（运行窗口右侧）。
+                     各图标是否显示由设置独立控制（dock.system*），系统图标取自 Shell32。 -->
+                <StackPanel x:Name="SystemPanel"
+                            Grid.Column="4"
+                            Orientation="Horizontal"
+                            HorizontalAlignment="Center"
+                            Margin="8,0,0,0"
+                            Visibility="Collapsed"/>
+            </Grid>
+    </Border>
+</surface:ShellWindow>

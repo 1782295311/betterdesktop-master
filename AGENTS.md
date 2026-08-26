@@ -22,17 +22,19 @@ host/           薄宿主 exe（P2 起）
 
 ## 文档纪律
 
+> 分层（一个事实一个家）、写作规则与 slop 反模式清单见 `docs/doc-standards.md`。
+
 1. 一段一行物理行（不手工硬换行，`verify-md-wrap` 机检）；相对链接只指向仓库内文件（`verify-md-links` 机检）；锚点链接先确保目标标题存在。
 2. 每个包（`packages/**/*.csproj`）必须有同目录 `README.md`，且含 `## Known Limitations` 小节（至少一条 `- ` 列表项）。覆盖率 100%，由 `verify-package-readme` 棘轮强制。
 3. 关键文档有字数预算（`scripts/manifests/doc-budgets.manifest.json`）。超限先精简；确实要放宽上限，必须在决策记录中说明理由。
 4. 决策记录写进 `.agents/notes/`；事故写进 `docs/postmortem/NNNN-title.md`。两者格式由门禁强制。
-5. 规则文档索引（均强制，按域取用）：`docs/coding-standards.md`（代码）/ `docs/TERMINOLOGY.md`（命名）/ `docs/ui-foundation.md`（UI）/ `docs/reuse-rules.md`（复用）/ `docs/extension-rules.md`（扩展契约）/ `docs/pluginization.md`（插件化行为）/ `docs/ai-control.md`（AI 控制面）/ `docs/testing.md`（测试）/ `docs/runtime-health.md`（运行时）/ `docs/security.md`（安全）/ `docs/build-release.md`（构建发布）/ `docs/product-quality.md`（质量）/ `docs/code-review.md`（评审）。
+5. 规则文档索引（均强制，按域取用）：`docs/coding-standards.md`（代码）/ `docs/engineering-conventions.md`（工程铁律）/ `docs/defensive-patterns.md`（防御性模式）/ `docs/TERMINOLOGY.md`（命名）/ `docs/ui-foundation.md`（UI）/ `docs/reuse-rules.md`（复用）/ `docs/extension-rules.md`（扩展契约）/ `docs/pluginization.md`（插件化行为）/ `docs/ai-control.md`（AI 控制面）/ `docs/testing.md`（测试）/ `docs/runtime-health.md`（运行时）/ `docs/security.md`（安全）/ `docs/build-release.md`（构建发布）/ `docs/product-quality.md`（质量）/ `docs/code-review.md`（评审）。
 
 ## 门禁纪律
 
 1. 唯一入口：`scripts/run-gates.ps1`。新增门禁 = 新增 `verify-*.ps1` + 登记进 `run-gates.ps1` 注册表，同一变更落地（注册一致性由 `verify-gate-registry` 机检，漏登记即红）。
 2. **唯一合法解释器是 PowerShell 7（`pwsh`）**：Windows PowerShell 5.1 会把仓库内 UTF-8 无 BOM 脚本读成乱码导致解析失败。全量检查命令：`pwsh -NoProfile -ExecutionPolicy Bypass scripts/run-gates.ps1`。每次改动收工前必须全绿。
-3. 每条门禁必须有变红物证（落盘 `docs/guard-redproof/`，三要素 + 取证环境 E1–E4，见该目录 README）。
+3. 每条门禁必须有门禁单测（`scripts/verify-*.Tests.ps1`，Pester），覆盖「非法输入 → 返回违规」；契约见 `scripts/AGENTS.md` 第 5 条。
 4. 门禁失败即阻断：退出码非 0 一律视为失败；禁止注释掉门禁、禁止在 CI 中跳过门禁。
 
 ## 会话交接（新会话接手的第一件事）

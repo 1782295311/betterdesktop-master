@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0-windows10.0.19041.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <Platforms>x64</Platforms>
+    <CodePage>65001</CodePage>
+    <UseWPF>true</UseWPF>
+    <RootNamespace>BetterDesktop.Shell.PluginSdk</RootNamespace>
+    <AssemblyName>BetterDesktop.Shell.PluginSdk</AssemblyName>
+  </PropertyGroup>
+
+</Project>

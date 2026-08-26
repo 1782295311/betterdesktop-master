@@ -18,7 +18,7 @@ public sealed class ArchitectureGuardTests
         {
             var text = File.ReadAllText(csproj);
             Assert.Matches(
-                "<TargetFramework>net8\\.0-windows</TargetFramework>",
+                "<TargetFramework>net8\\.0-windows[^<]*</TargetFramework>",
                 text);
         }
     }
@@ -47,7 +47,7 @@ public sealed class ArchitectureGuardTests
         var pattern = new Regex(@"\b(Console|Debug|Trace)\.Write(Line)?\(");
         foreach (var file in Directory.EnumerateFiles(Path.Combine(RepoRoot, "packages"), "*.cs", SearchOption.AllDirectories))
         {
-            if (file.Contains("\\obj\\") || file.Contains("\\bin\\"))
+            if (file.Contains("\\obj\\") || file.Contains("\\bin\\") || file.Contains("\\backups\\"))
             {
                 continue;
             }

@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0-windows10.0.19041.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <Platforms>x64</Platforms>
+    <RootNamespace>BetterDesktop.Kernel.Hmr</RootNamespace>
+    <AssemblyName>BetterDesktop.Kernel.Hmr</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\kernel\BetterDesktop.Kernel.csproj" />
+  </ItemGroup>
+
+</Project>
