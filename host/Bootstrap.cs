@@ -12,12 +12,15 @@ using BetterDesktop.Shell.Core.Surface;
 using BetterDesktop.Shell.Core.Vibrancy;
 using BetterDesktop.Shell.Core.Windowing;
 using BetterDesktop.Shell.Dock;
+using BetterDesktop.Shell.MenuBar;
 using BetterDesktop.Shell.Notification;
+using BetterDesktop.Shell.QuickNote;
 using BetterDesktop.Shell.Pinning;
 using BetterDesktop.Shell.Recent;
 using BetterDesktop.Shell.Search;
 using BetterDesktop.Shell.Settings.Contracts;
 using BetterDesktop.Shell.Settings.Services;
+using BetterDesktop.Shell.Status;
 
 namespace BetterDesktop.Host;
 
@@ -72,6 +75,11 @@ public static class Bootstrap
         // 4. 基础服务
         context.Plugin(new TimerService());
         context.Plugin(new VibrancyService());
+
+        // 4.1 系统状态采集插件（shell.status）：向全局提供 CPU/内存/电池/音量/麦克风/网络/输入法/亮度
+        //     监控服务。必须早于任何 UI 消费插件（菜单栏/任务栏/控制中心）加载；
+        //     依赖为空，放在基础服务之后、AppSource 之前。
+        context.Plugin(new StatusPlugin());
 
         // 4.25 装配 HMR 热重载管理器 + 内存治理器（进程级单例）。
         // 阈值采用内核经验值（比例 25/50/75% 按物理内存自适应，采样 5s，熔断 3 次/60s），
@@ -149,6 +157,17 @@ public static class Bootstrap
         //     依赖：ISettingsSectionRegistry(SettingsPlugin) + IAppSourceService/IAppIconService(AppSourcePlugin)
         //     + IVibrancyService + IAppearanceService。必须在上述插件之后加载。
         context.Plugin(new BetterDesktop.Shell.StartMenu.StartMenuPlugin());
+
+        // 6.7 顶部菜单栏（shell.menu-bar）：右区 = 移植自 tools/ShellComponentsPlayground 的紧凑状态条
+        //     （系统托盘/FPS/CPU/内存/WiFi/实时网速/亮度/输入法/蓝牙/音量/麦克风/电池/通知/时间/桌面），
+        //     各图标点击打开对应独立面板。依赖 shell.status 监控（4.1 已加载）+ IVibrancyService
+        //     + IAppearanceService（SettingsPlugin 提供），必须在此之后加载。
+        context.Plugin(new MenuBarPlugin());
+
+        // 6.8 快速笔记外部扩展（shell.quick-note）：由扩展中心开关（extensions.quick-note.enabled）
+        //     驱动的常驻浮窗。无依赖（Inject 为空），缺失服务时静默降级；订阅 ISettingsService.Changed
+        //     实现运行时启停，使「扩展中心」从记忆开关变为真正启停的端到端闭环。
+        context.Plugin(new QuickNotePlugin());
 
         // 7. 原生 Windows 部件管理（参考 Cairo 的 ExplorerHelper.HideExplorerTaskbar）：
         //    本桌面环境不实现原生任务栏，只管理其显示/隐藏。components.wintaskbar=false 时隐藏原生任务栏

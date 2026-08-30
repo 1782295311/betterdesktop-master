@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0-windows10.0.19041.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <Platforms>x64</Platforms>
+    <UseWPF>true</UseWPF>
+    <RootNamespace>BetterDesktop.Shell.Status</RootNamespace>
+    <AssemblyName>BetterDesktop.Shell.Status</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\kernel\kernel\BetterDesktop.Kernel.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- C++ 原生封装 DLL（以 natives\*.dll 形式随程序集输出并打包） -->
+    <None Include="natives\AudioCore.dll" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="natives\WlanCore.dll" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="natives\PowerCore.dll" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="natives\DisplayCore.dll" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="natives\NetworkCore.dll" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="natives\CpuCore.dll" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="natives\MemoryCore.dll" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="natives\MediaCore.dll" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+</Project>

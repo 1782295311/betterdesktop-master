@@ -506,7 +506,10 @@ public sealed class AppearanceService : IAppearanceService, IThemeTokens
         var sepOpacity = mode == ThemeMode.Light ? 0.12 : 0.25;
 
         SetBrush(app, "ThemeWindowBackground", winBg);
-        SetBrush(app, "ThemePanelBackground", panelBg);
+        // 面板背景透明度绑定"窗体不透明度"滑块（WindowOpacity）：面板/弹层根背景随滑块实时半透明，
+        // 透出 DWM 毛玻璃与桌面，消除"固定深色死黑、调透明度无反应"的问题。
+        // （模式仅决定面板基调色深浅；内容层 ThemeContentBackground 保持稳定不透明，避免内容装饰闪烁。）
+        SetBrush(app, "ThemePanelBackground", panelBg, WindowOpacity);
         SetBrush(app, "ThemeContentBackground", contentBg);
         SetBrush(app, "ThemeForeground", fore);
         SetBrush(app, "ThemeMutedForeground", muted);

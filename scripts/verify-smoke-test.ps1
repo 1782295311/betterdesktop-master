@@ -1,9 +1,9 @@
 # 门禁 smoke-test：启动主程序并验证进程存活（不崩溃）
 # 规则:
-#   - 主程序路径: host\bin\x64\Debug\net8.0-windows\BetterDesktop.Host.exe
+#   - 主程序路径: host\bin\x64\Debug\net8.0-windows10.0.19041.0\BetterDesktop.Host.exe
 #   - 启动前清理遗留进程（幂等），结束后强制回收
 #   - 等待 4 秒后检查进程是否仍在运行（未崩溃即绿）
-# 注: 内核精简后无可见 UI 窗口，smoke-test 仅验证进程存活
+# 注: 主程序为 shell 宿主（Dock/菜单栏/开始菜单/设置），smoke-test 仅验证进程存活
 # 单测: verify-smoke-test.Tests.ps1（Pester，覆盖阈值判断）
 . (Join-Path $PSScriptRoot 'lib\common.ps1')
 
@@ -14,7 +14,7 @@ function Test-ProcessAlive([bool]$HasExited) {
 
 # 门禁主体（dot-source 时跳过）
 if ($MyInvocation.InvocationName -ne '.') {
-    $exe = Join-Path (Get-RepoRoot) 'host\bin\x64\Debug\net8.0-windows\BetterDesktop.Host.exe'
+    $exe = Join-Path (Get-RepoRoot) 'host\bin\x64\Debug\net8.0-windows10.0.19041.0\BetterDesktop.Host.exe'
     if (-not (Test-Path $exe)) {
         Write-GateFail 'smoke-test' @("$exe — 主程序不存在，请先 ``dotnet build BetterDesktop.slnx``（Debug/x64）")
     }

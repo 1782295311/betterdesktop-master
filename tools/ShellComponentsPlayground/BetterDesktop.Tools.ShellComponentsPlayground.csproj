@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows10.0.19041.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <Platforms>x64</Platforms>
+    <UseWPF>true</UseWPF>
+    <RootNamespace>BetterDesktop.Tools.ShellComponentsPlayground</RootNamespace>
+    <AssemblyName>BetterDesktop.Tools.ShellComponentsPlayground</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\packages\kernel\kernel\BetterDesktop.Kernel.csproj" />
+    <ProjectReference Include="..\..\packages\kernel\kernel-timer\BetterDesktop.Kernel.Timer.csproj" />
+    <ProjectReference Include="..\..\packages\shell\shell-core\BetterDesktop.Shell.Core.csproj" />
+    <ProjectReference Include="..\..\packages\shell\shell-settings\BetterDesktop.Shell.Settings.csproj" />
+    <ProjectReference Include="..\..\packages\shell\shell-status\BetterDesktop.Shell.Status.csproj" />
+    <ProjectReference Include="..\..\packages\shell\shell-menu-bar\BetterDesktop.Shell.MenuBar.csproj" />
+  </ItemGroup>
+
+</Project>

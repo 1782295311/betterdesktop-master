@@ -123,4 +123,29 @@
       <Platform Project="x64" />
     </Project>
   </Folder>
+  <Folder Name="/packages/shell/shell-status/">
+    <Project Path="packages/shell/shell-status/BetterDesktop.Shell.Status.csproj">
+      <Platform Project="x64" />
+    </Project>
+  </Folder>
+  <Folder Name="/packages/shell/shell-status-tests/">
+    <Project Path="packages/shell/shell-status-tests/BetterDesktop.Shell.Status.Tests.csproj">
+      <Platform Project="x64" />
+    </Project>
+  </Folder>
+  <Folder Name="/packages/shell/shell-menu-bar/">
+    <Project Path="packages/shell/shell-menu-bar/BetterDesktop.Shell.MenuBar.csproj">
+      <Platform Project="x64" />
+    </Project>
+  </Folder>
+  <Folder Name="/packages/shell/shell-quick-note/">
+    <Project Path="packages/shell/shell-quick-note/BetterDesktop.Shell.QuickNote.csproj">
+      <Platform Project="x64" />
+    </Project>
+  </Folder>
+  <Folder Name="/tools/ShellComponentsPlayground/">
+    <Project Path="tools/ShellComponentsPlayground/BetterDesktop.Tools.ShellComponentsPlayground.csproj">
+      <Platform Project="x64" />
+    </Project>
+  </Folder>
 </Solution>

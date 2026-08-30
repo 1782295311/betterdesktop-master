@@ -32,6 +32,9 @@
     <ProjectReference Include="..\packages\shell\shell-recent\BetterDesktop.Shell.Recent.csproj" />
     <ProjectReference Include="..\packages\shell\shell-search\BetterDesktop.Shell.Search.csproj" />
     <ProjectReference Include="..\packages\shell\shell-settings\BetterDesktop.Shell.Settings.csproj" />
+    <ProjectReference Include="..\packages\shell\shell-status\BetterDesktop.Shell.Status.csproj" />
+    <ProjectReference Include="..\packages\shell\shell-menu-bar\BetterDesktop.Shell.MenuBar.csproj" />
+    <ProjectReference Include="..\packages\shell\shell-quick-note\BetterDesktop.Shell.QuickNote.csproj" />
     <ProjectReference Include="..\packages\shell\Taskbar\BetterDesktop.Shell.Taskbar.csproj" />
     <ProjectReference Include="..\packages\shell\shell-start-menu\BetterDesktop.Shell.StartMenu.csproj" />
   </ItemGroup>
