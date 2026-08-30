@@ -116,7 +116,6 @@ internal sealed class StatusBarMenuBarExtension : IMenuBarExtension, IDisposable
                 return;
             }
 
-            var anchor = e.Source.PointToScreen(new Point(0, 0));
             double buttonWidth = Math.Max(e.Source.ActualWidth, 16);
 
             switch (e.Button)
@@ -127,11 +126,11 @@ internal sealed class StatusBarMenuBarExtension : IMenuBarExtension, IDisposable
                         () => new ControlCenterWindow(
                             ControlCenterFeatureCatalog.Build(_vibrancy, _appearance, _net, _vol, _mic, _bat, _brightness),
                             _vol, _mic, _brightness, _vibrancy, _appearance),
-                        anchor, buttonWidth, new Size(360, 420));
+                        e.Source, buttonWidth, new Size(400, 420));
                     break;
 
                 case MenuBarStatusButtonId.Ime:
-                    // 左键=切换输入法（Win+Space 循环），右键=打开输入法选择面板
+                    // 左键=切换输入法（直接切下一个，不弹系统选择器 UI），右键=打开输入法选择面板
                     if (e.IsRightButton)
                     {
                         if (_ime is null)
@@ -140,7 +139,7 @@ internal sealed class StatusBarMenuBarExtension : IMenuBarExtension, IDisposable
                             break;
                         }
                         ShowPopup(ref _imePopup, () => new ImePopupWindow(_ime, _vibrancy, _appearance),
-                            anchor, buttonWidth, new Size(290, 320));
+                            e.Source, buttonWidth, new Size(290, 320));
                     }
                     else
                     {
@@ -150,52 +149,52 @@ internal sealed class StatusBarMenuBarExtension : IMenuBarExtension, IDisposable
 
                 case MenuBarStatusButtonId.Battery:
                     ShowPopup(ref _powerPopup, () => new PowerPopupWindow(_vibrancy, _appearance),
-                        anchor, buttonWidth, new Size(290, 420));
+                        e.Source, buttonWidth, new Size(290, 420));
                     break;
 
                 case MenuBarStatusButtonId.NetworkTraffic:
                     ShowPopup(ref _networkPopup, () => new NetworkPanelWindow(_vibrancy, _appearance),
-                        anchor, buttonWidth, new Size(460, 520));
+                        e.Source, buttonWidth, new Size(460, 520));
                     break;
 
                 case MenuBarStatusButtonId.Memory:
                     ShowPopup(ref _memoryPopup, () => new MemoryPanelWindow(_vibrancy, _appearance),
-                        anchor, buttonWidth, new Size(460, 520));
+                        e.Source, buttonWidth, new Size(460, 520));
                     break;
 
                 case MenuBarStatusButtonId.Cpu:
                     ShowPopup(ref _cpuPopup, () => new CpuPanelWindow(_vibrancy, _appearance),
-                        anchor, buttonWidth, new Size(340, 300));
+                        e.Source, buttonWidth, new Size(340, 300));
                     break;
 
                 case MenuBarStatusButtonId.Microphone:
                     ShowPopup(ref _microphonePopup, () => new MicrophonePanelWindow(_vibrancy, _appearance),
-                        anchor, buttonWidth, new Size(320, 360));
+                        e.Source, buttonWidth, new Size(320, 360));
                     break;
 
                 case MenuBarStatusButtonId.Volume:
                     ShowPopup(ref _soundPopup, () => new SoundPanelWindow(_vibrancy, _appearance),
-                        anchor, buttonWidth, new Size(320, 420));
+                        e.Source, buttonWidth, new Size(320, 420));
                     break;
 
                 case MenuBarStatusButtonId.Wifi:
                     ShowPopup(ref _wifiPopup, () => new WifiPopupWindow(_vibrancy, _appearance),
-                        anchor, buttonWidth, new Size(320, 520));
+                        e.Source, buttonWidth, new Size(320, 520));
                     break;
 
                 case MenuBarStatusButtonId.Bluetooth:
                     ShowPopup(ref _bluetoothPopup, () => new BluetoothPopupWindow(_vibrancy, _appearance),
-                        anchor, buttonWidth, new Size(300, 420));
+                        e.Source, buttonWidth, new Size(300, 420));
                     break;
 
                 case MenuBarStatusButtonId.Brightness:
                     ShowPopup(ref _themePopup, () => new ThemePopupWindow(_brightness, _vibrancy, _appearance),
-                        anchor, buttonWidth, new Size(290, 360));
+                        e.Source, buttonWidth, new Size(290, 360));
                     break;
 
                 case MenuBarStatusButtonId.DateTime:
                     ShowPopup(ref _calendarPopup, () => new CalendarPopupWindow(_vibrancy, _appearance),
-                        anchor, buttonWidth, new Size(340, 420));
+                        e.Source, buttonWidth, new Size(340, 420));
                     break;
 
                 case MenuBarStatusButtonId.Extensions:
@@ -205,7 +204,7 @@ internal sealed class StatusBarMenuBarExtension : IMenuBarExtension, IDisposable
                             _settings,
                             (id, on) => _strip?.SetComponentVisible(id, on),
                             _vibrancy, _appearance),
-                        anchor, buttonWidth, new Size(320, 460));
+                        e.Source, buttonWidth, new Size(320, 460));
                     break;
 
                 default:
@@ -219,13 +218,63 @@ internal sealed class StatusBarMenuBarExtension : IMenuBarExtension, IDisposable
     }
 
     /// <summary>懒创建并显示独立面板（首次创建、重复仅置前），锚定在按钮正下方。</summary>
-    private void ShowPopup<T>(ref T? popup, Func<T> factory, Point anchor, double buttonWidth, Size popupSize)
+    /// <remarks>
+    /// 传 <c>source</c>（按钮本体）而非预先算好的坐标：DPI 换算与"取哪个显示器"都由
+    /// <see cref="PopupAnchor"/> 统一处理，调用方不接触物理像素，避免单位混用。
+    /// </remarks>
+    private void ShowPopup<T>(ref T? popup, Func<T> factory, FrameworkElement source, double buttonWidth, Size popupSize)
         where T : MenuBarPopupWindow
     {
         popup ??= factory();
-        var pos = PopupAnchor.Compute(anchor, buttonWidth, popupSize, MenuBarMetrics.MenuBarHeight);
+
+        // 弹窗互斥：仿 macOS，同一时刻只开一个面板。
+        // 原实现每个面板各管各的，点了 CPU 再点声音会叠两层窗口，且旧面板不会自动收起。
+        CloseAllExcept(popup);
+
+        var pos = PopupAnchor.Compute(source, buttonWidth, popupSize, MenuBarMetrics.MenuBarHeight);
         popup.ShowAt(pos);
     }
+
+    /// <summary>收起除 <paramref name="except"/> 之外的所有面板（实现弹窗互斥）。</summary>
+    private void CloseAllExcept(MenuBarPopupWindow? except)
+    {
+        HideIfNot(_imePopup, except);
+        HideIfNot(_extensionsCenterPopup, except);
+        HideIfNot(_calendarPopup, except);
+        HideIfNot(_controlCenterPopup, except);
+        HideIfNot(_bluetoothPopup, except);
+        HideIfNot(_wifiPopup, except);
+        HideIfNot(_themePopup, except);
+        HideIfNot(_powerPopup, except);
+        HideIfNot(_networkPopup, except);
+        HideIfNot(_memoryPopup, except);
+        HideIfNot(_cpuPopup, except);
+        HideIfNot(_microphonePopup, except);
+        HideIfNot(_soundPopup, except);
+    }
+
+    private static void HideIfNot(MenuBarPopupWindow? window, MenuBarPopupWindow? except)
+    {
+        if (window is not null && !ReferenceEquals(window, except))
+        {
+            window.Hide();
+        }
+    }
+
+    /// <summary>
+    /// 运行时显隐某个菜单栏系统功能按钮。
+    /// 供「设置 → 菜单栏」分区（<see cref="Sections.MenuBarSection"/>）在开关切换时即时生效。
+    /// 状态条尚未创建时静默忽略——设置会先落盘，下次启动由 MenuBarStatusStrip 构造函数统一应用。
+    /// </summary>
+    public void SetComponentVisible(MenuBarStatusButtonId id, bool visible)
+        => _strip?.SetComponentVisible(id, visible);
+
+    /// <summary>
+    /// 设置系统托盘是否隐藏与菜单栏专用按钮重复的系统图标（音量/网络/电源/安全与维护）。
+    /// 供「设置 → 菜单栏」分区使用。
+    /// </summary>
+    public void SetTrayHideSystemIcons(bool hide)
+        => _strip?.SetTrayHideSystemIcons(hide);
 
     public void Dispose()
     {

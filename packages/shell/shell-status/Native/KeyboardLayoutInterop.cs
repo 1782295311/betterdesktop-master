@@ -149,58 +149,6 @@ public static partial class KeyboardLayoutInterop
     [DllImport("user32.dll", CharSet = CharSet.Unicode)]
     private static extern IntPtr PostMessage(IntPtr hWnd, uint Msg, IntPtr wParam, IntPtr lParam);
 
-    // ===== SendInput：模拟 Win+Space 按键（Windows 官方 TSF 输入法循环切换方式） =====
-    [StructLayout(LayoutKind.Sequential)]
-    private struct INPUT
-    {
-        public uint type;
-        public InputUnion u;
-    }
-    [StructLayout(LayoutKind.Explicit)]
-    private struct InputUnion
-    {
-        [FieldOffset(0)] public MOUSEINPUT mi;
-        [FieldOffset(0)] public KEYBDINPUT ki;
-        [FieldOffset(0)] public HARDWAREINPUT hi;
-    }
-    [StructLayout(LayoutKind.Sequential)]
-    private struct KEYBDINPUT
-    {
-        public ushort wVk;
-        public ushort wScan;
-        public uint dwFlags;
-        public uint time;
-        public IntPtr dwExtraInfo;
-    }
-    [StructLayout(LayoutKind.Sequential)]
-    private struct MOUSEINPUT
-    {
-        public int dx;
-        public int dy;
-        public uint mouseData;
-        public uint dwFlags;
-        public uint time;
-        public IntPtr dwExtraInfo;
-    }
-    [StructLayout(LayoutKind.Sequential)]
-    private struct HARDWAREINPUT
-    {
-        public uint uMsg;
-        public ushort wParamL;
-        public ushort wParamH;
-    }
-    private const uint INPUT_KEYBOARD = 1;
-    private const uint KEYEVENTF_KEYUP = 0x0002;
-    private const ushort VK_LWIN = 0x5B;
-    private const ushort VK_SPACE = 0x20;
-
-    [DllImport("user32.dll")]
-    private static extern uint SendInput(uint nInputs, INPUT[] pInputs, int cbSize);
-    [DllImport("user32.dll")]
-    private static extern bool SetForegroundWindow(IntPtr hWnd);
-    [DllImport("user32.dll")]
-    private static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, UIntPtr dwExtraInfo);
-
     // ===== 图标提取：从 DLL/EXE/IME 中提取图标（ExtractIconEx） =====
     [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
     private static extern int ExtractIconEx(string lpszFile, int nIconIndex, IntPtr[]? phiconLarge, IntPtr[]? phiconSmall, uint nIcons);
@@ -767,29 +715,36 @@ public static partial class KeyboardLayoutInterop
     }
 
     /// <summary>激活指定键盘布局/输入法。isTs=true 时走 TSF 路径（SetDefaultLayoutOrTip），
-    /// <summary>模拟一次 Win+Space，循环切换到下一个输入法/键盘布局。
-    /// 这是 Windows 官方全局切换方式，对 IMM 和 TSF 均有效。</summary>
+    /// <summary>
+    /// 切换到下一个输入法/键盘布局（**直接激活，不弹系统输入法选择器 UI**）。
+    /// v5 (2026-08-30)：彻底放弃 SendInput 模拟 Win+Space —— 系统会把模拟按键识别为真实
+    /// 热键并弹出 CTF 输入法选择器浮层（用户反馈"出现额外界面"）。
+    /// 改为：枚举真实布局列表 → 定位当前激活项 → 直接激活下一项：
+    ///   - TSF 输入法：ITfInputProcessorProfiles::ActivateProfile（TSF 官方立即激活，无 UI）
+    ///   - IMM / 纯键盘布局：PostMessage(WM_INPUTLANGCHANGEREQUEST) 到前台窗口
+    /// 全程不依赖 Win 键，与 StartKeyHook 吞 Win DOWN 完全解耦。
+    /// </summary>
     public static bool CycleOnce()
     {
-        const byte KEYEVENTF_KEYUP_VAL = 0x0002;
-        byte vkLWin = (byte)VK_LWIN;
-        byte vkSpace = (byte)VK_SPACE;
         try
         {
-            keybd_event(vkLWin, 0, 0, UIntPtr.Zero);
-            System.Threading.Thread.Sleep(80);
-            keybd_event(vkSpace, 0, 0, UIntPtr.Zero);
-            System.Threading.Thread.Sleep(60);
-            keybd_event(vkSpace, 0, KEYEVENTF_KEYUP_VAL, UIntPtr.Zero);
-            System.Threading.Thread.Sleep(60);
-            keybd_event(vkLWin, 0, KEYEVENTF_KEYUP_VAL, UIntPtr.Zero);
-            System.Threading.Thread.Sleep(150);
-            return true;
+            var layouts = Enumerate();
+            if (layouts.Count == 0) return false;
+
+            // 定位当前激活项；找不到（极端情况）从第一项开始
+            int current = -1;
+            for (int i = 0; i < layouts.Count; i++)
+            {
+                if (layouts[i].IsActive) { current = i; break; }
+            }
+            int next = current < 0 ? 0 : (current + 1) % layouts.Count;
+            if (next == current) return false; // 只有一个布局，无可切换
+
+            var target = layouts[next];
+            return Activate(target.KlidHex, target.IsTs);
         }
         catch
         {
-            try { keybd_event(vkLWin, 0, KEYEVENTF_KEYUP_VAL, UIntPtr.Zero); } catch { }
-            try { keybd_event(vkSpace, 0, KEYEVENTF_KEYUP_VAL, UIntPtr.Zero); } catch { }
             return false;
         }
     }
@@ -896,29 +851,47 @@ public static partial class KeyboardLayoutInterop
         return ExtractIcon(filePath, 0);
     }
 
-    /// 否则走 IMM 路径（PostMessage WM_INPUTLANGCHANGEREQUEST 到前台窗口）。
-    /// 关键：切的是前台应用的布局，不是本进程的布局。</summary>
+    /// <summary>
+    /// 激活指定输入法/键盘布局（**直接激活，不弹系统输入法选择器 UI**）。
+    /// 关键：切的是前台应用的布局，不是本进程的布局。
+    /// v5 (2026-08-30)：TSF 输入法的 KlidHex 是 CLSID 前 8 位（如微软拼音 "E7EA138E"），
+    /// **不等于**真实 HKL（微软拼音 HKL=0xE0200804），KlidToHkl 对 TSF 解析出的 HKL 无效，
+    /// 这正是此前"点输入法没反应"的根因之一。因此 isTs=true 必须**优先**走
+    /// TSF COM ITfInputProcessorProfiles::ActivateProfile（官方立即激活接口，无 UI），
+    /// 仅 COM 失败才降级 PostMessage。IMM / 纯键盘布局走 PostMessage(WM_INPUTLANGCHANGEREQUEST)。</summary>
     public static bool Activate(string klidHex, bool isTs)
     {
         if (isTs)
         {
-            return ActivateTs(klidHex);
+            // TSF 输入法：CLSID 前 8 位 ≠ 真实 HKL，先走 TSF COM 立即激活
+            var profile = FindTsProfileByKlid(klidHex);
+            if (profile is not null &&
+                ActivateTsProfile(profile.Value.clsid, (ushort)profile.Value.langId, profile.Value.profile))
+            {
+                return true;
+            }
+            // 降级：个别 TSF 输入法注册了可解析 HKL，尝试窗口消息
+            var tsHkl = KlidToHkl(klidHex);
+            return tsHkl != IntPtr.Zero && ActivateByHkl(tsHkl);
         }
-        return ActivateImm(klidHex);
+
+        // IMM / 纯键盘布局：HKL 精确路径
+        var immHkl = KlidToHkl(klidHex);
+        return immHkl != IntPtr.Zero && ActivateByHkl(immHkl);
     }
 
     /// <summary>向后兼容：默认按 IMM 处理（ActivateKeyboardLayout 切本进程，不推荐）。
     /// 新代码请用 Activate(klidHex, isTs) 以切前台窗口。</summary>
     public static bool Activate(string klidHex) => Activate(klidHex, isTs: false);
 
-    /// <summary>IMM 路径：向前台窗口发 WM_INPUTLANGCHANGEREQUEST，切的是用户正在用的应用的布局。</summary>
-    private static bool ActivateImm(string klidHex)
+    /// <summary>按 HKL 向前台窗口发 WM_INPUTLANGCHANGEREQUEST（Windows 原生切换，IMM/TSF 通用）。
+    /// 用 GetRealForegroundWindow：点击菜单栏时前台可能正是我们的壳窗口，必须切用户正在用的应用。</summary>
+    private static bool ActivateByHkl(IntPtr hkl)
     {
-        var hkl = KlidToHkl(klidHex);
         if (hkl == IntPtr.Zero) return false;
         try
         {
-            var foreground = GetForegroundWindow();
+            var foreground = GetRealForegroundWindow();
             if (foreground != IntPtr.Zero)
             {
                 // wParam = INPUTLANGCHANGE_SYSCHARSET，lParam = HKL
@@ -934,71 +907,9 @@ public static partial class KeyboardLayoutInterop
         }
     }
 
-    /// <summary>TSF 路径：模拟 Win+Space 循环切换到目标输入法。
-    /// Win+Space 是 Windows 全局快捷键（explorer.exe 注册），无需切焦点，任何窗口前台都生效。
-    /// 模拟真实用户操作：按住 Win → 按 Space N 次循环 → 松开 Win 确认。</summary>
-    private static bool ActivateTs(string klidHex)
-    {
-        var layouts = Enumerate();
-        if (layouts.Count == 0) return false;
-
-        // 找到目标索引
-        int targetIndex = -1;
-        for (int i = 0; i < layouts.Count; i++)
-        {
-            if (string.Equals(layouts[i].KlidHex, klidHex, StringComparison.OrdinalIgnoreCase))
-            {
-                targetIndex = i;
-                break;
-            }
-        }
-        if (targetIndex < 0) return false;
-
-        // 获取当前激活的输入法：优先用 HKL 转换（对 US/IMM 准确），
-        // 匹配不到时才用 TSF COM GetActiveLanguageProfile（对纯 TSF 输入法）。
-        // 注意：不能优先用 GetActiveTsKlid，因为当前是 US 键盘时它会错误返回中文语言下的默认 TSF。
-        string? activeKlid = ReadActiveKlid();
-        int currentIndex = -1;
-        if (!string.IsNullOrEmpty(activeKlid))
-        {
-            for (int i = 0; i < layouts.Count; i++)
-            {
-                if (string.Equals(layouts[i].KlidHex, activeKlid, StringComparison.OrdinalIgnoreCase))
-                {
-                    currentIndex = i;
-                    break;
-                }
-            }
-        }
-        if (currentIndex < 0)
-        {
-            activeKlid = GetActiveTsKlid();
-            if (!string.IsNullOrEmpty(activeKlid))
-            {
-                for (int i = 0; i < layouts.Count; i++)
-                {
-                    if (string.Equals(layouts[i].KlidHex, activeKlid, StringComparison.OrdinalIgnoreCase))
-                    {
-                        currentIndex = i;
-                        break;
-                    }
-                }
-            }
-        }
-        if (currentIndex < 0) currentIndex = 0;
-
-        if (currentIndex == targetIndex) return true;
-
-        int steps = (targetIndex - currentIndex + layouts.Count) % layouts.Count;
-
-        // 每次完整的 Win+Space 按放循环（不依赖切换器连续高亮，避免多步时第二次按键被吞）
-        for (int i = 0; i < steps; i++)
-        {
-            if (!CycleOnce()) return false;
-            if (i < steps - 1) System.Threading.Thread.Sleep(100);
-        }
-        return true;
-    }
+    /// <summary>IMM 路径已并入 Activate(klidHex, isTs:false)：KlidToHkl → ActivateByHkl。</summary>
+    /// <summary>TSF 路径已并入 Activate(klidHex, isTs:true)：FindTsProfileByKlid → ActivateTsProfile（COM 立即激活，无 UI）。
+    /// 已废弃旧实现"模拟 Win+Space 循环切换"：系统会把模拟按键识别为真实热键并弹出输入法选择器浮层（v5 修复）。</summary>
 
     /// <summary>获取真正的前台窗口。如果当前前台窗口是我们自己的弹窗，取 Z-order 下一个可见窗口。</summary>
     private static IntPtr GetRealForegroundWindow()

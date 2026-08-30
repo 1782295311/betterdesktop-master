@@ -1,4 +1,4 @@
-// BetterDesktop.Shell.MenuBar — IME 输入法独立弹出面板（继承 MenuBarPopupWindow：失焦关闭）
+﻿// BetterDesktop.Shell.MenuBar — IME 输入法独立弹出面板（继承 MenuBarPopupWindow：失焦关闭）
 // UI 内容完全来自系统，零硬编码：
 //   - 列表项：ImeLayoutEnumerator.Enumerate() → 真实布局名（"美式键盘" / "微软拼音" / "搜狗拼音输入法"）
 //   - 方块图标：CompactLabel（"美" / "中" / "拼" / "搜"，从真实 LayoutName 提取）
@@ -11,6 +11,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
+using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
@@ -23,6 +24,7 @@ using BetterDesktop.Shell.MenuBar.Services;
 using BetterDesktop.Shell.Status.Contracts;
 using BetterDesktop.Shell.Status.Native;
 using Microsoft.Win32;
+using BetterDesktop.Shell.MenuBar.Contracts;
 
 namespace BetterDesktop.Shell.MenuBar.Windows;
 
@@ -71,14 +73,14 @@ internal sealed class ImePopupWindow : MenuBarPopupWindow
 
         var column = new StackPanel { Orientation = Orientation.Vertical };
 
-        // ========== 切换按钮（点击循环切换到下一个输入法，Win+Space） ==========
+        // ========== 切换按钮（点击直接切到下一个输入法，不弹系统选择器 UI） ==========
         var switchBtn = new Button
         {
             Content = "切换输入法",
             Height = 32,
             Margin = new Thickness(2, 2, 2, 4),
             Padding = new Thickness(0),
-            Foreground = Brushes.White,
+            Foreground = MenuBarTheme.Foreground,
             BorderBrush = Brushes.Transparent,
             FontSize = 13,
             FontWeight = FontWeights.SemiBold,
@@ -86,14 +88,21 @@ internal sealed class ImePopupWindow : MenuBarPopupWindow
         };
         // 强调按钮背景走主题 AccentBrush
         SetThemeBinding(switchBtn, Control.BackgroundProperty, "AccentBrush");
-        switchBtn.Click += (_, _) =>
+        switchBtn.Click += async (_, _) =>
         {
-            try { ImeLayoutEnumerator.CycleOnce(); } catch { /* 失败静默 */ }
-            RebuildContent();
+            try
+            {
+                // CycleOnce 内部枚举布局 → 直接激活下一项（TSF 走 ActivateProfile / IMM 走窗口消息），
+                // 不模拟按键、不弹系统输入法选择器；异步等待避免阻塞 UI，并给系统留 200ms 完成切换后再刷新列表。
+                ImeLayoutEnumerator.CycleOnce();
+                await Task.Delay(200).ConfigureAwait(false);
+            }
+            catch { /* 失败静默 */ }
+            await Dispatcher.InvokeAsync(RebuildContent);
         };
         column.Children.Add(switchBtn);
 
-        // ========== 布局列表（来自系统真实枚举，IMM + TSF 全量，仅展示不点击切换） ==========
+        // ========== 布局列表（来自系统真实枚举，IMM + TSF 全量；点击行 = 直接切换） ==========
         var layouts = ImeLayoutEnumerator.Enumerate();
         foreach (var item in layouts)
         {
@@ -612,6 +621,25 @@ internal sealed class ImePopupWindow : MenuBarPopupWindow
             Grid.SetColumn(mark, 2);
             row.Children.Add(mark);
         }
+
+        // 列表项点击 = 直接切换到该输入法（v5 直切：TSF 走 ActivateProfile / IMM 走窗口消息，无 UI）。
+        // 补齐历史反馈"点击无法切换输入法"——此前 Activate 对 TSF 走 KlidToHkl 解析出无效 HKL，点击无效。
+        row.Background = Brushes.Transparent;
+        row.Cursor = Cursors.Hand;
+        row.MouseEnter += (_, _) => row.Background = MenuBarTheme.Hover;
+        row.MouseLeave += (_, _) => row.Background = Brushes.Transparent;
+        row.MouseLeftButtonUp += (_, _) =>
+        {
+            try
+            {
+                ImeLayoutEnumerator.Activate(item.KlidHex, item.IsTs);
+                RebuildContent(); // 重建面板，让激活项勾选/高亮跟随新状态
+            }
+            catch
+            {
+                // 切换失败静默，不打断用户
+            }
+        };
 
         return row;
     }

@@ -36,7 +36,7 @@ public static class ImeLayoutEnumerator
 
     public static bool Activate(string klidHex, bool isTs) => KeyboardLayoutInterop.Activate(klidHex, isTs);
 
-    /// <summary>模拟一次 Win+Space，循环切换到下一个输入法/键盘布局。</summary>
+    /// <summary>切换到下一个输入法/键盘布局（直接激活，不弹系统输入法选择器 UI）。</summary>
     public static bool CycleOnce() => KeyboardLayoutInterop.CycleOnce();
 
     /// <summary>获取指定输入法/键盘布局的图标句柄（HICON）。调用方负责释放。失败返回 IntPtr.Zero。</summary>
