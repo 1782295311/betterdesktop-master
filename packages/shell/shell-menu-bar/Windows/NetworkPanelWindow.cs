@@ -12,6 +12,8 @@ using System.Windows.Data;
 using System.Windows.Media;
 using System.Windows.Shapes;
 using System.Windows.Threading;
+using BetterDesktop.Shell.MenuBar.Contracts;
+using BetterDesktop.Shell.MenuBar.Services;
 using BetterDesktop.Shell.Core.Surface;
 using BetterDesktop.Shell.Core.Vibrancy;
 using BetterDesktop.Shell.Status.Native;
@@ -74,21 +76,8 @@ internal sealed class NetworkPanelWindow : MenuBarPopupWindow
 
             col.Children.Add(NativePanelStyles.Separator(top: 6, bottom: 4));
 
-            var prefLink = new TextBlock
-            {
-                Text = "网络偏好设置…",
-                Foreground = NativePanelStyles.TextSecondary,
-                FontSize = 10.5,
-                Margin = new Thickness(10, 0, 0, 0),
-                Opacity = 0.9,
-                Cursor = System.Windows.Input.Cursors.Hand
-            };
-            prefLink.MouseLeftButtonUp += (_, _) =>
-            {
-                try { System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("ms-settings:network-status") { UseShellExecute = true }); }
-                catch { /* 系统不支持时静默降级 */ }
-            };
-            col.Children.Add(prefLink);
+            // 与麦克风/亮度/电池面板共用同一份跳转件（配色、点击行为完全一致）
+            col.Children.Add(NativePanelStyles.CreateSettingsLink("网络偏好设置…", "ms-settings:network-status", fontSize: 10.5));
 
             vm.AttachRefresh(refresh);
         });
@@ -124,15 +113,38 @@ internal sealed class NetworkPanelWindow : MenuBarPopupWindow
             }
         });
 
-        var col = new StackPanel { Margin = new Thickness(10, 0, 0, 0) };
-        col.Children.Add(BoundText(vm, nameof(NetworkPanelViewModel.PublicIp),
-            13, NativePanelStyles.TextPrimary, FontWeights.SemiBold));
-        var geo = BoundText(vm, nameof(NetworkPanelViewModel.PublicGeo),
-            10.5, NativePanelStyles.TextSecondary);
-        geo.Margin = new Thickness(0, 2, 0, 0);
-        col.Children.Add(geo);
-        Grid.SetColumn(col, 1);
-        grid.Children.Add(col);
+        // IP 与归属地放在同一行：IP 主题前景 SemiBold 13，归属地次要前景 10.5。
+        // 这样 NETWORK 标题区只占一行高度，与下面 WLAN 卡片视觉节奏更整齐。
+        var row = new TextBlock
+        {
+            FontSize = 13,
+            TextTrimming = TextTrimming.CharacterEllipsis,
+            VerticalAlignment = VerticalAlignment.Center
+        };
+        // 绑定 IP：Source 是 VM，整段文字需要随 IP 刷新
+        var ipRun = new System.Windows.Documents.Run
+        {
+            FontWeight = FontWeights.SemiBold
+        };
+        BindingOperations.SetBinding(ipRun, System.Windows.Documents.Run.TextProperty,
+            new Binding(nameof(NetworkPanelViewModel.PublicIp)) { Source = vm, Mode = BindingMode.OneWay });
+        row.Inlines.Add(ipRun);
+        // 分隔点 + 归属地（动态拼接，IP 没出来时也不显示 " · "）
+        row.Inlines.Add(new System.Windows.Documents.Run(" · ")
+        {
+            Foreground = NativePanelStyles.TextSecondary,
+            FontSize = 10.5
+        });
+        var geoRun = new System.Windows.Documents.Run
+        {
+            Foreground = NativePanelStyles.TextSecondary,
+            FontSize = 10.5
+        };
+        BindingOperations.SetBinding(geoRun, System.Windows.Documents.Run.TextProperty,
+            new Binding(nameof(NetworkPanelViewModel.PublicGeo)) { Source = vm, Mode = BindingMode.OneWay });
+        row.Inlines.Add(geoRun);
+        Grid.SetColumn(row, 1);
+        grid.Children.Add(row);
 
         Grid.SetColumn(new Border
         {
@@ -335,36 +347,27 @@ internal sealed class NetworkPanelWindow : MenuBarPopupWindow
         return cell;
     }
 
-    /// <summary>自绘 WiFi 扇形图标（3 条弧 + 圆点），不依赖字体字形，避免在部分系统下显示为方块/崩坏。</summary>
+    /// <summary>
+    /// WLAN 小卡片里的 Wi‑Fi 图标：复用 <see cref="WifiGlyph"/>（与菜单栏状态条同一份绘制），
+    /// 不再自己抄一份几何（旧版画布只有 12 高，底部圆点溢出被裁，且永远满格不反映真实强度）。
+    /// </summary>
     private static FrameworkElement BuildWifiGlyph()
     {
-        var canvas = new Canvas
+        int level;
+        try
         {
-            Width = 16,
-            Height = 12,
-            HorizontalAlignment = HorizontalAlignment.Center,
-            Margin = new Thickness(0, 0, 0, 4)
-        };
-        double[] radii = { 3, 5, 7 };
-        for (int i = 0; i < 3; i++)
-        {
-            double r = radii[i];
-            double off = r * 0.7071;
-            var arc = new System.Windows.Shapes.Path
-            {
-                Data = Geometry.Parse($"M {8 - off:F2},{11.5 - off:F2} A {r},{r} 0 0 1 {8 + off:F2},{11.5 - off:F2}"),
-                Stroke = NativePanelStyles.AccentBack,
-                StrokeThickness = 1.3,
-                StrokeStartLineCap = PenLineCap.Round,
-                StrokeEndLineCap = PenLineCap.Round
-            };
-            canvas.Children.Add(arc);
+            var info = WifiEnumerator.ReadCurrentConnection();
+            level = info.IsConnected
+                ? (info.SignalQuality > 0 ? WifiGlyph.LevelFromQuality(info.SignalQuality) : 3)
+                : 0;
         }
-        var dot = new Ellipse { Width = 2, Height = 2, Fill = NativePanelStyles.AccentBack };
-        Canvas.SetLeft(dot, 7);
-        Canvas.SetTop(dot, 10.4);
-        canvas.Children.Add(dot);
-        return new Viewbox { Child = canvas, Width = 16, Height = 12, Stretch = Stretch.Uniform };
+        catch
+        {
+            level = 0;
+        }
+
+        WifiGlyph.BuildFan(NativePanelStyles.TextPrimary, level, out var canvas, out _, out _);
+        return WifiGlyph.Wrap(canvas, 24, 24);
     }
 }
 

@@ -25,12 +25,40 @@ internal sealed record ExtensionDescriptor(
     public string SettingsKey => $"extensions.{Id}.enabled";
 }
 
-/// <summary>扩展中心插件目录（单一真相源）。顺序即面板展示顺序。</summary>
+/// <summary>
+/// 扩展中心插件目录（单一真相源）。顺序即面板展示顺序。
+///
+/// 【2026-08-30 职责拆分】原来一张表里混了「菜单栏系统功能」与「外部扩展插件」两类，
+/// 导致「+」按钮既管系统功能又管外部扩展，职责不清。现按用户定义拆成两张表：
+///   <list type="bullet">
+///     <item><see cref="External"/> —— **外部扩展功能插件**，由「+」扩展中心管理（启动/停用）。</item>
+///     <item><see cref="SystemFeatures"/> —— **菜单栏系统功能**，改由「设置 → 菜单栏」统一管理显隐。</item>
+///   </list>
+/// <see cref="All"/> 仍返回两者合集，供菜单栏启动时一次性应用持久化显隐。
+/// </summary>
 internal static class ExtensionCatalog
 {
-    public static IReadOnlyList<ExtensionDescriptor> All { get; } = new[]
+    /// <summary>
+    /// 外部扩展功能插件：由菜单栏「+」（扩展中心）管理。
+    /// 与系统功能的区别在于——这些是**可选的、独立的扩展能力**，不是菜单栏运行的必要组成。
+    /// </summary>
+    public static IReadOnlyList<ExtensionDescriptor> External { get; } = new[]
     {
-        // —— 菜单栏内建功能模块（可实时显隐）——
+        new ExtensionDescriptor("quick-note", "快速笔记", "一键便签速记（常驻浮窗）", "记"),
+        new ExtensionDescriptor("programs-menu", "程序菜单", "左区程序菜单（分组/拖放/Win 键）", "单"),
+        new ExtensionDescriptor("weather", "天气", "桌面天气卡片（和风天气）", "天"),
+        new ExtensionDescriptor("search", "搜索", "全局搜索（UWP SearchPane）", "搜"),
+        new ExtensionDescriptor("stage-manager", "台前调度", "窗口总览与平铺（Mission Control 式）", "窗"),
+        new ExtensionDescriptor("screenshot", "截屏工具", "区域/全屏截屏与标注", "截"),
+        new ExtensionDescriptor("dynamic-desktop", "动态桌面", "动态壁纸桌面", "动"),
+    };
+
+    /// <summary>
+    /// 菜单栏系统功能：由「设置 → 菜单栏」管理显隐。
+    /// 每一项都映射到菜单栏右区的具体按钮，切换即实时显隐。
+    /// </summary>
+    public static IReadOnlyList<ExtensionDescriptor> SystemFeatures { get; } = new[]
+    {
         new ExtensionDescriptor("system-tray", "系统托盘", "接管并展示系统托盘图标", "托", MenuBarStatusButtonId.SystemTray, External: false),
         new ExtensionDescriptor("fps", "帧率", "实时显示桌面帧率", "帧", MenuBarStatusButtonId.Fps, External: false),
         new ExtensionDescriptor("cpu", "CPU 利用率", "实时显示 CPU 占用", "芯", MenuBarStatusButtonId.Cpu, External: false),
@@ -46,14 +74,11 @@ internal static class ExtensionCatalog
         new ExtensionDescriptor("notification", "通知中心", "打开系统通知中心", "铃", MenuBarStatusButtonId.Notification, External: false),
         new ExtensionDescriptor("datetime", "日期时间", "显示日期时间并打开日历", "时", MenuBarStatusButtonId.DateTime, External: false),
         new ExtensionDescriptor("desktop", "桌面覆盖", "一键显示桌面", "幕", MenuBarStatusButtonId.Desktop, External: false),
-
-        // —— 外部扩展功能插件（持久化管理；需内核支持的待后续接入）——
-        new ExtensionDescriptor("programs-menu", "程序菜单", "左区程序菜单（分组/拖放/Win 键）", "单", External: true),
-        new ExtensionDescriptor("weather", "天气", "桌面天气卡片（和风天气）", "天", External: true),
-        new ExtensionDescriptor("search", "搜索", "全局搜索（UWP SearchPane）", "搜", External: true),
-        new ExtensionDescriptor("stage-manager", "台前调度", "窗口总览与平铺（Mission Control 式）", "窗", External: true),
-        new ExtensionDescriptor("quick-note", "快速笔记", "一键便签速记", "记", External: true),
-        new ExtensionDescriptor("screenshot", "截屏工具", "区域/全屏截屏与标注", "截", External: true),
-        new ExtensionDescriptor("dynamic-desktop", "动态桌面", "动态壁纸桌面", "动", External: true),
     };
+
+    /// <summary>
+    /// 全部条目（外部扩展 + 系统功能）。**仅供菜单栏启动时一次性应用持久化显隐**；
+    /// 展示用途请分别取 <see cref="External"/> / <see cref="SystemFeatures"/>。
+    /// </summary>
+    public static IReadOnlyList<ExtensionDescriptor> All { get; } = External.Concat(SystemFeatures).ToArray();
 }

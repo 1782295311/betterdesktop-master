@@ -1,4 +1,4 @@
-// shell-menu-bar 对外公开的"独立预览工厂"
+﻿// shell-menu-bar 对外公开的"独立预览工厂"
 // 供 tools/ShellComponentsPlayground 之类验证工具一次性取到：菜单条右区按钮视觉 + 3 个独立面板 UI
 // 不引 ShellWindow（不启动独立窗口），仅返回 FrameworkElement 让验证工具嵌入大容器。
 // 所有 internal 访问集中在此处理，Playground 不关心任何 internal 类。
@@ -10,6 +10,7 @@ using System.Windows.Media;
 using BetterDesktop.Shell.Core.Surface;
 using BetterDesktop.Shell.Core.Vibrancy;
 using BetterDesktop.Shell.Status.Contracts;
+using BetterDesktop.Shell.MenuBar.Contracts;
 
 namespace BetterDesktop.Shell.MenuBar;
 
@@ -122,7 +123,7 @@ public static class PlaygroundPreviewFactory
         var leftZone = new TextBlock
         {
             Text = "  BetterDesktop 菜单项（占位）",
-            Foreground = Brushes.White,
+            Foreground = MenuBarTheme.Foreground,
             FontSize = 9,
             VerticalAlignment = VerticalAlignment.Center,
             Margin = new Thickness(4, 0, 0, 0)

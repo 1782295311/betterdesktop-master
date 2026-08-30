@@ -44,14 +44,17 @@ public sealed class QuickNotePlugin : IPlugin
         {
             _settings.Changed += OnSettingsChanged;
             _subscribed = true;
-            // 启动即按持久化意图决定浮窗是否存在（默认启用，与扩展中心显示一致）。
-            if (_settings.Get(EnabledKey, true) == true)
+            // 启动即按持久化意图决定浮窗是否存在。
+            // **默认关闭**：外部扩展是可选能力，不该一上来就在桌面加东西
+            // （此前默认 true，表现为"没开过扩展中心，桌面却多出一个笔记图标"）。
+            // 默认值须与扩展中心 ExtensionsCenterWindow 的读取保持一致。
+            if (_settings.Get(EnabledKey, false) == true)
             {
                 Activate();
             }
         }
 
-        context.Logger.Info($"{Name} 已加载：扩展中心开关 observer 就绪 (enabled={_settings?.Get(EnabledKey, true) == true})");
+        context.Logger.Info($"{Name} 已加载：扩展中心开关 observer 就绪 (enabled={_settings?.Get(EnabledKey, false) == true})");
         return Task.CompletedTask;
     }
 

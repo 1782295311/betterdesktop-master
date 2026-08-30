@@ -22,6 +22,9 @@
     <ProjectReference Include="..\shell-core\BetterDesktop.Shell.Core.csproj" />
     <ProjectReference Include="..\shell-status\BetterDesktop.Shell.Status.csproj" />
     <ProjectReference Include="..\shell-settings\BetterDesktop.Shell.Settings.csproj" />
+    <!-- 左区「程序菜单」复用开始菜单插件的服务契约（IStartMenuService）。
+         已确认无环：shell-start-menu 不反向引用 shell-menu-bar；服务未注册时菜单栏降级为不显示该入口。 -->
+    <ProjectReference Include="..\shell-start-menu\BetterDesktop.Shell.StartMenu.csproj" />
   </ItemGroup>
 
 </Project>

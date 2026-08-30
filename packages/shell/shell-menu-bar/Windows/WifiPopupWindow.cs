@@ -15,6 +15,7 @@ using System.Windows.Shapes;
 using BetterDesktop.Shell.Core.Surface;
 using BetterDesktop.Shell.Core.Vibrancy;
 using BetterDesktop.Shell.MenuBar.Services;
+using Windows.Devices.Radios;
 
 namespace BetterDesktop.Shell.MenuBar.Windows;
 
@@ -50,7 +51,7 @@ internal sealed class WifiPopupWindow : MenuBarPopupWindow
         var column = new StackPanel { Orientation = Orientation.Vertical };
 
         // ========== Wi‑Fi Toggle ==========
-        column.Children.Add(CreateToggleRow("Wi‑Fi", defaultValue: true));
+        column.Children.Add(CreateToggleRow("Wi‑Fi", on => _ = RadioInterop.SetStateAsync(RadioKind.WiFi, on)));
 
         // ========== 当前连接信息 ==========
         var current = WifiEnumerator.ReadCurrentConnection();
@@ -144,7 +145,7 @@ internal sealed class WifiPopupWindow : MenuBarPopupWindow
         return tb;
     }
 
-    private static FrameworkElement CreateToggleRow(string label, bool defaultValue)
+    private static FrameworkElement CreateToggleRow(string label, Action<bool> onChanged)
     {
         var row = new Grid
         {
@@ -164,9 +165,14 @@ internal sealed class WifiPopupWindow : MenuBarPopupWindow
         row.Children.Add(labelText);
         var toggle = new ToggleSwitch
         {
-            IsOn = defaultValue,
+            IsOn = true,
             VerticalAlignment = VerticalAlignment.Center,
             Margin = new Thickness(0, 0, 6, 0)
+        };
+        toggle.Toggled += (_, args) =>
+        {
+            try { onChanged((bool)args); }
+            catch { /* ignore */ }
         };
         Grid.SetColumn(toggle, 1);
         row.Children.Add(toggle);

@@ -193,12 +193,15 @@ Win 键 / Cairo 按钮 → CairoMenu / ProgramsMenu 弹出 → 命令执行（�
 
 ## 13. 验收
 
-- [ ] 左区逐项：图标 / 程序菜单 / 位置 / 下载 / 文档（按用户指定顺序）
+- [x] 左区：程序菜单入口（`◈`，复用 `IStartMenuService` 打开开始菜单）+ 位置 / 下载 / 文档（交 explorer 打开）
+      —— 注意：这里是**导航入口**已通，左区自有的 CairoMenu（20 项命令）仍属第 14 节开放问题，未实现。
 - [ ] 右区逐项：网络 / 内存占用 / CPU温度 / 麦克风 / **输入法** / 蓝牙 / WiFi / 电量 / 音量 / 系统托盘 / 功能托盘(控制中心) / 日期时间
 - [ ] 右区组件均为自绘界面直观呈现内容（占用率/温度/信号/滑块等），非仅图标
 - [ ] 功能托盘为下拉控制中心：快捷开关 + Mac 风格窗口显示功能（显示桌面/窗口平铺/窗口总览）
 - [ ] 日期时间点击打开 Windows 原生通知中心
-- [ ] 窗口继承 ShellWindow，主题/毛玻璃统一；卸载后菜单栏完全移除
+- [x] 窗口继承 ShellWindow，主题/毛玻璃统一；卸载后菜单栏完全移除
+- [x] 主题自适应：自绘图标与文字随 `IAppearanceService` 前景色实时换色（原为硬编码白，亮色主题下不可读）
+- [x] 多显示器/高 DPI：弹窗锚定按**锚点所在显示器**回钳，并做物理像素 → 逻辑单位换算
 
 ## 14. 开放问题
 
@@ -208,9 +211,73 @@ Win 键 / Cairo 按钮 → CairoMenu / ProgramsMenu 弹出 → 命令执行（�
 
 ## Known Limitations
 
-- 左半区（Cairo 图标/程序菜单/位置/下载/文档）尚未实现，当前菜单栏仅呈现右区状态条。
+- ~~左半区尚未实现~~ **已实现**：`MenuBarLeftZone` 提供程序菜单入口（复用 `IStartMenuService`）+ 位置/下载/文档。
+  服务未注入时该入口自动不呈现（M10 降级）。左区自有的 CairoMenu 20 项命令仍未实现（见第 14 节）。
 - 状态条组件为紧凑自绘（按钮高 14px，随菜单栏 16px 高度），非全尺寸面板；对应详情面板为独立 ShellWindow 弹窗，失焦自动关闭。
 - 监控服务（shell.status）不可用时对应图标降级为占位、不报错；CPU 温度/传感器不可读时显示占位。
-- 弹窗锚定仅考虑主屏工作区（PopupAnchor 回钳），多显示器下锚点可能不准。
+- 菜单栏本体**仍只驻留主屏**（每显示器一个菜单栏未实现）。但**弹窗锚定已按锚点所在显示器**回钳，
+  并修正了物理像素/逻辑单位混用（原实现把 `PointToScreen` 的物理点直接当逻辑点用，非 100% DPI 下弹窗会偏移）。
 - 通知按钮为本地开关，尚未对接 Windows 原生通知中心（不自建通知中心）。
 - 各面板（IME/电池/网络/内存/CPU/麦克风/声音/WiFi/蓝牙/亮度/日历/控制中心）为第一版实现，功能清单细化见上文第 14 节开放问题。
+
+## 15. 主题与屏幕几何（设计要点）
+
+- **前景色单一真相源 `MenuBarTheme`**：右区是纯代码自绘（`Rectangle`/`Path`/`TextBlock` 直接赋 `Fill`/`Stroke`），
+  历史上有 55 处硬编码 `Brushes.White`，亮色主题下整条菜单栏不可读。
+  改法不是把 30+ 个对象初始化器拆成 `SetResourceReference` 三段式，而是让 `MenuBarTheme` 持有**一个未冻结的
+  `SolidColorBrush` 共享实例**——WPF 中未冻结画刷改 `Color` 会自动通知所有引用者重绘，
+  于是"改一次 = 全菜单栏换色"，效果等同 DynamicResource，但对调用方零结构改动。
+  保留的 3 处语义白：CapsuleSwitch 滑块、ToggleSwitch 圆钮、静音红底白字（这些是控件自身配色，不随主题前景走）。
+- **屏幕几何统一在 `MenuBarScreen`**：所有对外 API 一律**逻辑单位**（与 `Window.Left/Top` 同域）。
+  `Visual.PointToScreen()` 给物理像素，`SystemParameters.WorkArea` 给逻辑单位，二者不能直接运算。
+- **弹窗互斥**：`StatusBarMenuBarExtension.ShowPopup` 打开新面板前先 `CloseAllExcept(popup)`，
+  仿 macOS 同一时刻只开一个面板（原实现点了 CPU 再点声音会叠两层窗口）。
+- **显示器变化自适应**：`MenuBarWindow` 挂 `HwndSource` 钩子监听 `WM_DISPLAYCHANGE` / `WM_SETTINGCHANGE`，
+  分辨率/缩放/任务栏位置变化后自动重排并收起已开面板（旧锚点已失效）。
+
+## 16. 实机反馈修复（2026-08-30，7 项）
+
+用户实跑后提出的 7 个问题，已全部修复并通过全量构建门禁（0 警告 0 错误）。本节记录**根因与结论**，
+避免后续重犯同类错误。
+
+| # | 问题 | 根因 | 修复 |
+|---|------|------|------|
+| 1 | 系统托盘多余显示音量/电池 | ManagedShell 把 Win11 内置系统图标（音量/网络/电源/操作中心）也当作普通托盘图标转发 | `SystemTrayIcon.HideSystemIcons`：按 **Win11 固定 GUID**（`7820ae73/74/75/76-…`）+ **Win10 宿主 dll 后缀**（`sndvolsso.dll`/`pnidui.dll`/`batmeter.dll`/`actioncenter.dll`）**双路识别**；开关持久化到 `menubar.tray.hideSystemIcons`（默认 true） |
+| 2 | WiFi 图标画得不好 | 画布只有 16×16、最外弧半径 7 而圆点落在 y 10.4~12.6 → **圆点溢出被裁**；半径 3/5/7 间距仅 2，缩到 16px 糊成一团；且**永远满格**，断网/有线/弱信号都长一样 | 新建 `Contracts/WifiGlyph.cs`（24×24 栅格，半径 5/9.5/14 间距 4.5，0~3 级真实强度，有线走水晶头） |
+| 3 | 麦克风滑杆风格不统一 + 声音偏好打不开 | 滑杆样式各写一份；偏好链接是纯 `TextBlock` 且**漏挂点击事件** | 滑杆统一走 `NativePanelStyles.CreateCircleThumbSliderStyle`；链接统一走 `NativePanelStyles.CreateSettingsLink`（唯一实现，内部挂了点击） |
+| 4 | 上下行速率面板同 WiFi 图标问题 | 面板自己抄了一份扇形几何（与状态条不同源） | 改为复用 `WifiGlyph`，并读 `WifiEnumerator.ReadCurrentConnection()` 的真实信号强度 |
+| 5 | 电池面板图标与功能不符 + 偏好设置字体不白 | 电源方案图标用 Segoe MDL2 码位 `\uE74E/\uE9D2/\uE840/\uE783`，字形与语义对不上；偏好链接用 `AccentBrush` 蓝色 | 新建 `Contracts/PowerGlyph.cs` 自绘（节能=叶/平衡=天平/高性能=速度表/卓越=闪电）；偏好链接统一改 `ThemeForeground`（暗色即白、亮色自动转深） |
+| 6 | 控制中心显示不佳 | 图标同病根（9 个字体码位）；麦克风按钮与三个媒体按钮**无点击事件**；歌名写死空格；描边硬编码半透明白 | 见下方 16.1 |
+| 7 | 扩展中心职责错配 + 桌面多出快速笔记图标 | 「+」同时管系统功能与外部插件；quick-note 默认开启 | `ExtensionCatalog` 拆 `External` / `SystemFeatures`；「+」只列外部插件；**设置左侧新增「菜单栏」分区**（`Sections/MenuBarSection.cs`）管 15 项系统功能 + 托盘图标过滤开关；quick-note 默认关闭 |
+
+### 16.1 控制中心重构要点（问题 6）
+
+- **图标自绘**：新建 `Contracts/ControlCenterGlyph.cs`（24×24 栅格，11 个图标 + 4 个媒体控制几何），
+  取代全部 Segoe MDL2 Assets 码位。Wi‑Fi 直接复用 `WifiGlyph`，保证**菜单栏 / NETWORK 面板 / 控制中心三处一致**。
+- **信息对齐**：三张模块卡片共用 `BuildModuleCard`（头部「标题左 / 数值右」+ 内容），卡片内控件垂直居中；
+  大瓦片图标由 `VerticalAlignment.Top` 改为 `Center`（此前图标顶挂、文字居中 → 视觉错位）。
+- **布局升级**：开关网格行高 58 → 60；瓦片/卡片描边由硬编码 `Color.FromArgb(120/60,255,255,255)`
+  改走主题令牌 `ThemeSeparator`（亮色模式下原描边几乎看不见）。
+- **功能对接**：
+  - 麦克风按钮 → `AudioCoreNative.SetCaptureVolume(vol, !muted)`（保持音量、只翻静音位），
+    橙底=已静音，直接读 `GetStatus(AudioFlow.Capture)` 而非等监控轮询。
+  - 媒体区 → 新建 `Services/MediaSessionController.cs`（SMTC 薄壳，2s 轮询 + 命令后即时回读），
+    显示真实 Title/Artist/AppName，Prev / Play-Pause / Next 下发真实媒体命令；
+    播放状态切换只改同一个 `Path` 的 `Data`，不重建按钮（避免闪烁与丢失悬停态）。
+  - `ControlCenterFeatureCatalog.ShowAt` 修正单位纪律违例：物理锚点经 `MenuBarScreen.ToLogical`
+    换算，钳制边界改取**锚点所在显示器**的 `GetWorkArea`（原用 `SystemParameters.WorkArea`，只描述主屏）。
+
+### 16.2 本轮沉淀的两条通用纪律
+
+1. **字体码位不可信**：Segoe MDL2 Assets 的码位凭印象填 → 字形与语义不符、字体缺失显示方块。
+   凡是"图标 + 语义"的场景，一律**自绘几何**（`WifiGlyph` / `PowerGlyph` / `ControlCenterGlyph`）。
+2. **有入口必须有行为**：纯 `TextBlock` + 无点击事件 = 看起来能点、点了没反应。
+   所有"偏好设置/跳转"统一走 `NativePanelStyles.CreateSettingsLink`，
+   所有"看起来是按钮"的元素统一挂点击处理 + `Cursors.Hand`。
+
+### 16.3 一个易踩的命名空间坑
+
+`MediaPlaybackState` 是**本项目自定义枚举**（`shell-status/Native/MediaCoreNative.cs`），
+**不是** WinRT 的 `Windows.Media.Control.MediaPlaybackState`。
+且在 `BetterDesktop.Shell.MenuBar.Windows` 命名空间下，裸写 `Windows.Media.Control.X`
+会被就近解析成 `BetterDesktop.Shell.MenuBar.Windows`（CS0234）——需要引用 WinRT 类型时必须写 `global::Windows.…`。

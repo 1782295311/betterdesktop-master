@@ -8,6 +8,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Runtime.InteropServices;
 using System.Text;
+using BetterDesktop.Shell.MenuBar.Contracts;
 using BetterDesktop.Shell.Status.Native;
 
 namespace BetterDesktop.Shell.MenuBar.Services;
@@ -24,8 +25,8 @@ public sealed record PowerStatusInfo(
 public sealed record PowerPlanItem(
     Guid SchemeGuid,          // 方案 GUID
     string DisplayName,       // 方案友好名称（系统本地化文本，如 "平衡" / "高性能" / "卓越性能" / "Turbo"）
-    string IconGlyph,         // 图标（Segoe UI Symbol）：性能=涡轮，节能=叶子，平衡=太极/普通
-    bool IsActive);           // 是否当前启用
+    PowerPlanKind Kind,         // 方案语义分类（图标由 PowerGlyph 自绘，不用字体码位）
+    bool IsActive);             // 是否当前启用
 
 /// <summary>
 /// 电源状态 + 性能模式：真实系统数据。
@@ -106,7 +107,7 @@ internal static class PowerEnumerator
                         .Select(p => new PowerPlanItem(
                             p.Guid,
                             string.IsNullOrEmpty(p.Name) ? "未知方案" : LocalizePlanName(p.Name, p.Guid),
-                            ClassifyIcon(p.Name, p.Guid),
+                            ClassifyKind(p.Name, p.Guid),
                             p.IsActive))
                         .OrderByDescending(PerformanceRank)
                         .ToList();
@@ -164,7 +165,7 @@ internal static class PowerEnumerator
                     result.Add(new PowerPlanItem(
                         guid,
                         string.IsNullOrEmpty(name) ? "未知方案" : LocalizePlanName(name, guid),
-                        ClassifyIcon(name, guid),
+                        ClassifyKind(name, guid),
                         guid == active));
                 }
                 finally
@@ -202,7 +203,12 @@ internal static class PowerEnumerator
         }
     }
 
-    private static string ClassifyIcon(string name, Guid guid)
+    /// <summary>
+    /// 把系统电源方案（GUID + 本地化名）归类到语义枚举。
+    /// 只返回<see cref="PowerPlanKind"/>，**不再返回字体码位**——图标由 PowerGlyph 自绘，
+    /// 避免"码位凭印象填、渲染出来的字形与语义对不上"（用户反馈：电池面板图标与功能不符）。
+    /// </summary>
+    private static PowerPlanKind ClassifyKind(string name, Guid guid)
     {
         // 已知官方 GUID：
         //   平衡 381B4222-F694-41F0-9685-FF5BB260DF2E
@@ -211,10 +217,15 @@ internal static class PowerEnumerator
         //   卓越性能 E9A42B00-950E-4A30-9CE0-48EB4AB499C7
         var g = guid.ToString().ToUpperInvariant();
         var n = (name ?? string.Empty).ToUpperInvariant();
-        if (g == "A1841308-3541-4FAB-BC81-F71556F20B4A" || n.Contains("节能") || n.Contains("SILENT") || n.Contains("QUIET")) return "\uE74E"; // 叶子
-        if (g == "8C5E7FDA-E8BF-4A96-9AC8-A63556C34B13" || n.Contains("高性能") || n.Contains("PERFORMANCE") || n.Contains("TURBO")) return "\uE9D2"; // 火箭/涡轮
-        if (g == "E9A42B00-950E-4A30-9CE0-48EB4AB499C7" || n.Contains("卓越") || n.Contains("ULTIMATE")) return "\uE840"; // 闪电
-        return "\uE783"; // 平衡：仪表盘
+
+        // 卓越性能先判：其名称含 "PERFORMANCE"，若放在高性能之后会被"高性能"分支抢先命中。
+        if (g == "E9A42B00-950E-4A30-9CE0-48EB4AB499C7" || n.Contains("卓越") || n.Contains("ULTIMATE"))
+            return PowerPlanKind.UltimatePerformance;
+        if (g == "A1841308-3541-4FAB-BC81-F71556F20B4A" || n.Contains("节能") || n.Contains("SILENT") || n.Contains("QUIET"))
+            return PowerPlanKind.PowerSaver;
+        if (g == "8C5E7FDA-E8BF-4A96-9AC8-A63556C34B13" || n.Contains("高性能") || n.Contains("PERFORMANCE") || n.Contains("TURBO"))
+            return PowerPlanKind.HighPerformance;
+        return PowerPlanKind.Balanced;
     }
 
     /// <summary>

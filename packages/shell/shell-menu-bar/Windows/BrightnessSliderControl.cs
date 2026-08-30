@@ -16,7 +16,8 @@ internal sealed class BrightnessSliderControl : IDisposable
 {
     private readonly IBrightnessMonitor _brightness;
     private readonly Slider _slider = null!;
-    private readonly TextBlock _label = null!;
+    private readonly TextBlock? _label;
+    private readonly bool _showValueLabel;
     private bool _programmatic;
 
     /// <summary>整体 UI（可直接加入面板竖向列）。</summary>
@@ -25,9 +26,12 @@ internal sealed class BrightnessSliderControl : IDisposable
     /// <param name="brightness">亮度单一数据源（不可为 null，已由调用方降级）。</param>
     /// <param name="title">区域标题，传 null/空则不显示。</param>
     /// <param name="showSettingsLink">是否在底部追加"显示设置"跳转。</param>
-    public BrightnessSliderControl(IBrightnessMonitor brightness, string? title, bool showSettingsLink)
+    /// <param name="showValueLabel">是否在滑杆右侧显示百分比。
+    /// 控制中心传 false：百分比统一放到卡片头部（与声音卡片右对齐），避免同一行出现两个百分比。</param>
+    public BrightnessSliderControl(IBrightnessMonitor brightness, string? title, bool showSettingsLink, bool showValueLabel = true)
     {
         _brightness = brightness;
+        _showValueLabel = showValueLabel;
 
         var column = new StackPanel { Orientation = Orientation.Vertical };
 
@@ -64,15 +68,18 @@ internal sealed class BrightnessSliderControl : IDisposable
             return;
         }
 
-        _label = new TextBlock
+        if (_showValueLabel)
         {
-            Text = FormatLabel(cur, min, max),
-            FontSize = 11,
-            VerticalAlignment = VerticalAlignment.Center,
-            Margin = new Thickness(10, 0, 0, 0),
-            MinWidth = 40,
-            TextAlignment = TextAlignment.Right
-        };
+            _label = new TextBlock
+            {
+                Text = FormatLabel(cur, min, max),
+                FontSize = 11,
+                VerticalAlignment = VerticalAlignment.Center,
+                Margin = new Thickness(10, 0, 0, 0),
+                MinWidth = 40,
+                TextAlignment = TextAlignment.Right
+            };
+        }
 
         _slider = new Slider
         {
@@ -90,13 +97,13 @@ internal sealed class BrightnessSliderControl : IDisposable
             {
                 if (_programmatic) return; // 外部（其它面板）设置亮度时不回写
                 int val = (int)Math.Round(v);
-                _label.Text = FormatLabel(val, min, max);
+                if (_label is not null) _label.Text = FormatLabel(val, min, max);
                 _brightness.SetValue(val);
             },
             onValueChanging: v =>
             {
                 int val = (int)Math.Round(v);
-                _label.Text = FormatLabel(val, min, max);
+                if (_label is not null) _label.Text = FormatLabel(val, min, max);
             });
 
         var row = new Grid();
@@ -104,8 +111,11 @@ internal sealed class BrightnessSliderControl : IDisposable
         row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         Grid.SetColumn(_slider, 0);
         row.Children.Add(_slider);
-        Grid.SetColumn(_label, 1);
-        row.Children.Add(_label);
+        if (_label is not null)
+        {
+            Grid.SetColumn(_label, 1);
+            row.Children.Add(_label);
+        }
         column.Children.Add(row);
 
         if (showSettingsLink)
@@ -121,7 +131,9 @@ internal sealed class BrightnessSliderControl : IDisposable
 
     private void OnBrightnessChanged(object? sender, StatusSnapshot snapshot)
     {
-        if (snapshot.Progress < 0 || _slider is null || _label is null)
+        // 注意：不能要求 _label 非空——控制中心传 showValueLabel=false 时没有标签，
+        // 但滑块仍必须跟随外部（其它面板）的亮度变化同步，否则会出现"面板 A 调了、面板 B 不动"。
+        if (snapshot.Progress < 0 || _slider is null)
         {
             return;
         }
@@ -132,7 +144,10 @@ internal sealed class BrightnessSliderControl : IDisposable
         try
         {
             _slider.Value = Math.Clamp(value, mn, mx);
-            _label.Text = $"{Math.Clamp((int)snapshot.Progress, 0, 100)}%";
+            if (_label is not null)
+            {
+                _label.Text = $"{Math.Clamp((int)snapshot.Progress, 0, 100)}%";
+            }
         }
         finally
         {
@@ -149,24 +164,9 @@ internal sealed class BrightnessSliderControl : IDisposable
 
     private static FrameworkElement CreateSettingsLink()
     {
-        var text = new TextBlock
-        {
-            Text = "显示设置",
-            FontSize = 12,
-            Margin = new Thickness(4, 4, 0, 2),
-            Cursor = System.Windows.Input.Cursors.Hand
-        };
-        // 操作/链接入口：强调色走主题令牌
-        text.SetResourceReference(TextBlock.ForegroundProperty, "AccentBrush");
-        text.MouseLeftButtonUp += (_, _) =>
-        {
-            try
-            {
-                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("ms-settings:display") { UseShellExecute = true });
-            }
-            catch { /* ignore */ }
-        };
-        return text;
+        // 与麦克风/电池面板共用同一套"系统设置跳转"实现（NativePanelStyles），
+        // 避免三处各写一份、其中两份漏挂点击事件。
+        return NativePanelStyles.CreateSettingsLink("显示设置", "ms-settings:display");
     }
 
     public void Dispose() => _brightness.Changed -= OnBrightnessChanged;

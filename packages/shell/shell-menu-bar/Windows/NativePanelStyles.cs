@@ -237,6 +237,44 @@ internal static class NativePanelStyles
         return (Style)System.Windows.Markup.XamlReader.Parse(xaml);
     }
 
+    /// <summary>
+    /// 系统设置跳转链接（**唯一实现，所有面板共用**）。
+    /// 此前麦克风/电池面板各自写了一个纯 TextBlock 且**漏挂点击事件**，表现为"文字在那儿但点了没反应"；
+    /// 亮度面板有一份能用的私有实现。三处统一收敛到这里，避免再次出现"有入口、无行为"。
+    /// </summary>
+    /// <param name="label">链接文字（如"声音偏好设置…"）。</param>
+    /// <param name="msSettingsUri">Windows 设置 URI（如 <c>ms-settings:sound</c>）。</param>
+    public static FrameworkElement CreateSettingsLink(string label, string msSettingsUri, double fontSize = 12)
+    {
+        var text = new TextBlock
+        {
+            Text = label,
+            FontSize = fontSize,
+            Margin = new Thickness(4, 4, 0, 2),
+            Cursor = System.Windows.Input.Cursors.Hand,
+            HorizontalAlignment = HorizontalAlignment.Center
+        };
+        // 链接文字用**普通前景色**（暗色主题下即白色），不用强调蓝：
+        // 用户反馈"电池偏好设置的字体应该改成白色"——强调蓝在面板里偏暗、视觉层级也压过了标题。
+        // 走 ThemeForeground 令牌后暗色模式就是白的，亮色模式自动转深色，不会出现白底白字。
+        text.SetResourceReference(TextBlock.ForegroundProperty, "ThemeForeground");
+        text.MouseLeftButtonUp += (_, _) => OpenSystemSettings(msSettingsUri);
+        return text;
+    }
+
+    /// <summary>打开 Windows 设置页（ms-settings: 协议）。失败静默——面板不弹错误框（M10 降级）。</summary>
+    public static void OpenSystemSettings(string msSettingsUri)
+    {
+        try
+        {
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(msSettingsUri) { UseShellExecute = true });
+        }
+        catch
+        {
+            // 系统版本不支持该 URI / 被策略拦截：静默忽略
+        }
+    }
+
     /// <summary>通用滑杆流畅化配置：关闭刻度吸附、开启点击跳转、拖动过程中只更新 UI 不调系统 API，拖动结束/点击跳转时才提交值。
     /// 解决 IsSnapToTickEnabled=true 导致拖动卡顿、以及 ValueChanged 里频繁调系统 API（音量/亮度）导致的不流畅。</summary>
     /// <param name="slider">目标滑杆</param>

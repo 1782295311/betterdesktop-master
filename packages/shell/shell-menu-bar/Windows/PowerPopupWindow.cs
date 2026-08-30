@@ -16,6 +16,7 @@ using System.Windows.Shapes;
 using System.Windows.Threading;
 using BetterDesktop.Shell.Core.Surface;
 using BetterDesktop.Shell.Core.Vibrancy;
+using BetterDesktop.Shell.MenuBar.Contracts;
 using BetterDesktop.Shell.MenuBar.Services;
 
 namespace BetterDesktop.Shell.MenuBar.Windows;
@@ -25,8 +26,9 @@ internal sealed class PowerPopupWindow : MenuBarPopupWindow
 {
     private const double DefaultWidth = 290;
 
-    // 电池条几何：外框高度 14、描边 1、内腔可用高度 12
-    private const double BatBodyHeight = 14;
+    // 电池条几何：外框高度 16、描边 1、内边距 1 → 内腔可用高度 12（= BatInnerHeight）。
+    // 旧值外框只有 14，内腔实际只有 10，填充却按 12 高度走 —— 100% 电量时填充会溢出外框描边。
+    private const double BatBodyHeight = 16;
     private const double BatInnerHeight = 12;
 
     /// <summary>预览模式（窗口从未 ShowAt）下的内容重建回调：切换性能模式后由外部宿主刷新已嵌入的面板引用。
@@ -35,6 +37,7 @@ internal sealed class PowerPopupWindow : MenuBarPopupWindow
 
     private Rectangle? _batFill;          // 电量填充条（按百分比充填，动画跟随）
     private SolidColorBrush? _batFillBrush;
+    private UIElement? _chargeBolt;       // 充电中标记（接电且未满时显示）
     private TextBlock? _pctText;          // 主行：百分比 + 接通状态
     private TextBlock? _detailText;       // 次行：电量充满 / 剩余时长
     private TextBlock? _modeLabel;        // 当前性能模式标题行
@@ -79,6 +82,12 @@ internal sealed class PowerPopupWindow : MenuBarPopupWindow
                 : info.LineStatusText;
         }
         if (_detailText is not null) _detailText.Text = info.StatusText;
+
+        // 充电标记随接电/满电状态实时切换（拔电、充满后闪电要消失）
+        if (_chargeBolt is not null)
+        {
+            _chargeBolt.Visibility = IsCharging(info) ? Visibility.Visible : Visibility.Collapsed;
+        }
 
         // 填充条随百分比动画充填，颜色随档位动画渐变（若本次读不到有效电量，回退到 0，避免动画卡在旧值）
         double pct = info.HasBattery && info.Percentage >= 0 ? info.Percentage : 0;
@@ -303,7 +312,8 @@ internal sealed class PowerPopupWindow : MenuBarPopupWindow
             : Color.FromArgb(255, 247, 90, 90);
         if (!info.HasBattery) batColor = Color.FromArgb(255, 150, 150, 160);
 
-        var batGrid = new Grid { Width = 30, Height = 14, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 12, 0) };
+        // 外壳高度 16：给内腔留足 12，填充到 100% 也不会顶破描边。
+        var batGrid = new Grid { Width = 30, Height = 16, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 12, 0) };
         // 尾部凸起（正极小口）
         batGrid.Children.Add(new Rectangle
         {
@@ -342,6 +352,22 @@ internal sealed class PowerPopupWindow : MenuBarPopupWindow
         };
         batBody.Child = batFill;
         batGrid.Children.Add(batBody);
+
+        // 充电中的闪电标记：叠在电池条正中，让"正在充电"一眼可见
+        // （此前只有一个电池条，接电与用电池长得一模一样，图标没传达出状态差异）。
+        var chargeBolt = new Viewbox
+        {
+            Width = 9,
+            Height = 11,
+            Stretch = Stretch.Uniform,
+            HorizontalAlignment = HorizontalAlignment.Center,
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(0, 0, 3, 0), // 与外壳右留白对齐，避开尾部凸起
+            IsHitTestVisible = false,
+            Child = PowerGlyph.CreateChargeBolt(new SolidColorBrush(Color.FromArgb(235, 26, 26, 30)))
+        };
+        chargeBolt.Visibility = IsCharging(info) ? Visibility.Visible : Visibility.Collapsed;
+        batGrid.Children.Add(chargeBolt);
         Grid.SetColumn(batGrid, 0); grid.Children.Add(batGrid);
 
         // ===== 右侧：百分比 + 状态文本 =====
@@ -369,10 +395,19 @@ internal sealed class PowerPopupWindow : MenuBarPopupWindow
         // 注册实例引用，供 RefreshBattery / AnimateBatteryFill 做实时刷新与动画
         _batFill = batFill;
         _batFillBrush = fillBrush;
+        _chargeBolt = chargeBolt;
         _pctText = pct;
         _detailText = detail;
         return grid;
     }
+
+    /// <summary>
+    /// 是否正在充电：有电池 + 已接通电源 + 还没到 100%。
+    /// GetSystemPowerStatus 不给独立的"充电中"标志位，只能这样推；
+    /// 100% 时插着电源也不该再显示闪电（否则永远显示"充电中"）。
+    /// </summary>
+    private static bool IsCharging(PowerStatusInfo info)
+        => info.HasBattery && info.IsPlugged && info.Percentage >= 0 && info.Percentage < 100;
 
     private static FrameworkElement CreatePlanRow(PowerPlanItem plan, Action onSwitched)
     {
@@ -385,19 +420,25 @@ internal sealed class PowerPopupWindow : MenuBarPopupWindow
         row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
         row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
 
-        // 图标块（激活=强调色背景，非激活=内容层背景，均走主题令牌）
+        // 图标块（激活=强调色背景，非激活=内容层背景，均走主题令牌）。
+        // 图标由 PowerGlyph 自绘：24×24 栅格 → 18×18 显示，语义与方案一一对应
+        // （节能=叶子 / 平衡=天平 / 高性能=速度表 / 卓越性能=闪电）。
+        // 此前用 Segoe MDL2 Assets 字体码位，码位与语义对不上（用户反馈"图标与功能不符"），
+        // 且字体缺失时会显示方块。
+        var glyphCanvas = PowerGlyph.Create(plan.Kind, plan.IsActive
+            ? new SolidColorBrush(Color.FromRgb(255, 255, 255))
+            : (Brush)new SolidColorBrush(Color.FromArgb(255, 150, 158, 170)));
         var icon = new Border
         {
             Width = 28,
             Height = 28,
             CornerRadius = new CornerRadius(6),
-            Child = new TextBlock
+            Child = new Viewbox
             {
-                Text = plan.IconGlyph,
-                FontFamily = new FontFamily("Segoe MDL2 Assets"),
-                FontSize = 14,
-                VerticalAlignment = VerticalAlignment.Center,
-                HorizontalAlignment = HorizontalAlignment.Center
+                Width = 18,
+                Height = 18,
+                Stretch = Stretch.Uniform,
+                Child = glyphCanvas
             },
             Margin = new Thickness(6, 0, 0, 0),
             VerticalAlignment = VerticalAlignment.Center
@@ -475,8 +516,10 @@ internal sealed class PowerPopupWindow : MenuBarPopupWindow
             Margin = new Thickness(14, 2, 0, 2),
             Cursor = System.Windows.Input.Cursors.Hand
         };
-        // 操作/链接入口：强调色走主题令牌
-        SetThemeBinding(text, TextBlock.ForegroundProperty, "AccentBrush");
+        // 偏好设置链接：**普通前景色（暗色主题下即白色）**，不再用强调蓝。
+        // 用户反馈"电池偏好设置的字体应该改成白色"——强调蓝在这块深色面板上偏暗、且与普通
+        // 文字不统一。改 ThemeForeground 后暗色模式就是白的，亮色模式仍保持可读（不会白底白字）。
+        SetThemeBinding(text, TextBlock.ForegroundProperty, "ThemeForeground");
         text.MouseLeftButtonUp += (_, _) =>
         {
             try { System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(settingsUri) { UseShellExecute = true }); }

@@ -1,4 +1,4 @@
-// BetterDesktop.Shell.MenuBar — 日历独立弹出面板（失焦关闭）
+﻿// BetterDesktop.Shell.MenuBar — 日历独立弹出面板（失焦关闭）
 // UI 内容完全来自真实日期计算，零硬编码：
 //   - 顶部"年月日 + 星期 + 农历月日"：DateTime + ChineseLunisolarCalendar（系统农历算法）
 //   - 月视图表头：CultureInfo.InvariantCulture 或 CurrentUICulture 的真实星期名缩写（顺序本地化）
@@ -14,6 +14,7 @@ using System.Windows.Media;
 using BetterDesktop.Shell.Core.Surface;
 using BetterDesktop.Shell.Core.Vibrancy;
 using BetterDesktop.Shell.Status.Contracts; // 未来如引入外部时钟服务可 Inject
+using BetterDesktop.Shell.MenuBar.Contracts;
 
 namespace BetterDesktop.Shell.MenuBar.Windows;
 
@@ -225,7 +226,7 @@ internal sealed class CalendarPopupWindow : MenuBarPopupWindow
         // 今天数字恒白字（强调色圆形上可读）；其余日期继承主题前景
         if (isToday)
         {
-            dayText.Foreground = Brushes.White;
+            dayText.Foreground = MenuBarTheme.Foreground;
         }
         column.Children.Add(dayText);
         var lunarText = new TextBlock
@@ -238,7 +239,7 @@ internal sealed class CalendarPopupWindow : MenuBarPopupWindow
         // 今天农历恒白字；其余农历用主题次要前景
         if (isToday)
         {
-            lunarText.Foreground = Brushes.White;
+            lunarText.Foreground = MenuBarTheme.Foreground;
         }
         else
         {

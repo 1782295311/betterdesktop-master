@@ -56,7 +56,7 @@ internal sealed class ImeMenuBarExtension : IMenuBarExtension, IDisposable
         RenderOptions.SetBitmapScalingMode(_iconImage, BitmapScalingMode.HighQuality);
         _langText = new TextBlock
         {
-            Foreground = Brushes.White,
+            Foreground = MenuBarTheme.Foreground,
             FontSize = 12,
             FontWeight = FontWeights.SemiBold,
             VerticalAlignment = VerticalAlignment.Center,
@@ -161,7 +161,7 @@ internal sealed class CpuMenuBarExtension : IMenuBarExtension, IDisposable
         _label = new TextBlock
         {
             Text = string.IsNullOrEmpty(snap.ShortText) ? "—%" : snap.ShortText,
-            Foreground = Brushes.White,
+            Foreground = MenuBarTheme.Foreground,
             FontSize = 13,
             FontWeight = FontWeights.SemiBold,
             VerticalAlignment = VerticalAlignment.Center,
@@ -220,7 +220,7 @@ internal sealed class CalendarMenuBarExtension : IMenuBarExtension, IDisposable
     {
         _label = new TextBlock
         {
-            Foreground = Brushes.White,
+            Foreground = MenuBarTheme.Foreground,
             FontSize = 13,
             FontWeight = FontWeights.SemiBold,
             VerticalAlignment = VerticalAlignment.Center,
@@ -282,7 +282,7 @@ internal sealed class ControlCenterMenuBarExtension : IMenuBarExtension, IDispos
         var icon = new TextBlock
         {
             Text = "◫",
-            Foreground = Brushes.White,
+            Foreground = MenuBarTheme.Foreground,
             FontSize = 16,
             FontWeight = FontWeights.SemiBold,
             VerticalAlignment = VerticalAlignment.Center,

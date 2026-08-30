@@ -1,4 +1,4 @@
-// 麦克风面板：输入音量整数滑块 + 输入设备枚举（capture 端）。
+﻿// 麦克风面板：输入音量整数滑块 + 输入设备枚举（capture 端）。
 using System;
 using System.Collections.Generic;
 using System.Windows;
@@ -9,6 +9,7 @@ using System.Windows.Threading;
 using BetterDesktop.Shell.Core.Surface;
 using BetterDesktop.Shell.Core.Vibrancy;
 using BetterDesktop.Shell.Status.Native;
+using BetterDesktop.Shell.MenuBar.Contracts;
 
 namespace BetterDesktop.Shell.MenuBar.Windows;
 
@@ -32,10 +33,14 @@ internal sealed class MicrophonePanelWindow : MenuBarPopupWindow
             Text = "50",
             Foreground = NativePanelStyles.TextPrimary,
             FontWeight = FontWeights.SemiBold,
-            FontSize = 12,
-            HorizontalAlignment = HorizontalAlignment.Center,
-            Margin = new Thickness(0, 2, 0, 2)
+            FontSize = 11,
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(10, 0, 0, 0),
+            MinWidth = 40,
+            TextAlignment = TextAlignment.Right
         };
+        // 滑杆外观与亮度/音量滑杆统一：两端半圆轨道 + 白色圆球拇指 + 强调色已填充段。
+        // 此前这里是原生 Slider 默认样式，与其余面板不是同一套视觉。
         var slider = new Slider
         {
             Minimum = 0,
@@ -43,18 +48,26 @@ internal sealed class MicrophonePanelWindow : MenuBarPopupWindow
             Value = 50,
             SmallChange = 1,
             LargeChange = 10,
-            IsSnapToTickEnabled = true,
+            Height = 24,
             VerticalAlignment = VerticalAlignment.Center,
-            Margin = new Thickness(10, 0, 10, 0)
+            Style = NativePanelStyles.CreateCircleThumbSliderStyle()
         };
+
+        // 滑杆 + 数值并排（与 BrightnessSliderControl 同一布局：滑杆占满、数值右对齐固定宽）
+        var sliderRow = new Grid();
+        sliderRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        sliderRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        Grid.SetColumn(slider, 0);
+        sliderRow.Children.Add(slider);
+        Grid.SetColumn(sliderValue, 1);
+        sliderRow.Children.Add(sliderValue);
 
         var root = NativePanelStyles.Root(withColumn: col =>
         {
             col.Children.Add(NativePanelStyles.Title("麦克风"));
 
             // 音量行：数值 + 滑块
-            col.Children.Add(sliderValue);
-            col.Children.Add(slider);
+            col.Children.Add(sliderRow);
 
             col.Children.Add(NativePanelStyles.Separator(top: 8, bottom: 4));
 
@@ -70,14 +83,9 @@ internal sealed class MicrophonePanelWindow : MenuBarPopupWindow
 
             col.Children.Add(NativePanelStyles.Separator(top: 6, bottom: 4));
 
-            col.Children.Add(new TextBlock
-            {
-                Text = "声音偏好设置…",
-                Foreground = NativePanelStyles.TextSecondary,
-                FontSize = 10.5,
-                Margin = new Thickness(10, 0, 0, 0),
-                Opacity = 0.9
-            });
+            // 声音偏好设置：此前是一个纯 TextBlock（没挂点击事件），点了没反应。
+            // 改为共用跳转链接——可点击、强调色、打开系统声音设置页面。
+            col.Children.Add(NativePanelStyles.CreateSettingsLink("声音偏好设置…", "ms-settings:sound", fontSize: 11));
         });
 
         var vm = new MicrophonePanelViewModel();
@@ -86,7 +94,10 @@ internal sealed class MicrophonePanelWindow : MenuBarPopupWindow
             sliderValue.Text = v.VolumePct.ToString("0");
             if (Math.Abs(slider.Value - v.VolumePct) > 0.5)
             {
-                slider.Value = v.VolumePct;
+                // 外部（系统音量变化）引起：抑制回写，避免 SetVolume 与 Reload 互相触发形成回环
+                _programmatic = true;
+                try { slider.Value = v.VolumePct; }
+                finally { _programmatic = false; }
             }
             devicesBox.Children.Clear();
             foreach (var d in v.Devices)
@@ -94,17 +105,26 @@ internal sealed class MicrophonePanelWindow : MenuBarPopupWindow
                 devicesBox.Children.Add(BuildDeviceRow(d));
             }
         });
-        slider.ValueChanged += (_, e) =>
-        {
-            var newVol = (int)Math.Round(e.NewValue);
-            if (newVol != vm.VolumePct)
+
+        // 流畅滑杆：拖动中只更新数值显示，松手才提交到系统 API（与亮度/音量滑杆同一行为）。
+        // 原实现在 ValueChanged 里直接调 SetVolume，拖动过程会高频调系统 API 造成卡顿。
+        NativePanelStyles.ConfigureSmoothSlider(slider,
+            onValueCommitted: v =>
             {
-                vm.SetVolume(newVol);
-            }
-        };
+                if (_programmatic) return;
+                var newVol = (int)Math.Round(v);
+                if (newVol != vm.VolumePct)
+                {
+                    vm.SetVolume(newVol);
+                }
+            },
+            onValueChanging: v => sliderValue.Text = ((int)Math.Round(v)).ToString("0"));
 
         return root;
     }
+
+    /// <summary>程序化设置滑杆值（外部同步）时置位，避免触发 SetVolume 回环。</summary>
+    private bool _programmatic;
 
     private static FrameworkElement BuildDeviceRow(AudioDeviceNative d)
     {
@@ -129,7 +149,7 @@ internal sealed class MicrophonePanelWindow : MenuBarPopupWindow
             Child = new TextBlock
             {
                 Text = "🎙",
-                Foreground = d.IsDefault ? Brushes.White : NativePanelStyles.TextPrimary,
+                Foreground = d.IsDefault ? MenuBarTheme.Foreground : NativePanelStyles.TextPrimary,
                 FontSize = 13,
                 HorizontalAlignment = HorizontalAlignment.Center,
                 VerticalAlignment = VerticalAlignment.Center

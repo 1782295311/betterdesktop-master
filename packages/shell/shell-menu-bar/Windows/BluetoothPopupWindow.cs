@@ -31,6 +31,7 @@ using BetterDesktop.Shell.MenuBar.Services;
 using Windows.Devices.Bluetooth;
 using Windows.Devices.Bluetooth.Advertisement;
 using Windows.Devices.Enumeration;
+using Windows.Devices.Radios;
 
 namespace BetterDesktop.Shell.MenuBar.Windows;
 
@@ -219,10 +220,16 @@ internal sealed class BluetoothPopupWindow : MenuBarPopupWindow
         _radioRefreshQueued = true;
         try
         {
-            var state = await Task.Run(BluetoothEnumerator.GetRadioState);
-            if (_radioState != state)
+            var state = await RadioInterop.GetStateAsync(RadioKind.Bluetooth);
+            var mapped = state switch
             {
-                _radioState = state;
+                RadioState.On => BluetoothRadioState.On,
+                RadioState.Off => BluetoothRadioState.Off,
+                _ => BluetoothRadioState.NoAdapter
+            };
+            if (_radioState != mapped)
+            {
+                _radioState = mapped;
                 ScheduleRender();
             }
         }
@@ -689,7 +696,7 @@ internal sealed class BluetoothPopupWindow : MenuBarPopupWindow
         var column = new StackPanel { Orientation = Orientation.Vertical };
 
         // ========== Toggle + 偏好设置 ==========
-        column.Children.Add(CreateToggleRow("蓝牙", "BluetoothEnable", defaultValue: BluetoothEnumerator.GetRadioState() != BluetoothRadioState.Off));
+        column.Children.Add(CreateToggleRow("蓝牙", _radioState != BluetoothRadioState.Off, on => _ = SetBluetoothAsync(on)));
         column.Children.Add(CreatePrefLinkRow("蓝牙偏好设置", "ms-settings:bluetooth"));
         column.Children.Add(CreateSeparator());
 
@@ -834,7 +841,17 @@ internal sealed class BluetoothPopupWindow : MenuBarPopupWindow
         return sep;
     }
 
-    private static FrameworkElement CreateToggleRow(string label, string registryValueName, bool defaultValue)
+    private async Task SetBluetoothAsync(bool on)
+    {
+        var ok = await RadioInterop.SetStateAsync(RadioKind.Bluetooth, on);
+        if (ok)
+        {
+            _radioState = on ? BluetoothRadioState.On : BluetoothRadioState.Off;
+            await Dispatcher.InvokeAsync(RenderDeviceList);
+        }
+    }
+
+    private static FrameworkElement CreateToggleRow(string label, bool isOn, Action<bool> onChanged)
     {
         var row = new Grid
         {
@@ -855,17 +872,13 @@ internal sealed class BluetoothPopupWindow : MenuBarPopupWindow
 
         var toggle = new ToggleSwitch
         {
-            IsOn = defaultValue,
+            IsOn = isOn,
             VerticalAlignment = VerticalAlignment.Center,
             Margin = new Thickness(0, 0, 6, 0)
         };
         toggle.Toggled += (_, args) =>
         {
-            // 开关只是 UI 体验；真实写入需要系统服务权限，这里作为 UI 预览保留状态
-            try
-            {
-                WriteRegistryBool(registryValueName, (bool)args);
-            }
+            try { onChanged((bool)args); }
             catch { /* ignore */ }
         };
         Grid.SetColumn(toggle, 1);

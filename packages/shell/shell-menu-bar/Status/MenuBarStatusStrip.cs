@@ -1,12 +1,16 @@
 ﻿using BetterDesktop.Shell.Status.Contracts;
 using BetterDesktop.Shell.Status.Native;
 using BetterDesktop.Shell.MenuBar.Contracts;
+using BetterDesktop.Shell.MenuBar.Services;
 using BetterDesktop.Shell.Settings.Contracts;
 using System.Globalization;
+using System.Linq;
 using System.Runtime.InteropServices;
 using System.Windows.Controls;
 using System.Windows.Input;
+using System.Windows.Interop;
 using System.Windows.Media;
+using System.Windows.Media.Imaging;
 using System.Windows.Shapes;
 using System.Windows.Threading;
 using System.Windows;
@@ -42,7 +46,7 @@ internal sealed class BatteryIcon : ContentControl, IDisposable
 			Height = 10.0,
 			RadiusX = 2.5,
 			RadiusY = 2.5,
-			Stroke = Brushes.White,
+			Stroke = MenuBarTheme.Foreground,
 			StrokeThickness = 1.2,
 			Fill = Brushes.Transparent
 		};
@@ -53,7 +57,7 @@ internal sealed class BatteryIcon : ContentControl, IDisposable
 		{
 			Width = 2.0,
 			Height = 4.0,
-			Fill = Brushes.White,
+			Fill = MenuBarTheme.Foreground,
 			RadiusX = 1.0,
 			RadiusY = 1.0
 		};
@@ -66,7 +70,7 @@ internal sealed class BatteryIcon : ContentControl, IDisposable
 			Height = 6.0,
 			RadiusX = 1.5,
 			RadiusY = 1.5,
-			Fill = Brushes.White
+			Fill = MenuBarTheme.Foreground
 		};
 		Canvas.SetLeft(_fill, 2.0);
 		Canvas.SetTop(_fill, 4.0);
@@ -85,7 +89,7 @@ internal sealed class BatteryIcon : ContentControl, IDisposable
 		canvas.Children.Add(_bolt);
 		_percentText = new TextBlock
 		{
-			Foreground = Brushes.White,
+			Foreground = MenuBarTheme.Foreground,
 			FontSize = 10.0,
 			FontWeight = FontWeights.SemiBold,
 			VerticalAlignment = VerticalAlignment.Center,
@@ -148,9 +152,9 @@ internal sealed class BatteryIcon : ContentControl, IDisposable
 			_percentText.Foreground = new SolidColorBrush(Color.FromRgb(76, 230, 154));
 			return;
 		}
-		_fill.Fill = Brushes.White;
+		_fill.Fill = MenuBarTheme.Foreground;
 		_bolt.Visibility = Visibility.Collapsed;
-		_percentText.Foreground = Brushes.White;
+		_percentText.Foreground = MenuBarTheme.Foreground;
 		if (num < 0.2)
 		{
 			_fill.Fill = new SolidColorBrush(Color.FromRgb(byte.MaxValue, 106, 106));
@@ -181,7 +185,7 @@ internal sealed class BluetoothIcon : ContentControl
 		Path element = new Path
 		{
 			Data = Geometry.Parse("M17.71 7.71L12 2h-1v7.59L6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 11 14.41V22h1l5.71-5.71-4.3-4.29 4.3-4.29zM13 5.83l1.88 1.88L13 9.59V5.83zm1.88 10.46L13 18.17v-3.76l1.88 1.88z"),
-			Fill = Brushes.White,
+			Fill = MenuBarTheme.Foreground,
 			Stretch = Stretch.Uniform,
 			Width = 10.6,
 			Height = 14.2
@@ -224,7 +228,7 @@ internal sealed class BrightnessIcon : ContentControl, IDisposable
 		{
 			Width = 6.0,
 			Height = 6.0,
-			Fill = Brushes.White
+			Fill = MenuBarTheme.Foreground
 		};
 		Canvas.SetLeft(_sun, 8.0);
 		Canvas.SetTop(_sun, 5.0);
@@ -243,7 +247,7 @@ internal sealed class BrightnessIcon : ContentControl, IDisposable
 				Y1 = y,
 				X2 = x2,
 				Y2 = y2,
-				Stroke = Brushes.White,
+				Stroke = MenuBarTheme.Foreground,
 				StrokeThickness = 1.2,
 				StrokeStartLineCap = PenLineCap.Round
 			};
@@ -292,7 +296,7 @@ internal sealed class BrightnessIcon : ContentControl, IDisposable
 		SolidColorBrush solidColorBrush = new SolidColorBrush(Color.FromRgb(96, 96, 96));
 		for (int i = 0; i < 8; i++)
 		{
-			_rays[i].Stroke = ((i < num2) ? Brushes.White : solidColorBrush);
+			_rays[i].Stroke = ((i < num2) ? MenuBarTheme.Foreground : solidColorBrush);
 		}
 		byte g = (byte)(255.0 - (1.0 - num) * 60.0);
 		byte b = (byte)(255.0 - (1.0 - num) * 120.0);
@@ -374,7 +378,7 @@ internal sealed class CpuIcon : ContentControl, IDisposable
 		base.Height = 13.0;
 		_percentText = new TextBlock
 		{
-			Foreground = Brushes.White,
+			Foreground = MenuBarTheme.Foreground,
 			FontSize = 11.0,
 			FontWeight = FontWeights.SemiBold,
 			VerticalAlignment = VerticalAlignment.Center,
@@ -447,7 +451,7 @@ internal sealed class FpsIcon : ContentControl, IDisposable
 		base.Height = 13.0;
 		_fpsText = new TextBlock
 		{
-			Foreground = Brushes.White,
+			Foreground = MenuBarTheme.Foreground,
 			FontSize = 11.0,
 			FontWeight = FontWeights.SemiBold,
 			VerticalAlignment = VerticalAlignment.Center,
@@ -507,7 +511,9 @@ internal sealed class ImeIcon : ContentControl, IDisposable
 {
 	private readonly IImeMonitor? _ime;
 
-	private readonly TextBlock _label;
+	private readonly Image _image;
+
+	private readonly UIElement _fallback;
 
 	private bool _disposed;
 
@@ -516,16 +522,24 @@ internal sealed class ImeIcon : ContentControl, IDisposable
 		_ime = ime;
 		base.Width = 16.0;
 		base.Height = 13.0;
-		_label = new TextBlock
+
+		_fallback = BuildKeyboardIcon();
+
+		_image = new Image
 		{
-			Text = "中",
-			Foreground = Brushes.White,
-			FontSize = 11.0,
-			FontWeight = FontWeights.SemiBold,
-			HorizontalAlignment = HorizontalAlignment.Center,
-			VerticalAlignment = VerticalAlignment.Center
+			Width = 16,
+			Height = 13,
+			Stretch = Stretch.Uniform,
+			SnapsToDevicePixels = true,
+			Visibility = Visibility.Collapsed
 		};
-		base.Content = _label;
+		RenderOptions.SetBitmapScalingMode(_image, BitmapScalingMode.HighQuality);
+
+		base.Content = new Grid
+		{
+			Children = { _fallback, _image }
+		};
+
 		if (_ime != null)
 		{
 			_ime.Changed += OnImeChanged;
@@ -537,6 +551,60 @@ internal sealed class ImeIcon : ContentControl, IDisposable
 			{
 			}
 		}
+		else
+		{
+			RefreshIcon();
+		}
+	}
+
+	private static UIElement BuildKeyboardIcon()
+	{
+		var canvas = new Canvas
+		{
+			Width = 16,
+			Height = 10
+		};
+		// 键盘外框
+		canvas.Children.Add(new Rectangle
+		{
+			Width = 14,
+			Height = 8,
+			RadiusX = 1.2,
+			RadiusY = 1.2,
+			Stroke = MenuBarTheme.Foreground,
+			StrokeThickness = 1.2
+		});
+		Canvas.SetLeft(canvas.Children[0], 1);
+		Canvas.SetTop(canvas.Children[0], 1);
+
+		// 键帽：上排 3 个
+		void AddKey(double x, double y)
+		{
+			var key = new Rectangle
+			{
+				Width = 2.2,
+				Height = 1.6,
+				RadiusX = 0.4,
+				RadiusY = 0.4,
+				Fill = MenuBarTheme.Foreground
+			};
+			canvas.Children.Add(key);
+			Canvas.SetLeft(key, x);
+			Canvas.SetTop(key, y);
+		}
+		AddKey(3.0, 2.5);
+		AddKey(6.9, 2.5);
+		AddKey(10.8, 2.5);
+		AddKey(4.4, 5.5);
+		AddKey(9.4, 5.5);
+
+		return new Viewbox
+		{
+			Child = canvas,
+			Width = 16,
+			Height = 13,
+			Stretch = Stretch.Uniform
+		};
 	}
 
 	private void OnImeChanged(object? sender, StatusSnapshot e)
@@ -556,8 +624,53 @@ internal sealed class ImeIcon : ContentControl, IDisposable
 
 	private void UpdateIme(StatusSnapshot snap)
 	{
-		string text = (string.IsNullOrEmpty(snap.ShortText) ? "中" : snap.ShortText);
-		_label.Text = ((text.Length > 2) ? text.Substring(0, 2) : text);
+		RefreshIcon();
+	}
+
+	/// <summary>
+	/// 刷新当前激活输入法/键盘布局的程序图标（用户要求：显示输入法自己的图标，不是“中/英”文字）。
+	/// 图标提取逻辑与 ImePopupWindow.LoadLayoutIcon 相同（KeyboardLayoutInterop.GetLayoutIconHandle）。
+	/// 提取失败时降级为自绘键盘图标。
+	/// </summary>
+	private void RefreshIcon()
+	{
+		try
+		{
+			var items = ImeLayoutEnumerator.Enumerate();
+			var active = items.FirstOrDefault(i => i.IsActive) ?? items.FirstOrDefault();
+			if (active is null)
+			{
+				ShowFallback();
+				return;
+			}
+
+			var hIcon = KeyboardLayoutInterop.GetLayoutIconHandle(active.KlidHex, active.IsTs);
+			if (hIcon == IntPtr.Zero)
+			{
+				ShowFallback();
+				return;
+			}
+
+			var source = Imaging.CreateBitmapSourceFromHIcon(
+				hIcon, Int32Rect.Empty, BitmapSizeOptions.FromEmptyOptions());
+			source.Freeze();
+			KeyboardLayoutInterop.ReleaseIcon(hIcon);
+
+			_image.Source = source;
+			_image.Visibility = Visibility.Visible;
+			_fallback.Visibility = Visibility.Collapsed;
+		}
+		catch
+		{
+			ShowFallback();
+		}
+	}
+
+	private void ShowFallback()
+	{
+		_image.Source = null;
+		_image.Visibility = Visibility.Collapsed;
+		_fallback.Visibility = Visibility.Visible;
 	}
 
 	public void Dispose()
@@ -585,7 +698,7 @@ internal sealed class MemoryIcon : ContentControl, IDisposable
 		base.Height = 13.0;
 		_percentText = new TextBlock
 		{
-			Foreground = Brushes.White,
+			Foreground = MenuBarTheme.Foreground,
 			FontSize = 11.0,
 			FontWeight = FontWeights.SemiBold,
 			VerticalAlignment = VerticalAlignment.Center,
@@ -718,6 +831,9 @@ public sealed class MenuBarStatusStrip : StackPanel, IDisposable
 		base.Orientation = Orientation.Horizontal;
 		base.VerticalAlignment = VerticalAlignment.Center;
 		_systemTrayIcon = new SystemTrayIcon();
+		// 恢复持久化的「系统托盘隐藏重复系统图标」选择（默认 true：菜单栏已有专用的音量/网络/电池/通知按钮）。
+		// 必须在 SystemTrayIcon 构造（内部会 RebuildIcons 一次）之后设置，才会触发重建生效。
+		_systemTrayIcon.HideSystemIcons = settings?.Get("menubar.tray.hideSystemIcons", true) ?? true;
 		Border trayBtn = CreateButton(MenuBarStatusButtonId.SystemTray, "系统托盘", _systemTrayIcon, 18.0);
 		// 托盘图标数量是运行时可变量（应用启停都会增删），宽度必须随之伸缩：
 		// 固定宽度会在图标多时裁切、图标少时留白。每图标 16px + 折叠箭头约 10px。
@@ -771,7 +887,7 @@ public sealed class MenuBarStatusStrip : StackPanel, IDisposable
 		TextBlock content2 = new TextBlock
 		{
 			Text = "+",
-			Foreground = Brushes.White,
+			Foreground = MenuBarTheme.Foreground,
 			FontSize = 15.0,
 			FontWeight = FontWeights.Light,
 			VerticalAlignment = VerticalAlignment.Center,
@@ -780,7 +896,7 @@ public sealed class MenuBarStatusStrip : StackPanel, IDisposable
 		base.Children.Add(CreateButton(MenuBarStatusButtonId.Extensions, "扩展中心", content2, 17.0));
 		_dateTimeText = new TextBlock
 		{
-			Foreground = Brushes.White,
+			Foreground = MenuBarTheme.Foreground,
 			FontSize = 10.0,
 			FontWeight = FontWeights.SemiBold,
 			VerticalAlignment = VerticalAlignment.Center,
@@ -826,8 +942,11 @@ public sealed class MenuBarStatusStrip : StackPanel, IDisposable
 		}
 	}
 
-	/// <summary>读取某个菜单栏组件当前是否可见。</summary>
-	public bool IsComponentVisible(MenuBarStatusButtonId id)
+    /// <summary>设置系统托盘是否隐藏与菜单栏专用按钮重复的系统图标（音量/网络/电源/安全与维护）。</summary>
+    public void SetTrayHideSystemIcons(bool hide) => _systemTrayIcon.HideSystemIcons = hide;
+
+    /// <summary>读取某个菜单栏组件当前是否可见。</summary>
+    public bool IsComponentVisible(MenuBarStatusButtonId id)
 	{
 		return _buttons.TryGetValue(id, out var border) && border.Visibility == Visibility.Visible;
 	}
@@ -899,21 +1018,12 @@ public sealed class MenuBarStatusStrip : StackPanel, IDisposable
 			ToolTip = tooltip,
 			SnapsToDevicePixels = true
 		};
-		btn.MouseEnter += delegate
-		{
-			btn.Background = new SolidColorBrush(Color.FromArgb(51, byte.MaxValue, byte.MaxValue, byte.MaxValue));
-		};
-		btn.MouseLeave += delegate
-		{
-			btn.Background = Brushes.Transparent;
-		};
-		btn.MouseLeftButtonDown += delegate
-		{
-			btn.Background = new SolidColorBrush(Color.FromArgb(85, byte.MaxValue, byte.MaxValue, byte.MaxValue));
-		};
+		// 悬停/按下反馈由 MenuBarTheme 统一提供：共享冻结画刷，
+		// 不再像原先那样每次 MouseEnter/Down 都 new 一个 SolidColorBrush（14 个按钮 × 频繁进出 = 无谓 GC）。
+		MenuBarTheme.AttachHoverFeedback(btn);
 		btn.MouseLeftButtonUp += delegate
 		{
-			btn.Background = new SolidColorBrush(Color.FromArgb(51, byte.MaxValue, byte.MaxValue, byte.MaxValue));
+			btn.Background = MenuBarTheme.Hover;
 			this.ButtonClicked?.Invoke(this, new MenuBarStatusButtonClickedEventArgs(id, isRightButton: false, btn));
 		};
 		btn.MouseRightButtonUp += delegate
@@ -937,7 +1047,7 @@ public sealed class MenuBarStatusStrip : StackPanel, IDisposable
 			Height = 10.0,
 			RadiusX = 1.5,
 			RadiusY = 1.5,
-			Stroke = Brushes.White,
+			Stroke = MenuBarTheme.Foreground,
 			StrokeThickness = 1.2
 		};
 		Canvas.SetLeft(element, 1.0);
@@ -947,7 +1057,7 @@ public sealed class MenuBarStatusStrip : StackPanel, IDisposable
 		{
 			Width = 7.0,
 			Height = 1.5,
-			Fill = Brushes.White,
+			Fill = MenuBarTheme.Foreground,
 			RadiusX = 0.5,
 			RadiusY = 0.5
 		};
@@ -1003,7 +1113,7 @@ internal sealed class MicIcon : ContentControl, IDisposable
 		_micPath = new Path
 		{
 			Data = Geometry.Parse("M9 3a2 2 0 0 0-2 2v4a2 2 0 0 0 4 0V5a2 2 0 0 0-2-2zm4 6a4 4 0 0 1-8 0H3a6 6 0 0 0 5 5.91V17h2v-2.09A6 6 0 0 0 15 9h-2z"),
-			Fill = Brushes.White,
+			Fill = MenuBarTheme.Foreground,
 			Stretch = Stretch.Uniform,
 			Width = 14.0,
 			Height = 14.0
@@ -1062,7 +1172,7 @@ internal sealed class MicIcon : ContentControl, IDisposable
 	{
 		bool flag = snap.Severity == StatusSeverity.Warning || snap.Severity == StatusSeverity.Critical;
 		_muteLine.Visibility = ((!flag) ? Visibility.Collapsed : Visibility.Visible);
-		_micPath.Fill = (flag ? new SolidColorBrush(Color.FromRgb(128, 128, 128)) : Brushes.White);
+		_micPath.Fill = (flag ? new SolidColorBrush(Color.FromRgb(128, 128, 128)) : MenuBarTheme.Foreground);
 	}
 
 	public void Dispose()
@@ -1113,7 +1223,7 @@ internal sealed class NetworkTrafficIcon : ContentControl, IDisposable
 		Path element = new Path
 		{
 			Data = Geometry.Parse("M0 5 L3.5 0 L7 5 Z"),
-			Fill = Brushes.White,
+			Fill = MenuBarTheme.Foreground,
 			Width = 7.0,
 			Height = 6.0,
 			Margin = new Thickness(0.0, 0.0, 3.0, 0.0),
@@ -1121,7 +1231,7 @@ internal sealed class NetworkTrafficIcon : ContentControl, IDisposable
 		};
 		_upText = new TextBlock
 		{
-			Foreground = Brushes.White,
+			Foreground = MenuBarTheme.Foreground,
 			FontSize = 8.0,
 			FontWeight = FontWeights.SemiBold,
 			VerticalAlignment = VerticalAlignment.Center,
@@ -1139,7 +1249,7 @@ internal sealed class NetworkTrafficIcon : ContentControl, IDisposable
 		Path element2 = new Path
 		{
 			Data = Geometry.Parse("M0 1 L3.5 6 L7 1 Z"),
-			Fill = Brushes.White,
+			Fill = MenuBarTheme.Foreground,
 			Width = 7.0,
 			Height = 6.0,
 			Margin = new Thickness(0.0, 0.0, 3.0, 0.0),
@@ -1147,7 +1257,7 @@ internal sealed class NetworkTrafficIcon : ContentControl, IDisposable
 		};
 		_downText = new TextBlock
 		{
-			Foreground = Brushes.White,
+			Foreground = MenuBarTheme.Foreground,
 			FontSize = 8.0,
 			FontWeight = FontWeights.SemiBold,
 			VerticalAlignment = VerticalAlignment.Center,
@@ -1329,11 +1439,11 @@ internal static class StatusColor
 		if (1 == 0)
 		{
 		}
-		SolidColorBrush result = sev switch
+		Brush result = sev switch
 		{
 			StatusSeverity.Critical => new SolidColorBrush(Color.FromRgb(byte.MaxValue, 106, 106)), 
 			StatusSeverity.Warning => new SolidColorBrush(Color.FromRgb(byte.MaxValue, 215, 0)), 
-			_ => Brushes.White, 
+			_ => MenuBarTheme.Foreground, 
 		};
 		if (1 == 0)
 		{
@@ -1364,6 +1474,38 @@ internal sealed class SystemTrayIcon : ContentControl, IDisposable
     private readonly System.Collections.Generic.Dictionary<ManagedShell.WindowsTray.NotifyIcon, FrameworkElement> _elements = new System.Collections.Generic.Dictionary<ManagedShell.WindowsTray.NotifyIcon, FrameworkElement>();
     private bool _expanded = true;
     private bool _disposed;
+    private bool _hideSystemIcons = true;
+
+    /// <summary>
+    /// 隐藏与菜单栏专用按钮重复的系统图标（音量/网络/电源/安全与维护）。
+    /// 菜单栏已为这些能力提供专用按钮（音量、WiFi、电池、通知中心），系统托盘再显示一遍既重复又
+    /// 无法与菜单栏的面板（弹窗互斥、主题换色）保持一致。默认 true，用户可在「设置 → 菜单栏」关闭。
+    /// </summary>
+    public bool HideSystemIcons
+    {
+        get => _hideSystemIcons;
+        set
+        {
+            if (_hideSystemIcons == value) return;
+            _hideSystemIcons = value;
+            RebuildIcons();
+        }
+    }
+
+    // Windows 系统托盘图标的固定 GUID（ManagedShell 内部同值；此处自带一份避免依赖其可访问性）。
+    private static readonly Guid VolumeGuid = new("7820ae73-23e3-4229-82c1-e41cb67d5b9c");
+    private static readonly Guid NetworkGuid = new("7820ae74-23e3-4229-82c1-e41cb67d5b9c");
+    private static readonly Guid PowerGuid = new("7820ae75-23e3-4229-82c1-e41cb67d5b9c");
+    private static readonly Guid HealthGuid = new("7820ae76-23e3-4229-82c1-e41cb67d5b9c");
+
+    // Win10 时代这些系统图标由独立 dll 宿主提供，GUID 为空，只能按宿主模块名识别。
+    private static readonly string[] SystemTrayHostModules =
+    {
+        "sndvolsso.dll",   // 音量
+        "pnidui.dll",      // 网络
+        "batmeter.dll",    // 电源/电池
+        "actioncenter.dll" // 操作中心
+    };
 
     /// <summary>图标数量变化（宿主据此调整按钮宽度）。</summary>
     public event EventHandler<int>? IconCountChanged;
@@ -1414,7 +1556,7 @@ internal sealed class SystemTrayIcon : ContentControl, IDisposable
             _chevron = new TextBlock
             {
                 Text = "\u2039",
-                Foreground = Brushes.White,
+                Foreground = MenuBarTheme.Foreground,
                 FontSize = 11,
                 VerticalAlignment = VerticalAlignment.Center,
                 Margin = new Thickness(2, 0, 0, 0),
@@ -1488,6 +1630,7 @@ internal sealed class SystemTrayIcon : ContentControl, IDisposable
     private void AddIconElement(ManagedShell.WindowsTray.NotifyIcon icon)
     {
         if (_elements.ContainsKey(icon)) return;
+        if (_hideSystemIcons && IsDuplicateSystemIcon(icon)) return;
         var img = new System.Windows.Controls.Image { Width = 14, Height = 14, Stretch = Stretch.Uniform, SnapsToDevicePixels = true };
         img.SetBinding(System.Windows.Controls.Image.SourceProperty, new System.Windows.Data.Binding("Icon") { Source = icon });
         var border = new Border
@@ -1519,6 +1662,38 @@ internal sealed class SystemTrayIcon : ContentControl, IDisposable
         };
         _elements[icon] = border;
         _iconPanel!.Children.Add(border);
+    }
+
+    /// <summary>
+    /// 判断是否是与菜单栏专用按钮重复的系统图标：音量 / 网络 / 电源（电池） / 安全与维护（操作中心）。
+    /// 识别两条路：① Win11 起带固定 GUID；② Win10 由 sndvolsso/pnidui/batmeter/actioncenter 宿主 dll 提供，GUID 为空。
+    /// 任一步抛异常都按"非系统图标"处理——宁可多显示一个第三方图标，也不要误杀整片托盘。
+    /// </summary>
+    private static bool IsDuplicateSystemIcon(ManagedShell.WindowsTray.NotifyIcon icon)
+    {
+        try
+        {
+            if (icon.GUID != Guid.Empty)
+            {
+                var g = icon.GUID;
+                if (g == VolumeGuid || g == NetworkGuid || g == PowerGuid || g == HealthGuid) return true;
+            }
+
+            var path = icon.Path;
+            if (!string.IsNullOrEmpty(path))
+            {
+                var lower = path.ToLowerInvariant();
+                foreach (var module in SystemTrayHostModules)
+                {
+                    if (lower.EndsWith(module, StringComparison.Ordinal)) return true;
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine("[SystemTrayIcon] IsDuplicateSystemIcon failed: " + ex.Message);
+        }
+        return false;
     }
 
     private void RemoveIconElement(ManagedShell.WindowsTray.NotifyIcon icon)
@@ -1675,7 +1850,7 @@ internal sealed class VolumeIcon : ContentControl, IDisposable
 		_speaker = new Path
 		{
 			Data = Geometry.Parse("M3 5v6h2l3 3V2L5 5H3z"),
-			Fill = Brushes.White,
+			Fill = MenuBarTheme.Foreground,
 			Stretch = Stretch.Uniform,
 			Width = 9.0,
 			Height = 12.0
@@ -1693,7 +1868,7 @@ internal sealed class VolumeIcon : ContentControl, IDisposable
 			_waves[i] = new Path
 			{
 				Data = Geometry.Parse(array[i]),
-				Stroke = Brushes.White,
+				Stroke = MenuBarTheme.Foreground,
 				StrokeThickness = 1.2,
 				Stretch = Stretch.Uniform,
 				Width = array4[i],
@@ -1748,9 +1923,9 @@ internal sealed class VolumeIcon : ContentControl, IDisposable
 		for (int i = 0; i < 3; i++)
 		{
 			_waves[i].Visibility = Visibility.Visible;
-			_waves[i].Stroke = ((i < num2) ? Brushes.White : solidColorBrush);
+			_waves[i].Stroke = ((i < num2) ? MenuBarTheme.Foreground : solidColorBrush);
 		}
-		_speaker.Fill = (flag ? solidColorBrush : Brushes.White);
+		_speaker.Fill = (flag ? solidColorBrush : MenuBarTheme.Foreground);
 	}
 
 	public void Dispose()
@@ -1763,60 +1938,49 @@ internal sealed class VolumeIcon : ContentControl, IDisposable
 	}
 }
 
+/// <summary>
+/// 菜单栏右区的网络状态图标：Wi‑Fi 扇形（带 0~3 级真实信号强度）/ 有线上网水晶头 / 断网空扇形。
+/// 图形统一由 <see cref="WifiGlyph"/> 绘制（与 NETWORK 面板共用同一份，避免两处画得不一样）。
+/// </summary>
 internal sealed class WifiSignalIcon : ContentControl, IDisposable
 {
 	private readonly INetworkMonitor? _net;
 
-	private readonly Path[] _arcs = new Path[3];
-
+	private readonly Canvas _wifiCanvas;
+	private readonly Path[] _arcs;
 	private readonly Ellipse _dot;
+	private readonly Canvas _wiredCanvas;
+	private readonly DispatcherTimer _signalTimer;
 
 	private bool _disposed;
+	private bool _online;
+	private bool _isWifi = true;
+	private int _quality;
 
 	public WifiSignalIcon(INetworkMonitor? net)
 	{
 		_net = net;
 		base.Width = 16.0;
 		base.Height = 13.0;
-		Canvas canvas = new Canvas
-		{
-			Width = 16.0,
-			Height = 16.0
-		};
-		double[] array = new double[3] { 3.0, 5.0, 7.0 };
-		for (int i = 0; i < 3; i++)
-		{
-			double num = array[i];
-			double num2 = num * 0.7071;
-			Path path = new Path
-			{
-				Data = Geometry.Parse($"M {8.0 - num2:F2},{11.5 - num2:F2} A {num},{num} 0 0 1 {8.0 + num2:F2},{11.5 - num2:F2}"),
-				Stroke = Brushes.White,
-				StrokeThickness = 1.3,
-				StrokeStartLineCap = PenLineCap.Round,
-				StrokeEndLineCap = PenLineCap.Round,
-				SnapsToDevicePixels = true
-			};
-			_arcs[i] = path;
-			canvas.Children.Add(path);
-		}
-		_dot = new Ellipse
-		{
-			Width = 2.2,
-			Height = 2.2,
-			Fill = Brushes.White
-		};
-		Canvas.SetLeft(_dot, 6.9);
-		Canvas.SetTop(_dot, 10.4);
-		canvas.Children.Add(_dot);
-		Canvas child = IconCropper.Crop(canvas, 2.5, 4.0, 11.0, 9.0);
+
+		// 同一 24×24 栅格里叠两层：Wi‑Fi 扇形 + 有线水晶头，按链路类型切换可见性。
+		// 画刷一律用 MenuBarTheme.Foreground（共享未冻结画刷），主题切换自动整体换色。
+		WifiGlyph.BuildFan(MenuBarTheme.Foreground, 0, out _wifiCanvas, out _arcs, out _dot);
+		_wiredCanvas = WifiGlyph.BuildWired(MenuBarTheme.Foreground);
+		_wiredCanvas.Visibility = Visibility.Collapsed;
+
+		var layers = new Grid { Width = WifiGlyph.GridSize, Height = WifiGlyph.GridSize };
+		layers.Children.Add(_wifiCanvas);
+		layers.Children.Add(_wiredCanvas);
+
 		base.Content = new Viewbox
 		{
-			Child = child,
-			Stretch = Stretch.Uniform,
 			Width = 16.0,
-			Height = 13.0
+			Height = 13.0,
+			Stretch = Stretch.Uniform,
+			Child = layers
 		};
+
 		if (_net != null)
 		{
 			_net.Changed += OnNetChanged;
@@ -1828,6 +1992,17 @@ internal sealed class WifiSignalIcon : ContentControl, IDisposable
 			{
 			}
 		}
+		else
+		{
+			ApplyState();
+		}
+
+		// 信号强度走 wlanapi 直读（不含扫描），比网络监控的 1s 轮询更重，单独 5s 采一次；
+		// 菜单栏图标不需要秒级精度，5s 足以跟上走动带来的强度变化。
+		_signalTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(5) };
+		_signalTimer.Tick += delegate { RefreshQualityAsync(); };
+		_signalTimer.Start();
+		RefreshQualityAsync();
 	}
 
 	private void OnNetChanged(object? sender, StatusSnapshot e)
@@ -1847,18 +2022,76 @@ internal sealed class WifiSignalIcon : ContentControl, IDisposable
 
 	private void UpdateSignal(StatusSnapshot snap)
 	{
-		SolidColorBrush solidColorBrush = ((snap.Severity == StatusSeverity.Normal) ? Brushes.White : new SolidColorBrush(Color.FromRgb(96, 96, 96)));
-		Path[] arcs = _arcs;
-		foreach (Path path in arcs)
+		// IconKey 是语义层给的稳定标识（"network-wifi" / "network-ethernet" / "network-offline"），
+		// 比 Severity 精确；未知实现（IconKey 为空）退化为"严重级别正常即视为在线"。
+		_online = snap.IconKey switch
 		{
-			path.Stroke = solidColorBrush;
+			"network-offline" => false,
+			"network-wifi" => true,
+			"network-ethernet" => true,
+			_ => snap.Severity == StatusSeverity.Normal
+		};
+		_isWifi = snap.IconKey != "network-ethernet";
+		ApplyState();
+	}
+
+	/// <summary>按当前链路状态刷新：选图层（扇形/水晶头）+ 点亮等级。</summary>
+	private void ApplyState()
+	{
+		var showWifi = !_online || _isWifi;
+		_wifiCanvas.Visibility = showWifi ? Visibility.Visible : Visibility.Collapsed;
+		_wiredCanvas.Visibility = showWifi ? Visibility.Collapsed : Visibility.Visible;
+
+		int level;
+		if (!_online)
+		{
+			level = 0;                       // 断网：只留一个暗点，明确"没有信号"
 		}
-		_dot.Fill = solidColorBrush;
+		else if (!_isWifi)
+		{
+			level = 3;                       // 有线：扇形不显示，等级无意义
+		}
+		else
+		{
+			// 已连上但读不到强度（部分网卡/驱动不给 wlanSignalQuality）：按满格显示。
+			// 空扇形在"明明能上网"时是误导，满格至少不会让人以为断网了。
+			level = _quality > 0 ? WifiGlyph.LevelFromQuality(_quality) : 3;
+		}
+		WifiGlyph.ApplyLevel(_arcs, _dot, level);
+	}
+
+	/// <summary>
+	/// 异步读当前 Wi‑Fi 的信号质量（wlanapi 直读连接属性，不触发扫描），回到 UI 线程刷新图标。
+	/// 全程静默：读不到就保持上一次的强度，图标绝不因采集失败而崩或闪烁。
+	/// </summary>
+	private void RefreshQualityAsync()
+	{
+		if (_disposed) return;
+		_ = Task.Run(() =>
+		{
+			int quality = 0;
+			try
+			{
+				var info = WifiEnumerator.ReadCurrentConnection();
+				quality = info.IsConnected ? info.SignalQuality : 0;
+			}
+			catch
+			{
+				quality = 0;
+			}
+			UiDispatch.Run((DispatcherObject)(object)this, delegate
+			{
+				if (_disposed) return;
+				_quality = quality;
+				ApplyState();
+			});
+		});
 	}
 
 	public void Dispose()
 	{
 		_disposed = true;
+		_signalTimer.Stop();
 		if (_net != null)
 		{
 			_net.Changed -= OnNetChanged;

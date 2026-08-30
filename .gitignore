@@ -25,3 +25,8 @@ tools/ilspy/
 
 # 历史遗留垃圾构建目录
 **/obj2*/
+
+# 构建日志与探索 POC（不入库；**/Native/build/ 为 CMake 产物目录，现有 bin/obj 规则不覆盖）
+b4.txt
+poc/
+**/Native/build/
