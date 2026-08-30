@@ -1,22 +1,42 @@
-// BetterDesktop.Shell.MenuBar — 控制中心独立弹出面板（macOS Ventura 视觉：开关网格 + 模块卡片）
-// 布局（严格对齐截图）：
-//   顶部：2 列 × 3 行 开关网格
-//     左列(宽) ：Wi‑Fi（大）、蓝牙（大）、热点（大）
-//     右列(窄) ：专注助手（小）、台前调度（小）、投影（小）
-//   中部：显示器（圆角卡片 · 亮度滑块）
-//        声音（圆角卡片 · 音量 + 麦克风按钮）
-//   底部：媒体（圆角卡片 · 音乐 + 播放控制）
+﻿// BetterDesktop.Shell.MenuBar — 控制中心独立弹出面板（macOS Ventura 视觉：连接区条目 + 模块卡片）
+//
+// 布局：
+//   顶部：连接区 —— 6 行纵向条目（macOS 控制中心风格，2026-08-30 第五轮重设计）
+//     每行：圆形图标(28) + 标题 + 状态摘要 + 右侧开关（Wi‑Fi/蓝牙）或 › 指示（热点/专注/台前调度/投影）
+//     整行 hover 高亮；左键：开关项切换、非开关项打开独立面板；右键：一律打开独立面板。
+//     （此前 2×3 网格的右列仅 148px，功能文字被截断，反复调整仍显示不全 —— 纵向行宽度充裕，彻底解决。）
+//   中部：三张统一规格的模块卡片（圆角 + 描边 + 「标题左 / 数值右」对齐的头部）
+//     显示器（亮度滑杆）· 声音（音量滑杆 + 麦克风静音按钮）· 正在播放（SMTC 曲目 + 播放控制）
+//
+// 【2026-08-30 问题 6 重构】
+//   1) 图标：此前全部写死 Segoe MDL2 Assets 码位（\uE701/\uE702/\uE7C2/\uE81E/\uEB0B/\uE7B4/
+//      \uE720/\uEC4F/\uE100/\uE102/\uE101），字形与语义对不上、字体缺失显示方块。
+//      统一换成 Contracts/ControlCenterGlyph.cs 的 24×24 纯自绘。
+//   2) 信息对齐：三张模块卡片共用 BuildModuleCard（标题左、数值右），卡片内控件垂直居中；
+//      大瓦片图标由 Top 对齐改为 Center 对齐（此前图标顶挂、文字居中 → 视觉错位）。
+//   3) 功能对接：麦克风静音按钮此前只是装饰（无点击事件）；媒体区歌名写死空格 + 三个按钮
+//      无点击事件。现分别接到 AudioCoreNative.SetCaptureVolume 与 SMTC（MediaSessionController）。
+//   4) 描边/背景：硬编码半透明白（Color.FromArgb(120/60,255,255,255)）改走主题令牌 ThemeSeparator。
+//   5) 第五轮（2026-08-30）：顶部 2×3 网格 → 纵向 6 行条目（右列 148px 截断问题的根治）。
+//
 // 所有状态语义均来自 shell-status；未接入的模块显示空壳（不写死任何假设备名）。
 
 using System;
 using System.Collections.Generic;
+using System.Linq;
+using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
+using System.Windows.Shapes;
+using System.Windows.Threading;
 using BetterDesktop.Shell.Core.Surface;
 using BetterDesktop.Shell.Core.Vibrancy;
 using BetterDesktop.Shell.Status.Contracts;
 using BetterDesktop.Shell.Status.Native;
+using BetterDesktop.Shell.MenuBar.Contracts;
+using BetterDesktop.Shell.MenuBar.Services;
+using Windows.Devices.Radios;
 
 namespace BetterDesktop.Shell.MenuBar.Windows;
 
@@ -26,23 +46,56 @@ namespace BetterDesktop.Shell.MenuBar.Windows;
 /// </summary>
 internal sealed class ControlCenterWindow : MenuBarPopupWindow
 {
-    // 整体宽度（与 macOS 风格一致，略窄于 400 以便更精致）
-    private const double PanelWidth = 340;
+    // 整体宽度（与 macOS 风格一致）
+    private const double PanelWidth = 380;
 
-    // 开关网格列宽：左列大，右列小（面板宽 340 - 左右 padding 28 = 内容 312；左 200 + 间距 8 + 右 104 = 312，避免右列被截断缺角）
-    private const double GridColLeft = 200;
-    private const double GridColRight = 104;
-    private const double GridGap = 8;
-    private const double GridRowHeight = 58;
+    // 连接区纵向条目：行高与行距（StackPanel 布局，宽度 = 面板宽 - padding，文字永不截断）
+    private const double RowMarginBottom = 6;
 
-    private readonly IReadOnlyList<Services.ControlCenterFeature> _features;
+    // 激活瓦片底色：Windows 强调蓝。蓝底上恒用 MenuBarTheme.Foreground（亮/暗主题下都是可读白字）。
+    private static readonly Brush TileAccent = new SolidColorBrush(Color.FromRgb(0x00, 0x78, 0xD4));
+    // 麦克风静音态底色：橙色（与系统"已静音"语义一致，跨厂商约定俗成）
+    private static readonly Brush MicMutedBackground = new SolidColorBrush(Color.FromRgb(0xFF, 0x95, 0x00));
+    // 静音态图标用近黑（橙底上对比度最高），非静音态用主题前景
+    private static readonly Brush OnAccentForeground = new SolidColorBrush(Color.FromRgb(0x32, 0x32, 0x34));
+
+    private readonly IReadOnlyList<ControlCenterFeature> _features;
     private readonly IVolumeMonitor? _vol;
     private readonly IMicrophoneMonitor? _mic;
     private readonly IBrightnessMonitor? _brightness;
+
     private BrightnessSliderControl? _brightnessControl;
+    private MediaSessionController? _media;
+
+    /// <summary>预览模式（Playground）：关闭一切"需要配对释放"的资源（事件订阅 / 轮询定时器）。</summary>
+    private bool _isPreview;
+
+    // —— 开关网格瓦片引用：左键切换、异步刷新状态时更新视觉 ——
+    private readonly Dictionary<string, TileRef> _tileRefs = new();
+
+    private sealed class TileRef
+    {
+        public Border Tile { get; init; } = null!;
+        public TextBlock? SummaryText { get; init; }
+        public Border IconCircle { get; init; } = null!;
+        public ToggleSwitch? Switch { get; init; }
+        public bool HasSummary { get; init; }
+        public ControlCenterFeature Feature { get; init; } = null!;
+    }
+
+    // —— 需要随监控事件实时刷新的控件引用 ——
+    private Slider? _volumeSlider;
+    private TextBlock? _volumeValue;
+    private TextBlock? _brightnessValue;
+    private Border? _micButton;
+    private TextBlock? _mediaTitle;
+    private TextBlock? _mediaArtist;
+    private TextBlock? _mediaApp;
+    private Path? _playPausePath;
+    private readonly List<Border> _mediaButtons = new();
 
     public ControlCenterWindow(
-        IReadOnlyList<Services.ControlCenterFeature> features,
+        IReadOnlyList<ControlCenterFeature> features,
         IVolumeMonitor? vol,
         IMicrophoneMonitor? mic,
         IBrightnessMonitor? brightness,
@@ -57,111 +110,90 @@ internal sealed class ControlCenterWindow : MenuBarPopupWindow
     }
 
     /// <summary>Playground/大容器 预览入口：直接取内容 UI（不走 ShellWindow 生命周期）。</summary>
-    public FrameworkElement BuildPreviewContent() => BuildContent();
+    /// <remarks>
+    /// 预览模式下**不订阅监控事件、不启动 SMTC 轮询**：
+    /// BuildPreviewContent 不会走 OnClosed，退订/Dispose 永远不会执行；
+    /// 若不区分，Playground 每构造一次预览就多一个 2s 定时器和一组常驻事件订阅。
+    /// </remarks>
+    public FrameworkElement BuildPreviewContent()
+    {
+        _isPreview = true;
+        return BuildContent();
+    }
 
     protected override FrameworkElement BuildContent()
     {
         // —— 外层容器：透明，面板背景/描边/圆角由基类 ApplyContent 按主题令牌统一挂载 ——
         var root = new Border
         {
-            Padding = new Thickness(14),
+            Padding = new Thickness(12),
             SnapsToDevicePixels = true,
             UseLayoutRounding = true
         };
 
-        var column = new StackPanel
-        {
-            Orientation = Orientation.Vertical
-        };
+        var column = new StackPanel { Orientation = Orientation.Vertical };
 
-        // 1) 顶部：开关网格
-        column.Children.Add(BuildToggleGrid());
+        // 1) 顶部：连接区（macOS 风格纵向条目）
+        column.Children.Add(BuildToggleList());
 
         // 2) 显示器卡片（亮度滑块）
-        column.Children.Add(BuildModuleCard(BuildBrightnessSection(), margin: new Thickness(0, 10, 0, 0)));
+        column.Children.Add(BuildBrightnessCard());
 
-        // 3) 声音卡片（音量 + 麦克风）
-        column.Children.Add(BuildModuleCard(BuildVolumeMicSection(), margin: new Thickness(0, 10, 0, 0)));
+        // 3) 声音卡片（音量 + 麦克风静音）
+        column.Children.Add(BuildVolumeCard());
 
-        // 4) 媒体卡片
-        column.Children.Add(BuildModuleCard(BuildMediaSection(), margin: new Thickness(0, 10, 0, 0)));
+        // 4) 正在播放卡片（SMTC）
+        column.Children.Add(BuildMediaCard());
 
         root.Child = column;
+
+        // 启动后异步刷新 Wi‑Fi/蓝牙无线电真实状态（避免同步阻塞 UI，同时让瓦片高亮/小结更准确）
+        if (!_isPreview)
+        {
+            Dispatcher.BeginInvoke(new Action(async () => await RefreshTileStatesAsync()), DispatcherPriority.Background);
+        }
+
+        // 订阅状态变化（控制中心是常驻窗口，事件驱动刷新优于自行轮询）
+        if (!_isPreview)
+        {
+            if (_vol is not null) _vol.Changed += OnVolumeChanged;
+            if (_brightness is not null) _brightness.Changed += OnBrightnessChanged;
+        }
+
         return root;
     }
 
     // ============================================================
-    //  顶部开关网格（2 列 × 3 行）
+    //  顶部连接区（macOS 风格纵向条目：图标 + 标题/摘要 + 右侧开关）
     // ============================================================
-    private FrameworkElement BuildToggleGrid()
+    private FrameworkElement BuildToggleList()
     {
-        var grid = new Grid
+        var panel = new StackPanel
         {
+            Orientation = Orientation.Vertical,
             SnapsToDevicePixels = true,
             UseLayoutRounding = true
         };
-        // 两列：左(大) 间距 右(小)
-        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(GridColLeft) });
-        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(GridGap) });
-        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(GridColRight) });
-        // 三行
-        for (int i = 0; i < 3; i++)
-        {
-            if (i > 0)
-            {
-                grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(GridGap) });
-            }
-            grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(GridRowHeight) });
-        }
 
-        // —— 由 Catalog 按固定顺序取前 6 个：0..2 左列大，3..5 右列小 ——
-        // [0 Wi-Fi, 1 蓝牙, 2 热点]  → 大尺寸；图标 + 两行文字
-        // [3 专注助手, 4 台前调度, 5 投影] → 小尺寸；仅图标 + 标题行
-        static int Row(int r) => r * 2;
+        // 前 3 项带真实开关（Wi‑Fi / 蓝牙无线电），后 3 项点击打开对应设置/面板
+        AddRow(panel, "Wi‑Fi", ControlCenterIcon.Wifi, accentOn: true);
+        AddRow(panel, "蓝牙", ControlCenterIcon.Bluetooth, accentOn: true);
+        AddRow(panel, "热点", ControlCenterIcon.Hotspot, accentOn: false);
+        AddRow(panel, "专注助手", ControlCenterIcon.Focus, accentOn: false);
+        AddRow(panel, "台前调度", ControlCenterIcon.StageManager, accentOn: false);
+        AddRow(panel, "投影", ControlCenterIcon.Project, accentOn: false);
 
-        var wifi = FindFeature("Wi‑Fi");
-        if (wifi is not null)
-        {
-            var tile = MakeLargeToggleTile(wifi, glyph: "\uE701", accentOn: true);  // WiFi 段
-            Grid.SetColumn(tile, 0); Grid.SetRow(tile, Row(0)); grid.Children.Add(tile);
-        }
-        var focus = FindFeature("专注助手");
-        if (focus is not null)
-        {
-            var tile = MakeSmallToggleTile(focus, glyph: "\uE7C2", accentOn: false);
-            Grid.SetColumn(tile, 2); Grid.SetRow(tile, Row(0)); grid.Children.Add(tile);
-        }
-
-        var bt = FindFeature("蓝牙");
-        if (bt is not null)
-        {
-            var tile = MakeLargeToggleTile(bt, glyph: "\uE702", accentOn: true);
-            Grid.SetColumn(tile, 0); Grid.SetRow(tile, Row(1)); grid.Children.Add(tile);
-        }
-        var stage = FindFeature("台前调度");
-        if (stage is not null)
-        {
-            var tile = MakeSmallToggleTile(stage, glyph: "\uE81E", accentOn: false);
-            Grid.SetColumn(tile, 2); Grid.SetRow(tile, Row(1)); grid.Children.Add(tile);
-        }
-
-        var hotspot = FindFeature("热点");
-        if (hotspot is not null)
-        {
-            var tile = MakeLargeToggleTile(hotspot, glyph: "\uEB0B", accentOn: false);
-            Grid.SetColumn(tile, 0); Grid.SetRow(tile, Row(2)); grid.Children.Add(tile);
-        }
-        var proj = FindFeature("投影");
-        if (proj is not null)
-        {
-            var tile = MakeSmallToggleTile(proj, glyph: "\uE7B4", accentOn: false);
-            Grid.SetColumn(tile, 2); Grid.SetRow(tile, Row(2)); grid.Children.Add(tile);
-        }
-
-        return grid;
+        return panel;
     }
 
-    private Services.ControlCenterFeature? FindFeature(string title)
+    private void AddRow(StackPanel panel, string title, ControlCenterIcon icon, bool accentOn)
+    {
+        var feature = FindFeature(title);
+        if (feature is null) return;
+        panel.Children.Add(MakeToggleRow(feature, icon, accentOn));
+    }
+
+    private ControlCenterFeature? FindFeature(string title)
     {
         for (int i = 0; i < _features.Count; i++)
         {
@@ -173,195 +205,324 @@ internal sealed class ControlCenterWindow : MenuBarPopupWindow
         return null;
     }
 
-    /// <summary>左列大开关：左图标 + 标题 + 副标题，带激活态蓝色背景。</summary>
-    private FrameworkElement MakeLargeToggleTile(
-        Services.ControlCenterFeature feature,
-        string glyph,
-        bool accentOn)
+    /// <summary>判定某功能的小结文本是否代表"已开启/已连接"（决定条目是否上强调色）。</summary>
+    private static bool IsActiveSummary(string? summary)
+    {
+        if (string.IsNullOrWhiteSpace(summary)) return false;
+        return summary != "关闭" && summary != "已关闭" && summary != "无适配器" && summary != "—" && summary != "离线";
+    }
+
+    /// <summary>
+    /// 单个纵向条目：圆形图标(28) + 标题 + 状态摘要 + 右侧开关（开关项）或 ›（非开关项）。
+    /// 行宽 = 面板内容宽（356px），文字不再被右列宽度截断（此前 2×3 网格右列仅 148px）。
+    /// 整行 hover 高亮；左键：开关项切换、非开关项打开面板；右键：一律打开独立面板。
+    /// </summary>
+    private FrameworkElement MakeToggleRow(ControlCenterFeature feature, ControlCenterIcon icon, bool accentOn)
     {
         var summary = feature.Summary() ?? string.Empty;
-        bool active = accentOn && !string.IsNullOrEmpty(summary) && summary != "关闭" && summary != "已关闭" && summary != "无适配器" && summary != "—";
+        bool active = accentOn && IsActiveSummary(summary);
 
         var tile = new Border
         {
             CornerRadius = new CornerRadius(12),
-            Padding = new Thickness(12, 10, 10, 10),
+            Padding = new Thickness(10, 7, 10, 7),
+            Margin = new Thickness(0, 0, 0, RowMarginBottom),
             BorderThickness = new Thickness(1),
             SnapsToDevicePixels = true,
             UseLayoutRounding = true,
             Cursor = System.Windows.Input.Cursors.Hand
         };
-        // 激活态：固定蓝色背景（Windows 强调色 #0078D4），确保已连接/已开启功能明显高亮
-        // 非激活态：透明背景，仅靠描边显示功能边界，无黑色色块
-        tile.Background = active
-            ? new SolidColorBrush(Color.FromRgb(0x00, 0x78, 0xD4))
-            : Brushes.Transparent;
-        // 胶囊描边：激活态蓝色描边，非激活态用半透明白色描边确保边界可见
-        tile.BorderBrush = active
-            ? new SolidColorBrush(Color.FromRgb(0x00, 0x78, 0xD4))
-            : new SolidColorBrush(Color.FromArgb(120, 255, 255, 255));
+        ApplyTileVisual(tile, active);
 
-        var row = new Grid
-        {
-            VerticalAlignment = VerticalAlignment.Stretch
-        };
-        row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        var row = new Grid { VerticalAlignment = VerticalAlignment.Stretch };
+        row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(28) });
+        row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(10) });
         row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
 
-        // 图标（蓝色激活态 白字；灰态 高亮白字）
+        // 图标：28 圆底 + 16 自绘字形，垂直居中
         var iconCircle = new Border
         {
             Width = 28,
             Height = 28,
             CornerRadius = new CornerRadius(14),
-            Margin = new Thickness(0, 2, 10, 0),
-            VerticalAlignment = VerticalAlignment.Top
+            VerticalAlignment = VerticalAlignment.Center
         };
-        // 非激活图标底：半透明白色圆底（与描边同色系），保证透明背景下图标可读
-        if (!active)
+        ApplyIconCircleVisual(iconCircle, active);
+        iconCircle.Child = new Viewbox
         {
-            iconCircle.Background = new SolidColorBrush(Color.FromArgb(40, 255, 255, 255));
-        }
-        var iconText = new TextBlock
-        {
-            Text = glyph,
-            FontFamily = new FontFamily("Segoe MDL2 Assets"),
-            FontSize = 14,
-            HorizontalAlignment = HorizontalAlignment.Center,
-            VerticalAlignment = VerticalAlignment.Center,
-            TextAlignment = TextAlignment.Center,
-            SnapsToDevicePixels = true
+            Width = 16,
+            Height = 16,
+            Stretch = Stretch.Uniform,
+            Child = ControlCenterGlyph.Create(icon, MenuBarTheme.Foreground)
         };
-        // 激活态图标恒白字（强调色底上可读）；非激活随主题前景
-        if (active)
-        {
-            iconText.Foreground = Brushes.White;
-        }
-        else
-        {
-            SetThemeBinding(iconText, TextBlock.ForegroundProperty, "ThemeForeground");
-        }
-        iconCircle.Child = iconText;
         Grid.SetColumn(iconCircle, 0);
         row.Children.Add(iconCircle);
 
-        // 右侧标题 + 副标题
-        var rightCol = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
+        // 标题 + 状态摘要（同一中心线，信息对齐）
+        TextBlock? summaryText = null;
+        var textCol = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
         var titleText = new TextBlock
         {
             Text = feature.Title,
             FontSize = 12,
-            FontWeight = FontWeights.SemiBold
-        };
-        // 激活瓦片标题恒白字；非激活随主题前景
-        if (active)
-        {
-            titleText.Foreground = Brushes.White;
-        }
-        rightCol.Children.Add(titleText);
-        if (!string.IsNullOrEmpty(summary))
-        {
-            var summaryText = new TextBlock
-            {
-                Text = summary,
-                FontSize = 11,
-                Margin = new Thickness(0, 1, 0, 0),
-                TextTrimming = TextTrimming.CharacterEllipsis,
-                Opacity = 0.9
-            };
-            // 激活瓦片副标题恒白字；非激活用次要前景
-            SetThemeBinding(summaryText, TextBlock.ForegroundProperty, "ThemeMutedForeground");
-            if (active)
-            {
-                summaryText.Foreground = Brushes.White;
-            }
-            rightCol.Children.Add(summaryText);
-        }
-        Grid.SetColumn(rightCol, 1);
-        row.Children.Add(rightCol);
-
-        tile.Child = row;
-        tile.MouseLeftButtonUp += (_, _) =>
-        {
-            var anchor = tile.PointToScreen(new Point(0, 0));
-            feature.OnActivate(anchor);
-        };
-        return tile;
-    }
-
-    /// <summary>右列小开关：图标居中 + 单行标题在下，激活态蓝底白字。</summary>
-    private FrameworkElement MakeSmallToggleTile(
-        Services.ControlCenterFeature feature,
-        string glyph,
-        bool accentOn)
-    {
-        var summary = feature.Summary() ?? string.Empty;
-        bool active = accentOn && !string.IsNullOrEmpty(summary) && summary != "关闭" && summary != "已关闭";
-
-        var tile = new Border
-        {
-            CornerRadius = new CornerRadius(12),
-            Padding = new Thickness(8, 8, 8, 8),
-            BorderThickness = new Thickness(1),
-            SnapsToDevicePixels = true,
-            UseLayoutRounding = true,
-            Cursor = System.Windows.Input.Cursors.Hand
-        };
-        // 激活态：固定蓝色背景；非激活态：透明背景，仅靠描边显示边界
-        tile.Background = active
-            ? new SolidColorBrush(Color.FromRgb(0x00, 0x78, 0xD4))
-            : Brushes.Transparent;
-        // 胶囊描边：激活态蓝色，非激活态半透明白色确保边界可见
-        tile.BorderBrush = active
-            ? new SolidColorBrush(Color.FromRgb(0x00, 0x78, 0xD4))
-            : new SolidColorBrush(Color.FromArgb(120, 255, 255, 255));
-        var glyphText = new TextBlock
-        {
-            Text = glyph,
-            FontFamily = new FontFamily("Segoe MDL2 Assets"),
-            FontSize = 15,
-            HorizontalAlignment = HorizontalAlignment.Center,
-            Margin = new Thickness(0, 2, 0, 2),
-            TextAlignment = TextAlignment.Center
-        };
-        var titleText = new TextBlock
-        {
-            Text = feature.Title,
-            FontSize = 11,
             FontWeight = FontWeights.SemiBold,
-            HorizontalAlignment = HorizontalAlignment.Center,
-            TextAlignment = TextAlignment.Center,
+            Foreground = MenuBarTheme.Foreground,
             TextTrimming = TextTrimming.CharacterEllipsis
         };
-        // 激活瓦片文字恒白字；非激活随主题前景
-        if (active)
+        textCol.Children.Add(titleText);
+        if (!string.IsNullOrEmpty(summary))
         {
-            glyphText.Foreground = Brushes.White;
-            titleText.Foreground = Brushes.White;
+            summaryText = new TextBlock
+            {
+                Text = summary,
+                FontSize = 10.5,
+                Margin = new Thickness(0, 1, 0, 0),
+                TextTrimming = TextTrimming.CharacterEllipsis,
+                Opacity = 0.85
+            };
+            ApplySummaryForeground(summaryText, active);
+            textCol.Children.Add(summaryText);
+        }
+        Grid.SetColumn(textCol, 2);
+        row.Children.Add(textCol);
+
+        // 右侧：开关项放 ToggleSwitch（点击自动翻转 + 触发切换）；非开关项放 › 指示
+        ToggleSwitch? toggle = null;
+        if (feature.IsToggle)
+        {
+            toggle = new ToggleSwitch
+            {
+                IsOn = active,
+                VerticalAlignment = VerticalAlignment.Center
+            };
+            toggle.Toggled += (_, _) =>
+            {
+                try { _ = ToggleTileAsync(tile, feature); }
+                catch { /* 切换失败静默 */ }
+            };
+            Grid.SetColumn(toggle, 3);
+            row.Children.Add(toggle);
         }
         else
         {
-            SetThemeBinding(glyphText, TextBlock.ForegroundProperty, "ThemeForeground");
-            SetThemeBinding(titleText, TextBlock.ForegroundProperty, "ThemeForeground");
+            var arrow = new TextBlock
+            {
+                Text = "›",
+                FontSize = 16,
+                VerticalAlignment = VerticalAlignment.Center,
+                Margin = new Thickness(4, 0, 0, 0)
+            };
+            SetThemeBinding(arrow, TextBlock.ForegroundProperty, "ThemeMutedForeground");
+            Grid.SetColumn(arrow, 3);
+            row.Children.Add(arrow);
         }
-        tile.Child = new StackPanel
-        {
-            VerticalAlignment = VerticalAlignment.Center,
-            Children = { glyphText, titleText }
-        };
 
-        tile.MouseLeftButtonUp += (_, _) =>
+        tile.Child = row;
+        AttachTileHover(tile);
+        tile.MouseLeftButtonUp += (_, _) => OnTileLeftClick(tile, feature);
+        tile.MouseRightButtonUp += (_, _) => OnTileRightClick(tile, feature);
+
+        _tileRefs[feature.Title] = new TileRef
         {
-            var anchor = tile.PointToScreen(new Point(0, 0));
-            feature.OnActivate(anchor);
+            Tile = tile,
+            SummaryText = summaryText,
+            IconCircle = iconCircle,
+            Switch = toggle,
+            HasSummary = summaryText is not null,
+            Feature = feature
         };
         return tile;
     }
 
+    /// <summary>应用瓦片底色与描边：active=true 强调蓝底；false 透明底 + 主题描边。</summary>
+    private static void ApplyTileVisual(Border tile, bool active)
+    {
+        tile.Background = active ? TileAccent : Brushes.Transparent;
+        if (active)
+        {
+            tile.BorderBrush = TileAccent;
+        }
+        else
+        {
+            SetThemeBinding(tile, Border.BorderBrushProperty, "ThemeSeparator");
+        }
+    }
+
+    private static void ApplyIconCircleVisual(Border iconCircle, bool active)
+    {
+        if (!active)
+        {
+            SetThemeBinding(iconCircle, Border.BackgroundProperty, "ThemeContentBackground");
+        }
+        else
+        {
+            iconCircle.Background = Brushes.Transparent;
+        }
+    }
+
+    private static void ApplySummaryForeground(TextBlock summaryText, bool active)
+    {
+        if (active)
+        {
+            summaryText.Foreground = MenuBarTheme.Foreground;
+        }
+        else
+        {
+            SetThemeBinding(summaryText, TextBlock.ForegroundProperty, "ThemeMutedForeground");
+        }
+    }
+
+    /// <summary>瓦片左键：可切换项先切换无线电；否则打开独立面板。</summary>
+    private void OnTileLeftClick(Border tile, ControlCenterFeature feature)
+    {
+        if (feature.IsToggle)
+        {
+            _ = ToggleTileAsync(tile, feature);
+            return;
+        }
+        OnTileRightClick(tile, feature);
+    }
+
+    /// <summary>瓦片右键：始终打开该功能的独立完整面板。</summary>
+    private void OnTileRightClick(Border tile, ControlCenterFeature feature)
+    {
+        var anchor = MenuBarScreen.ToLogical(tile, tile.PointToScreen(new Point(0, 0)));
+        feature.OnActivate(anchor);
+    }
+
+    private async Task ToggleTileAsync(Border tile, ControlCenterFeature feature)
+    {
+        if (feature.ToggleAsync is null) return;
+        var result = await feature.ToggleAsync();
+        if (result is null) return;
+
+        // 切换后立即按真实系统状态刷新该瓦片（SSID/连接设备名可能随开关变化）
+        await RefreshTileStateAsync(feature.Title);
+    }
+
+    /// <summary>异步刷新所有瓦片的无线电/连接状态（控制中心打开后调用，避免同步阻塞 UI）。</summary>
+    private async Task RefreshTileStatesAsync()
+    {
+        foreach (var title in _tileRefs.Keys.ToArray())
+        {
+            await RefreshTileStateAsync(title);
+        }
+    }
+
+    private async Task RefreshTileStateAsync(string title)
+    {
+        if (!_tileRefs.TryGetValue(title, out var refs)) return;
+        var feature = refs.Feature;
+
+        string summary;
+        bool? radioOn = null;
+        if (title == "Wi‑Fi")
+        {
+            radioOn = (await RadioInterop.GetStateAsync(RadioKind.WiFi)) == RadioState.On;
+            summary = feature.Summary();
+            // 如果无线电关闭，小结应明确显示；如果打开但没连，显示"未连接"/SSID
+            if (radioOn == false) summary = "已关闭";
+        }
+        else if (title == "蓝牙")
+        {
+            radioOn = (await RadioInterop.GetStateAsync(RadioKind.Bluetooth)) == RadioState.On;
+            summary = feature.Summary();
+            if (radioOn == false) summary = "已关闭";
+        }
+        else
+        {
+            summary = feature.Summary();
+        }
+
+        bool active = IsActiveSummary(summary);
+        if (radioOn.HasValue) active = radioOn.Value;
+
+        await Dispatcher.InvokeAsync(() =>
+        {
+            if (refs.HasSummary && refs.SummaryText is not null)
+            {
+                refs.SummaryText.Text = summary;
+            }
+            ApplyTileVisual(refs.Tile, active);
+            ApplyIconCircleVisual(refs.IconCircle, active);
+            if (refs.SummaryText is not null)
+            {
+                ApplySummaryForeground(refs.SummaryText, active);
+            }
+            // 同步右侧开关（真实无线电状态驱动，点击后由 ToggleAsync 的结果刷回）
+            if (refs.Switch is not null)
+            {
+                refs.Switch.IsOn = active;
+            }
+        });
+    }
+
+    /// <summary>瓦片悬停反馈。激活态已有强调蓝底，不再叠加。</summary>
+    private static void AttachTileHover(Border tile)
+    {
+        tile.MouseEnter += (_, _) =>
+        {
+            if (!IsTileActive(tile)) tile.Background = MenuBarTheme.Hover;
+        };
+        tile.MouseLeave += (_, _) =>
+        {
+            if (!IsTileActive(tile)) tile.Background = Brushes.Transparent;
+        };
+        tile.MouseLeftButtonDown += (_, _) =>
+        {
+            if (!IsTileActive(tile)) tile.Background = MenuBarTheme.Pressed;
+        };
+    }
+
+    private static bool IsTileActive(Border tile) => ReferenceEquals(tile.Background, TileAccent);
+
     // ============================================================
-    //  模块卡片：统一圆角 + 半透明背景
+    //  模块卡片（统一规格：头部「标题左 / 数值右」+ 内容）
     // ============================================================
-    private static FrameworkElement BuildModuleCard(FrameworkElement content, Thickness margin)
+
+    /// <summary>卡片右上角数值文本（次要前景，右对齐，过长截断）。</summary>
+    private static TextBlock CreateCardValue(string text)
+    {
+        var tb = new TextBlock
+        {
+            Text = text,
+            FontSize = 11,
+            VerticalAlignment = VerticalAlignment.Center,
+            TextAlignment = TextAlignment.Right,
+            MaxWidth = 130,
+            TextTrimming = TextTrimming.CharacterEllipsis
+        };
+        SetThemeBinding(tb, TextBlock.ForegroundProperty, "ThemeMutedForeground");
+        return tb;
+    }
+
+    /// <summary>卡片头部：标题左、数值右。三张卡片共用，保证纵向对齐。</summary>
+    private static FrameworkElement BuildCardHeader(string title, FrameworkElement? value)
+    {
+        var grid = new Grid { Margin = new Thickness(0, 0, 0, 8) };
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+        var t = new TextBlock
+        {
+            Text = title,
+            FontSize = 12,
+            FontWeight = FontWeights.Medium,
+            VerticalAlignment = VerticalAlignment.Center
+        };
+        Grid.SetColumn(t, 0);
+        grid.Children.Add(t);
+
+        if (value is not null)
+        {
+            Grid.SetColumn(value, 1);
+            grid.Children.Add(value);
+        }
+        return grid;
+    }
+
+    private static FrameworkElement BuildModuleCard(string title, FrameworkElement? value, FrameworkElement body, Thickness margin)
     {
         var card = new Border
         {
@@ -369,217 +530,380 @@ internal sealed class ControlCenterWindow : MenuBarPopupWindow
             Padding = new Thickness(14, 12, 14, 12),
             Margin = margin,
             BorderThickness = new Thickness(1),
+            Background = Brushes.Transparent,
             SnapsToDevicePixels = true,
-            UseLayoutRounding = true,
-            Child = content
+            UseLayoutRounding = true
         };
-        // 模块卡片：透明背景，仅靠描边显示模块边界，无黑色色块
-        card.Background = Brushes.Transparent;
-        // 胶囊描边：半透明白色确保模块边界可见
-        card.BorderBrush = new SolidColorBrush(Color.FromArgb(60, 255, 255, 255));
+        // 卡片描边走主题令牌（此前写死 Color.FromArgb(60,255,255,255)，亮色模式下几乎看不见）
+        SetThemeBinding(card, Border.BorderBrushProperty, "ThemeSeparator");
+
+        var column = new StackPanel { Orientation = Orientation.Vertical };
+        column.Children.Add(BuildCardHeader(title, value));
+        column.Children.Add(body);
+        card.Child = column;
         return card;
     }
 
-    private FrameworkElement BuildBrightnessSection()
+    // ============================================================
+    //  显示器卡片（亮度）
+    // ============================================================
+    private FrameworkElement BuildBrightnessCard()
     {
-        var column = new StackPanel { Orientation = Orientation.Vertical };
+        _brightnessValue = CreateCardValue("—");
+
+        FrameworkElement body;
         if (_brightness is not null)
         {
-            // 不显示标题、不显示"显示设置"链接：卡片已在独立的"显示器"模块中
-            _brightnessControl = new BrightnessSliderControl(_brightness, title: "显示器", showSettingsLink: false);
-            column.Children.Add(_brightnessControl.Root);
+            // showValueLabel=false：百分比统一放到卡片头部（与声音卡片对齐），滑杆右侧不再重复显示
+            _brightnessControl = new BrightnessSliderControl(_brightness, title: null, showSettingsLink: false, showValueLabel: false);
+            body = _brightnessControl.Root;
+            _brightnessValue.Text = FormatBrightness();
         }
         else
         {
-            column.Children.Add(new TextBlock
-            {
-                Text = "显示器",
-                FontSize = 12,
-                FontWeight = FontWeights.Medium,
-                Margin = new Thickness(0, 0, 0, 8)
-            });
-            var unavailable = new TextBlock
-            {
-                Text = "亮度调节不可用",
-                FontSize = 11
-            };
-            // 次要提示：次要前景走主题令牌
+            var unavailable = new TextBlock { Text = "亮度调节不可用", FontSize = 11 };
             SetThemeBinding(unavailable, TextBlock.ForegroundProperty, "ThemeMutedForeground");
-            column.Children.Add(unavailable);
+            body = unavailable;
         }
-        return column;
+
+        return BuildModuleCard("显示器", _brightnessValue, body, new Thickness(0, 10, 0, 0));
     }
 
-    private FrameworkElement BuildVolumeMicSection()
+    private string FormatBrightness()
     {
-        var column = new StackPanel();
-        column.Children.Add(new TextBlock
+        if (_brightness is null || !_brightness.TryGetRange(out int min, out int cur, out int max) || max <= min)
         {
-            Text = "声音",
-            FontSize = 12,
-            FontWeight = FontWeights.Medium,
-            Margin = new Thickness(0, 0, 0, 8)
-        });
+            return "—";
+        }
+        int pct = (int)Math.Round((cur - min) * 100.0 / (max - min));
+        return $"{Math.Clamp(pct, 0, 100)}%";
+    }
 
-        var row = new Grid();
+    private void OnBrightnessChanged(object? sender, StatusSnapshot snapshot)
+    {
+        // 轮询器在后台线程广播；改 WPF 控件必须切回 UI 线程
+        Dispatcher.BeginInvoke(new Action(() =>
+        {
+            if (_brightnessValue is not null)
+            {
+                _brightnessValue.Text = FormatBrightness();
+            }
+        }));
+    }
+
+    // ============================================================
+    //  声音卡片（音量 + 麦克风静音）
+    // ============================================================
+    private FrameworkElement BuildVolumeCard()
+    {
+        _volumeValue = CreateCardValue("—");
+
+        var row = new Grid { VerticalAlignment = VerticalAlignment.Center };
         row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
         row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
 
-        // 音量滑块：与声音面板主音量滑杆复用同一样式（两端半圆轨道 + 白色圆球拇指），支持拖动设置
-        var volProgress = _vol is null ? -1 : Math.Clamp(_vol.GetSnapshot().Progress, 0, 100);
-        var volSlider = new Slider
+        double initial = ReadRenderVolumePercent();
+        var slider = new Slider
         {
             Minimum = 0,
             Maximum = 100,
-            Value = volProgress < 0 ? 50 : volProgress,
+            Value = initial < 0 ? 50 : initial,
             SmallChange = 1,
             LargeChange = 10,
             VerticalAlignment = VerticalAlignment.Center,
             MinHeight = 24,
             Style = NativePanelStyles.CreateCircleThumbSliderStyle()
         };
-        // 流畅滑杆：拖动过程中不调系统 API，拖动结束/点击跳转时才设置主音量
-        NativePanelStyles.ConfigureSmoothSlider(volSlider, v =>
-        {
-            try
+        // 流畅滑杆：拖动中只更新头部百分比，拖动结束/点击跳转才调系统 API
+        NativePanelStyles.ConfigureSmoothSlider(slider,
+            onValueCommitted: v =>
             {
+                double pct = Math.Clamp(v, 0, 100);
                 if (AudioCoreNative.IsAvailable)
                 {
-                    float vol = (float)(Math.Clamp(v, 0, 100) / 100.0);
-                    AudioCoreNative.SetMasterVolume(vol);
+                    AudioCoreNative.SetMasterVolume((float)(pct / 100.0));
                 }
-            }
-            catch { /* 音频服务异常时静默忽略 */ }
-        });
-        Grid.SetColumn(volSlider, 0);
-        row.Children.Add(volSlider);
+                if (_volumeValue is not null) _volumeValue.Text = $"{(int)Math.Round(pct)}%";
+            },
+            onValueChanging: v =>
+            {
+                if (_volumeValue is not null) _volumeValue.Text = $"{(int)Math.Round(Math.Clamp(v, 0, 100))}%";
+            });
+        _volumeSlider = slider;
+        Grid.SetColumn(slider, 0);
+        row.Children.Add(slider);
 
-        // 麦克风静音按钮：静音态为橙色填充，非静音为半透明灰色
-        var micSnap = _mic?.GetSnapshot();
-        var muted = micSnap is not null && micSnap.IconKey == "mic-muted";
-        var micBtn = new Border
+        // 麦克风静音按钮（此前只是装饰：样式齐了但没挂点击事件 → 点了没反应）
+        _micButton = BuildMicButton();
+        Grid.SetColumn(_micButton, 1);
+        row.Children.Add(_micButton);
+
+        _volumeValue.Text = initial < 0 ? "—" : $"{(int)Math.Round(initial)}%";
+        return BuildModuleCard("声音", _volumeValue, row, new Thickness(0, 10, 0, 0));
+    }
+
+    /// <summary>读取输出端点音量百分比（0-100）。不可用时返回 -1。</summary>
+    private double ReadRenderVolumePercent()
+    {
+        if (AudioCoreNative.IsAvailable)
         {
-            Width = 30,
-            Height = 30,
-            CornerRadius = new CornerRadius(15),
-            Background = muted
-                ? new SolidColorBrush(Color.FromRgb(255, 149, 0))
-                : new SolidColorBrush(Color.FromArgb(160, 255, 255, 255)),
+            var st = AudioCoreNative.GetStatus(AudioFlow.Render);
+            if (st.Ok) return Math.Clamp(st.VolumeFloat * 100.0, 0, 100);
+        }
+        if (_vol is not null)
+        {
+            var snap = _vol.GetSnapshot();
+            if (snap.Progress >= 0) return Math.Clamp(snap.Progress, 0, 100);
+        }
+        return -1;
+    }
+
+    private Border BuildMicButton()
+    {
+        var btn = new Border
+        {
+            Width = 32,
+            Height = 32,
+            CornerRadius = new CornerRadius(16),
             Margin = new Thickness(10, 0, 0, 0),
-            Child = new TextBlock
-            {
-                Text = "\uE720",
-                FontFamily = new FontFamily("Segoe MDL2 Assets"),
-                FontSize = 14,
-                Foreground = muted ? Brushes.White : new SolidColorBrush(Color.FromArgb(255, 50, 50, 52)),
-                HorizontalAlignment = HorizontalAlignment.Center,
-                VerticalAlignment = VerticalAlignment.Center,
-                TextAlignment = TextAlignment.Center
-            }
-        };
-        Grid.SetColumn(micBtn, 1);
-        row.Children.Add(micBtn);
-
-        column.Children.Add(row);
-        return column;
-    }
-
-    private static FrameworkElement BuildRoundedProgressTrack(double progressPercent)
-    {
-        var progress = Math.Clamp(progressPercent, 0, 100);
-        var trackGrid = new Grid { Height = 18, UseLayoutRounding = true, SnapsToDevicePixels = true };
-        var pCol = (double.IsNaN(progress) || progress < 0) ? 0 : progress;
-        trackGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(pCol, GridUnitType.Star) });
-        trackGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(Math.Max(0, 100 - pCol), GridUnitType.Star) });
-
-        var fillCell = new Border
-        {
-            CornerRadius = new CornerRadius(9, 0, 0, 9)
-        };
-        // 进度填充色：主题前景（浅主题深条、深主题浅条），保证面板内可读
-        SetThemeBinding(fillCell, Border.BackgroundProperty, "ThemeForeground");
-        Grid.SetColumn(fillCell, 0);
-        trackGrid.Children.Add(fillCell);
-        trackGrid.Background = new SolidColorBrush(Color.FromArgb(130, 120, 120, 128));
-
-        var wrap = new Border
-        {
-            CornerRadius = new CornerRadius(9),
-            Height = 18,
-            Clip = new RectangleGeometry(new Rect(0, 0, 10000, 18)) { RadiusX = 9, RadiusY = 9 },
-            Child = trackGrid
-        };
-        return wrap;
-    }
-
-    private static FrameworkElement BuildMediaSection()
-    {
-        var row = new Grid { VerticalAlignment = VerticalAlignment.Center };
-        row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-        row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-
-        var left = new StackPanel
-        {
-            Orientation = Orientation.Horizontal,
             VerticalAlignment = VerticalAlignment.Center,
-            Children =
-            {
-                new TextBlock
-                {
-                    Text = "\uEC4F",
-                    FontFamily = new FontFamily("Segoe MDL2 Assets"),
-                    FontSize = 18,
-                    VerticalAlignment = VerticalAlignment.Center,
-                    Margin = new Thickness(0, 0, 10, 0)
-                },
-                new TextBlock
-                {
-                    // 歌名不写死；后续接入 SMTC 时替换为真实 Title/Artist
-                    Text = " ",
-                    FontSize = 12,
-                    VerticalAlignment = VerticalAlignment.Center
-                }
-            }
+            Cursor = System.Windows.Input.Cursors.Hand
         };
-        Grid.SetColumn(left, 0);
-        row.Children.Add(left);
-
-        var right = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
-        right.Children.Add(MakeMediaGlyphButton("\uE100")); // 上一首 (Prev)
-        right.Children.Add(MakeMediaGlyphButton("\uE102")); // 播放/暂停
-        right.Children.Add(MakeMediaGlyphButton("\uE101")); // 下一首 (Next)
-        Grid.SetColumn(right, 1);
-        row.Children.Add(right);
-
-        return row;
+        btn.ToolTip = "麦克风静音";
+        ApplyMicVisual(btn);
+        btn.MouseLeftButtonUp += (_, _) => ToggleMicMute();
+        return btn;
     }
 
-    private static FrameworkElement MakeMediaGlyphButton(string glyph)
+    /// <summary>按当前采集端点状态重画麦克风按钮（橙底=已静音，次内容底=正常）。</summary>
+    private void ApplyMicVisual(Border btn)
     {
-        var b = new Border
+        bool muted = IsMicMuted();
+        btn.Background = muted ? MicMutedBackground : null;
+        if (!muted)
+        {
+            SetThemeBinding(btn, Border.BackgroundProperty, "ThemeContentBackground");
+        }
+        btn.Child = new Viewbox
+        {
+            Width = 17,
+            Height = 17,
+            Stretch = Stretch.Uniform,
+            Child = ControlCenterGlyph.Create(
+                ControlCenterIcon.Microphone,
+                muted ? OnAccentForeground : MenuBarTheme.Foreground)
+        };
+        btn.ToolTip = muted ? "麦克风已静音（点击取消静音）" : "麦克风正常（点击静音）";
+    }
+
+    /// <summary>采集端点（麦克风）当前是否静音。端点不可用时按"未静音"处理（按钮不高橙）。</summary>
+    private static bool IsMicMuted()
+    {
+        if (!AudioCoreNative.IsAvailable) return false;
+        var st = AudioCoreNative.GetStatus(AudioFlow.Capture);
+        return st.Ok && st.Muted;
+    }
+
+    /// <summary>切换麦克风静音：保持当前采集音量不变，只翻转静音位。</summary>
+    private void ToggleMicMute()
+    {
+        if (!AudioCoreNative.IsAvailable) return;
+        var st = AudioCoreNative.GetStatus(AudioFlow.Capture);
+        if (!st.Ok) return;
+        AudioCoreNative.SetCaptureVolume(st.VolumeFloat, !st.Muted);
+        if (_micButton is not null)
+        {
+            ApplyMicVisual(_micButton);
+        }
+    }
+
+    private void OnVolumeChanged(object? sender, StatusSnapshot snapshot)
+    {
+        Dispatcher.BeginInvoke(new Action(() =>
+        {
+            double pct = ReadRenderVolumePercent();
+            if (_volumeValue is not null)
+            {
+                _volumeValue.Text = pct < 0 ? "—" : $"{(int)Math.Round(pct)}%";
+            }
+            // 外部改音量时同步滑杆；拖动中（已捕获鼠标）不覆盖，避免把用户手指拉回去
+            if (_volumeSlider is not null && pct >= 0 && !_volumeSlider.IsMouseCaptureWithin)
+            {
+                _volumeSlider.Value = pct;
+            }
+            if (_micButton is not null)
+            {
+                ApplyMicVisual(_micButton);
+            }
+        }));
+    }
+
+    // ============================================================
+    //  正在播放卡片（SMTC）
+    // ============================================================
+    private FrameworkElement BuildMediaCard()
+    {
+        _mediaApp = CreateCardValue("无媒体");
+
+        var grid = new Grid { VerticalAlignment = VerticalAlignment.Center };
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(34) });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(10) });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+        // 封面占位：SMTC 缩略图需异步取流，控制中心只承载简略视图，用音乐字形占位
+        var album = new Border
+        {
+            Width = 34,
+            Height = 34,
+            CornerRadius = new CornerRadius(8),
+            VerticalAlignment = VerticalAlignment.Center
+        };
+        SetThemeBinding(album, Border.BackgroundProperty, "ThemeContentBackground");
+        album.Child = new Viewbox
+        {
+            Width = 18,
+            Height = 18,
+            Stretch = Stretch.Uniform,
+            Child = ControlCenterGlyph.Create(ControlCenterIcon.Music, MenuBarTheme.Foreground)
+        };
+        Grid.SetColumn(album, 0);
+        grid.Children.Add(album);
+
+        var textCol = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
+        _mediaTitle = new TextBlock
+        {
+            Text = "没有正在播放的媒体",
+            FontSize = 11.5,
+            FontWeight = FontWeights.SemiBold,
+            TextTrimming = TextTrimming.CharacterEllipsis
+        };
+        _mediaArtist = new TextBlock
+        {
+            Text = "打开音乐或视频应用后会显示在这里",
+            FontSize = 10.5,
+            Margin = new Thickness(0, 1, 0, 0),
+            TextTrimming = TextTrimming.CharacterEllipsis
+        };
+        SetThemeBinding(_mediaArtist, TextBlock.ForegroundProperty, "ThemeMutedForeground");
+        textCol.Children.Add(_mediaTitle);
+        textCol.Children.Add(_mediaArtist);
+        Grid.SetColumn(textCol, 2);
+        grid.Children.Add(textCol);
+
+        var buttons = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
+        buttons.Children.Add(MakeMediaButton(
+            ControlCenterGlyph.CreatePrev(MenuBarTheme.Foreground),
+            () => SendMedia(MediaCommand.Previous)));
+        _playPausePath = ControlCenterGlyph.CreatePlay(MenuBarTheme.Foreground);
+        buttons.Children.Add(MakeMediaButton(
+            _playPausePath,
+            () => SendMedia(MediaCommand.Toggle)));
+        buttons.Children.Add(MakeMediaButton(
+            ControlCenterGlyph.CreateNext(MenuBarTheme.Foreground),
+            () => SendMedia(MediaCommand.Next)));
+        Grid.SetColumn(buttons, 3);
+        grid.Children.Add(buttons);
+
+        // 启动 SMTC 会话轮询（2s 一轮 + 命令后即时回读）
+        if (!_isPreview)
+        {
+            _media = new MediaSessionController();
+            _media.Changed += OnMediaChanged;
+            _media.Start();
+        }
+
+        return BuildModuleCard("正在播放", _mediaApp, grid, new Thickness(0, 10, 0, 0));
+    }
+
+    /// <param name="glyph">图标 Path。播放/暂停按钮传的是**可复用的 Path 实例**，
+    /// 播放状态变化时直接改它的 Data（不重建按钮，避免闪烁与丢失悬停态）。</param>
+    private Border MakeMediaButton(Path glyph, Action onClick)
+    {
+        var host = new Border
         {
             Width = 28,
             Height = 28,
             CornerRadius = new CornerRadius(14),
             Background = Brushes.Transparent,
             Margin = new Thickness(4, 0, 0, 0),
-            Child = new TextBlock
-            {
-                Text = glyph,
-                FontFamily = new FontFamily("Segoe MDL2 Assets"),
-                FontSize = 13,
-                HorizontalAlignment = HorizontalAlignment.Center,
-                VerticalAlignment = VerticalAlignment.Center,
-                TextAlignment = TextAlignment.Center
-            }
+            VerticalAlignment = VerticalAlignment.Center
         };
-        return b;
+        host.Child = new Viewbox
+        {
+            Width = 14,
+            Height = 14,
+            Stretch = Stretch.Uniform,
+            Child = glyph
+        };
+        host.MouseEnter += (_, _) => host.Background = MenuBarTheme.Hover;
+        host.MouseLeave += (_, _) => host.Background = Brushes.Transparent;
+        host.MouseLeftButtonDown += (_, _) => host.Background = MenuBarTheme.Pressed;
+        host.MouseLeftButtonUp += (_, _) => onClick();
+        _mediaButtons.Add(host);
+        return host;
+    }
+
+    private void SendMedia(MediaCommand command)
+    {
+        var controller = _media;
+        if (controller is null || controller.Active is null) return;
+        // 事件处理器非 async：显式丢弃 Task（非 async 方法内不会产生 CS4014）
+        _ = controller.SendAsync(command);
+    }
+
+    private void OnMediaChanged(object? sender, EventArgs e)
+    {
+        // MediaSessionController 的回调理论上已在 UI 线程，但为稳妥统一走一次 Dispatcher
+        Dispatcher.BeginInvoke(new Action(ApplyMediaState));
+    }
+
+    private void ApplyMediaState()
+    {
+        var session = _media?.Active;
+        // 是否播放由控制器判定（WinRT 的 Windows.Media.Control 类型收敛在控制器内，UI 层不直接引用）
+        bool playing = _media?.IsPlaying ?? false;
+
+        if (_mediaTitle is not null)
+        {
+            _mediaTitle.Text = session is null ? "没有正在播放的媒体" : session.Title;
+        }
+        if (_mediaArtist is not null)
+        {
+            _mediaArtist.Text = session is null
+                ? "打开音乐或视频应用后会显示在这里"
+                : (string.IsNullOrWhiteSpace(session.Artist) ? session.AppName : session.Artist);
+        }
+        if (_mediaApp is not null)
+        {
+            _mediaApp.Text = session is null ? "无媒体" : session.AppName;
+        }
+        if (_playPausePath is not null)
+        {
+            _playPausePath.Data = playing ? ControlCenterGlyph.PauseGeometry : ControlCenterGlyph.PlayGeometry;
+        }
+
+        // 没有会话时播放控制置灰（仍可点击，但视觉上明确不可用）
+        foreach (var btn in _mediaButtons)
+        {
+            btn.Opacity = session is null ? 0.35 : 1.0;
+            btn.Cursor = session is null ? null : System.Windows.Input.Cursors.Hand;
+        }
     }
 
     protected override void OnClosed(EventArgs e)
     {
+        if (_vol is not null) _vol.Changed -= OnVolumeChanged;
+        if (_brightness is not null) _brightness.Changed -= OnBrightnessChanged;
         _brightnessControl?.Dispose();
         _brightnessControl = null;
+        if (_media is not null)
+        {
+            _media.Changed -= OnMediaChanged;
+            _media.Dispose();
+            _media = null;
+        }
+        _mediaButtons.Clear();
         base.OnClosed(e);
     }
 }
