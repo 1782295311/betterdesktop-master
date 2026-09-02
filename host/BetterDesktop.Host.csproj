@@ -38,6 +38,7 @@
     <ProjectReference Include="..\packages\shell\Taskbar\BetterDesktop.Shell.Taskbar.csproj" />
     <ProjectReference Include="..\packages\shell\shell-start-menu\BetterDesktop.Shell.StartMenu.csproj" />
     <ProjectReference Include="..\packages\shell\shell-desktop\BetterDesktop.Shell.Desktop.csproj" />
+    <ProjectReference Include="..\packages\shell\shell-context-menu\BetterDesktop.Shell.ContextMenu.csproj" />
   </ItemGroup>
 
 </Project>
