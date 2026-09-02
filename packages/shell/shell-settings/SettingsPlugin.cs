@@ -58,8 +58,12 @@ public sealed class SettingsPlugin : IPlugin
         context.Provide<ISettingsWindowService>(new SettingsWindowService(
             () => new SettingsWindow(registry, settings, appearance, vibrancy)));
 
-        // 启动即打开设置窗口（与应用提取器一致的启动行为；后续改为配置开关/菜单入口）
-        context.Get<ISettingsWindowService>()?.Show();
+        // 启动弹出设置窗口：仅调试开关（BETTERDESKTOP_SETTINGS_ONSTART=1），默认不弹（挡桌面）；
+        // 设置入口在菜单栏 Logo 快捷菜单
+        if (Environment.GetEnvironmentVariable("BETTERDESKTOP_SETTINGS_ONSTART") == "1")
+        {
+            context.Get<ISettingsWindowService>()?.Show();
+        }
 
         return Task.CompletedTask;
     }

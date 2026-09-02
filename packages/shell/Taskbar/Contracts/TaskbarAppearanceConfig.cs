@@ -50,30 +50,34 @@ public sealed class TaskbarAppearance
 /// </summary>
 public sealed class TaskbarAppearanceConfig
 {
+    // 场景默认值规范（2026-09-02 用户定稿）：全部场景统一「不透明纯色（Opaque）+ 白色 + 不透明度 0」。
+    // 注意：TaskbarAppearance 类字段默认（Blur/0xCC808080）是历史遗留，禁止作为场景初值直接 new；
+    // 新增场景必须显式套用下面的规范化初始值。
+
     /// <summary>桌面空闲（无最大化/无浮层）时的外观。</summary>
-    public TaskbarAppearance Desktop { get; set; } = new() { Accent = TaskbarAccent.Blur };
+    public TaskbarAppearance Desktop { get; set; } = new() { Accent = TaskbarAccent.Opaque, Color = 0x00FFFFFF };
 
     /// <summary>有可见窗口（无最大化）时的外观。</summary>
-    public TaskbarAppearance VisibleWindow { get; set; } = new() { Accent = TaskbarAccent.Blur };
+    public TaskbarAppearance VisibleWindow { get; set; } = new() { Accent = TaskbarAccent.Opaque, Color = 0x00FFFFFF };
 
     /// <summary>有最大化窗口时的外观。</summary>
-    public TaskbarAppearance MaximizedWindow { get; set; } = new() { Accent = TaskbarAccent.Clear };
+    public TaskbarAppearance MaximizedWindow { get; set; } = new() { Accent = TaskbarAccent.Opaque, Color = 0x00FFFFFF };
 
     /// <summary>开始菜单打开时的外观（enabled=false 表示不参与，沿用上层）。</summary>
     public bool StartOpenedEnabled { get; set; } = true;
-    public TaskbarAppearance StartOpened { get; set; } = new() { Accent = TaskbarAccent.Acrylic };
+    public TaskbarAppearance StartOpened { get; set; } = new() { Accent = TaskbarAccent.Opaque, Color = 0x00FFFFFF };
 
     /// <summary>搜索打开时的外观。</summary>
     public bool SearchOpenedEnabled { get; set; } = true;
-    public TaskbarAppearance SearchOpened { get; set; } = new() { Accent = TaskbarAccent.Acrylic };
+    public TaskbarAppearance SearchOpened { get; set; } = new() { Accent = TaskbarAccent.Opaque, Color = 0x00FFFFFF };
 
     /// <summary>任务视图打开时的外观。</summary>
     public bool TaskViewOpenedEnabled { get; set; } = false;
-    public TaskbarAppearance TaskViewOpened { get; set; } = new() { Accent = TaskbarAccent.Blur };
+    public TaskbarAppearance TaskViewOpened { get; set; } = new() { Accent = TaskbarAccent.Opaque, Color = 0x00FFFFFF };
 
     /// <summary>省电模式时的外观。</summary>
     public bool BatterySaverEnabled { get; set; } = false;
-    public TaskbarAppearance BatterySaver { get; set; } = new() { Accent = TaskbarAccent.Opaque };
+    public TaskbarAppearance BatterySaver { get; set; } = new() { Accent = TaskbarAccent.Opaque, Color = 0x00FFFFFF };
 
     /// <summary>深拷贝，供引擎内部持有、避免外部修改。</summary>
     public TaskbarAppearanceConfig Clone()

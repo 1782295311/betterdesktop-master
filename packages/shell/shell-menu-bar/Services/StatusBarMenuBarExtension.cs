@@ -13,6 +13,8 @@ using BetterDesktop.Shell.MenuBar.Status;
 using BetterDesktop.Shell.MenuBar.Windows;
 using BetterDesktop.Shell.Settings.Contracts;
 using BetterDesktop.Shell.Status.Contracts;
+using BetterDesktop.Shell.Search.Contracts;
+using BetterDesktop.Shell.AppSource.Contracts;
 
 namespace BetterDesktop.Shell.MenuBar.Services;
 
@@ -32,8 +34,11 @@ internal sealed class StatusBarMenuBarExtension : IMenuBarExtension, IDisposable
     private readonly IMemoryMonitor? _mem;
     private readonly ICpuMonitor? _cpu;
     private readonly ISettingsService? _settings;
+    private readonly IStartMenuSearchService? _search;
+    private readonly IAppIconService? _appIcon;
 
     private MenuBarStatusStrip? _strip;
+    private SearchPopupWindow? _searchPopup;
     private ImePopupWindow? _imePopup;
     private ExtensionsCenterWindow? _extensionsCenterPopup;
     private CalendarPopupWindow? _calendarPopup;
@@ -59,7 +64,9 @@ internal sealed class StatusBarMenuBarExtension : IMenuBarExtension, IDisposable
         ICpuMonitor? cpu,
         IVibrancyService vibrancy,
         IAppearanceService? appearance,
-        ISettingsService? settings = null)
+        ISettingsService? settings = null,
+        IStartMenuSearchService? search = null,
+        IAppIconService? appIcon = null)
     {
         _vol = vol;
         _mic = mic;
@@ -72,6 +79,8 @@ internal sealed class StatusBarMenuBarExtension : IMenuBarExtension, IDisposable
         _vibrancy = vibrancy;
         _appearance = appearance;
         _settings = settings;
+        _search = search;
+        _appIcon = appIcon;
     }
 
     public FrameworkElement GetVisual()
@@ -91,6 +100,7 @@ internal sealed class StatusBarMenuBarExtension : IMenuBarExtension, IDisposable
 
     public void ClosePopup()
     {
+        _searchPopup?.Hide();
         _imePopup?.Hide();
         _extensionsCenterPopup?.Hide();
         _calendarPopup?.Hide();
@@ -129,6 +139,13 @@ internal sealed class StatusBarMenuBarExtension : IMenuBarExtension, IDisposable
                         e.Source, buttonWidth, new Size(400, 420));
                     break;
 
+                case MenuBarStatusButtonId.Search:
+                    // 搜索：弹出搜索面板（程序/设置/文件）。服务缺失时面板内显示"不可用"占位（M10）。
+                    ShowPopup(ref _searchPopup,
+                        () => new SearchPopupWindow(_search, _appIcon, _vibrancy, _appearance),
+                        e.Source, buttonWidth, new Size(440, 500));
+                    break;
+
                 case MenuBarStatusButtonId.Ime:
                     // 左键=切换输入法（直接切下一个，不弹系统选择器 UI），右键=打开输入法选择面板
                     if (e.IsRightButton)
@@ -144,6 +161,9 @@ internal sealed class StatusBarMenuBarExtension : IMenuBarExtension, IDisposable
                     else
                     {
                         ImeLayoutEnumerator.CycleOnce();
+                        // 切换后立即刷新按钮图标：模拟热键切换不改变前台窗口，事件泵不触发，
+                        // 500ms 兜底轮询也可能判定快照无变化——主动刷新保证图标跟随切换。
+                        _strip?.RefreshImeIcon();
                     }
                     break;
 
@@ -238,6 +258,7 @@ internal sealed class StatusBarMenuBarExtension : IMenuBarExtension, IDisposable
     /// <summary>收起除 <paramref name="except"/> 之外的所有面板（实现弹窗互斥）。</summary>
     private void CloseAllExcept(MenuBarPopupWindow? except)
     {
+        HideIfNot(_searchPopup, except);
         HideIfNot(_imePopup, except);
         HideIfNot(_extensionsCenterPopup, except);
         HideIfNot(_calendarPopup, except);
@@ -284,6 +305,7 @@ internal sealed class StatusBarMenuBarExtension : IMenuBarExtension, IDisposable
             _strip.Dispose();
             _strip = null;
         }
+        _searchPopup?.Close();
         _imePopup?.Close();
         _extensionsCenterPopup?.Close();
         _calendarPopup?.Close();

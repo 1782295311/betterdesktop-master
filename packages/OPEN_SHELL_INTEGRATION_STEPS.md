@@ -1,3 +1,5 @@
+> **[2026-09-01 已废弃]** 产品决策：不再改变系统开始菜单（不注入 explorer），只抑制系统菜单弹出（StartKeyHook 放行 Win + Esc 关闭）让自绘开始菜单优先。Open-Shell Direct-Use 路线终止，StartMenuDLL 不集成。本文档仅作历史方案存档。
+
 # Open-Shell-Menu 集成与包结构重组 · 步骤与操作文档
 
 > 日期：2026-08-25

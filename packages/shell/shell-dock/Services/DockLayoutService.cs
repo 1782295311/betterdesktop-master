@@ -82,6 +82,20 @@ public sealed class DockLayoutService : IDockLayoutService
                 return false;
             }
 
+            // ⚠️ 前台是"桌面宿主"（Progman/WorkerW）或本进程窗口（自绘桌面/菜单栏/dock）时
+            //    绝不算全屏——它们是无边框全屏窗口，会被下方覆盖判定误判，
+            //    导致"一点桌面 dock 就消失、且永远不再出现"（实测回归）。
+            _ = GetWindowThreadProcessId(hwnd, out var pid);
+            if (pid == (uint)Environment.ProcessId)
+            {
+                return false;
+            }
+
+            if (GetClassName(hwnd) is "Progman" or "WorkerW")
+            {
+                return false;
+            }
+
             if (!GetWindowRect(hwnd, out var rect))
             {
                 return false;
@@ -203,6 +217,20 @@ public sealed class DockLayoutService : IDockLayoutService
 
     [DllImport("user32.dll")]
     private static extern IntPtr GetForegroundWindow();
+
+    [DllImport("user32.dll")]
+    private static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
+
+    [DllImport("user32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
+    private static extern int GetClassName(IntPtr hWnd, System.Text.StringBuilder lpClassName, int nMaxCount);
+
+    /// <summary>取窗口类名（失败返回空串，M10）。</summary>
+    private static string GetClassName(IntPtr hWnd)
+    {
+        var sb = new System.Text.StringBuilder(256);
+        _ = GetClassName(hWnd, sb, sb.Capacity);
+        return sb.ToString();
+    }
 
     [DllImport("user32.dll")]
     private static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect);

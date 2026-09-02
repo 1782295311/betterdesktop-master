@@ -6,6 +6,7 @@
 //   各图标左键/右键打开对应独立面板（IME/电池/网络/内存/CPU/麦克风/声音/WiFi/蓝牙/亮度/日历/控制中心）。
 
 using BetterDesktop.Kernel.Contracts;
+using BetterDesktop.Shell.AppSource.Contracts;
 using BetterDesktop.Shell.Core.Surface;
 using BetterDesktop.Shell.Core.Vibrancy;
 using BetterDesktop.Shell.MenuBar.Contracts;
@@ -13,8 +14,10 @@ using BetterDesktop.Shell.MenuBar.Sections;
 using BetterDesktop.Shell.MenuBar.Services;
 using BetterDesktop.Shell.MenuBar.Windows;
 using BetterDesktop.Shell.Settings.Contracts;
-using BetterDesktop.Shell.StartMenu.Contracts;
 using BetterDesktop.Shell.Status.Contracts;
+using BetterDesktop.Shell.Search.Contracts;
+using BetterDesktop.Shell.Desktop.Contracts;
+using BetterDesktop.Shell.WindowTracker.Contracts;
 
 namespace BetterDesktop.Shell.MenuBar;
 
@@ -42,8 +45,17 @@ public sealed class MenuBarPlugin : IPlugin
         var vibrancy = context.Get<IVibrancyService>();
         var appearance = context.Get<IAppearanceService>();
         var settings = context.Get<ISettingsService>();
-        // 左区程序菜单复用开始菜单插件；未注册时为 null，MenuBarLeftZone 会自动不呈现该入口。
-        var startMenu = context.Get<IStartMenuService>();
+        // 左区 Logo 快捷功能菜单的"设置"项：打开设置窗口（SettingsPlugin 提供；缺失时菜单项点击无动作，M10）。
+        var settingsWindow = context.Get<ISettingsWindowService>();
+        // 左区前台窗口标题：IWindowTrackerService（WinEvent 钩子事件驱动，Bootstrap 4.6 注册）。
+        var windowTracker = context.Get<IWindowTrackerService>();
+        // 左区与自绘桌面联动：IDesktopBrowser（DesktopPlugin Provide；未加载时导航入口走 explorer 降级）。
+        var desktopBrowser = context.Get<IDesktopBrowser>();
+        // 搜索按钮复用 shell-search 聚合搜索服务（SearchPlugin 在 Bootstrap 4.7 注册，早于本插件）；
+        // 未注册时为 null，SearchPopupWindow 内显示"搜索不可用"占位（M10 降级）。
+        var search = context.Get<IStartMenuSearchService>();
+        // 搜索结果图标：IAppIconService（AppSourcePlugin 提供，按 AppItem 提取真实应用图标）。
+        var appIcon = context.Get<IAppIconService>();
 
         // Vibrancy 必要：窗口需毛玻璃；降级为 NullVibrancy 保证不抛
         vibrancy ??= new NullVibrancy();
@@ -59,14 +71,14 @@ public sealed class MenuBarPlugin : IPlugin
         }
 
         // 右区 = 紧凑状态条（系统托盘/FPS/CPU/内存/WiFi/网速/亮度/输入法/蓝牙/音量/麦克风/电池/通知/时间/桌面）
-        _statusBar = new StatusBarMenuBarExtension(vol, mic, bat, ime, brightness, net, mem, cpu, vibrancy, appearance, settings);
+        _statusBar = new StatusBarMenuBarExtension(vol, mic, bat, ime, brightness, net, mem, cpu, vibrancy, appearance, settings, search, appIcon);
         var extensions = new List<Contracts.IMenuBarExtension>(capacity: 1)
         {
             _statusBar
         };
 
         // 构造并显示菜单栏主窗口
-        _window = new MenuBarWindow(extensions, vibrancy, appearance, context.Logger, startMenu);
+        _window = new MenuBarWindow(extensions, vibrancy, appearance, context.Logger, settingsWindow, windowTracker, desktopBrowser, settings);
         _window.Show();
 
         // 设置 → 菜单栏：系统功能（系统托盘/CPU/内存/WiFi/网速/亮度/输入法/蓝牙/音量/麦克风/电池/通知/时间/桌面）
@@ -77,7 +89,7 @@ public sealed class MenuBarPlugin : IPlugin
                 (id, on) => _statusBar?.SetComponentVisible(id, on),
                 hide => _statusBar?.SetTrayHideSystemIcons(hide)));
 
-        context.Logger.Info($"{Name} 已加载：已显示菜单栏主窗口，左区程序菜单{(startMenu is null ? "（服务缺失，已降级隐藏）" : string.Empty)}，右区状态条（{extensions.Count} 个扩展）就绪");
+        context.Logger.Info($"{Name} 已加载：已显示菜单栏主窗口，左区 Logo 快捷功能菜单{(settingsWindow is null ? "（设置服务缺失，设置项降级）" : string.Empty)}，右区状态条（{extensions.Count} 个扩展）就绪");
         return Task.CompletedTask;
     }
 

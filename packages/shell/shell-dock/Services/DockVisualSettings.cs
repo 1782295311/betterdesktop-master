@@ -34,17 +34,18 @@ public sealed class DockVisualSettings
     }
 
     // ---- 图标尺寸 ----
-    /// <summary>固定/运行图标边长（px）。默认 44。</summary>
-    public double IconSize => Clamp(_settings?.Get("dock.iconSize", 44d) ?? 44d, 24, 96);
+    // 默认值 = 2026-09-01 用户实测调优值固化（设置分区滑块同默认，新环境开箱即此观感）。
+    /// <summary>固定/运行图标边长（px）。默认 32.71。</summary>
+    public double IconSize => Clamp(_settings?.Get("dock.iconSize", 32.71d) ?? 32.71d, 24, 96);
 
-    /// <summary>图标项之间的水平间距（px）。默认 12。</summary>
-    public double IconSpacing => Clamp(_settings?.Get("dock.iconSpacing", 12d) ?? 12d, 0, 48);
+    /// <summary>图标项之间的水平间距（px）。默认 6.54。</summary>
+    public double IconSpacing => Clamp(_settings?.Get("dock.iconSpacing", 6.54d) ?? 6.54d, 0, 48);
 
     /// <summary>Dock 距屏幕底部的高度（px）。默认 10。</summary>
     public double BottomMargin => Clamp(_settings?.Get("dock.bottomMargin", 10d) ?? 10d, 0, 200);
 
-    /// <summary>是否在图标下方显示软件名称。默认 true。</summary>
-    public bool ShowLabel => _settings?.Get("dock.showLabel", true) ?? true;
+    /// <summary>是否在图标下方显示软件名称。默认 false。</summary>
+    public bool ShowLabel => _settings?.Get("dock.showLabel", false) ?? false;
 
     // ---- 运行区 ----
     /// <summary>是否在右半区显示「运行中的应用」(从 RunningAppDetector 枚举的窗口去重图标)。
@@ -52,20 +53,20 @@ public sealed class DockVisualSettings
     public bool ShowRunning => _settings?.Get("dock.showRunning", true) ?? true;
 
     // ---- 倒影 ----
-    /// <summary>是否开启图标倒影。默认 false。</summary>
-    public bool ReflectionEnabled => _settings?.Get("dock.reflection.enabled", false) ?? false;
+    /// <summary>是否开启图标倒影。默认 true。</summary>
+    public bool ReflectionEnabled => _settings?.Get("dock.reflection.enabled", true) ?? true;
 
-    /// <summary>倒影强度（0-1，影响倒影的模糊/暗化混合，越大越实）。默认 0.6。</summary>
-    public double ReflectionIntensity => Clamp01(_settings?.Get("dock.reflection.intensity", 0.6d) ?? 0.6d);
+    /// <summary>倒影强度（0-1，影响倒影的模糊/暗化混合，越大越实）。默认 0.77。</summary>
+    public double ReflectionIntensity => Clamp01(_settings?.Get("dock.reflection.intensity", 0.77d) ?? 0.77d);
 
-    /// <summary>倒影整体不透明度（0-1）。默认 0.4。</summary>
-    public double ReflectionOpacity => Clamp01(_settings?.Get("dock.reflection.opacity", 0.4d) ?? 0.4d);
+    /// <summary>倒影整体不透明度（0-1）。默认 0.87。</summary>
+    public double ReflectionOpacity => Clamp01(_settings?.Get("dock.reflection.opacity", 0.87d) ?? 0.87d);
 
-    /// <summary>倒影与图标之间的距离（px）。默认 4。</summary>
-    public double ReflectionDistance => Clamp(_settings?.Get("dock.reflection.distance", 4d) ?? 4d, 0, 40);
+    /// <summary>倒影与图标之间的距离（px）。默认 2.59。</summary>
+    public double ReflectionDistance => Clamp(_settings?.Get("dock.reflection.distance", 2.59d) ?? 2.59d, 0, 40);
 
-    /// <summary>倒影渐变消失距离（px，从倒影顶端向下渐隐的长度）。默认 28。</summary>
-    public double ReflectionGradientDistance => Clamp(_settings?.Get("dock.reflection.gradientDistance", 28d) ?? 28d, 4, 120);
+    /// <summary>倒影渐变消失距离（px，从倒影顶端向下渐隐的长度）。默认 48.47。</summary>
+    public double ReflectionGradientDistance => Clamp(_settings?.Get("dock.reflection.gradientDistance", 48.47d) ?? 48.47d, 4, 120);
 
     /// <summary>倒影倾斜角度（度，-30 左倾到 +30 右倾,0 为垂直）。默认 0。</summary>
     public double ReflectionSkew => Clamp(_settings?.Get("dock.reflection.skew", 0d) ?? 0d, -30, 30);
@@ -73,8 +74,16 @@ public sealed class DockVisualSettings
     /// <summary>模拟太阳日升日落：倒影倾斜角度与方向随时间平滑变化（全天 24h 正弦周期：
     /// 6:00 日出→右倾 +30°、12:00 正午→垂直 0°、18:00 日落→左倾 -30°、
     /// 18→24 反向回正、24:00/0:00→垂直 0°、再衔接次日日出，无缝循环）。
-    /// 开启后忽略手动 <see cref="ReflectionSkew"/>。默认 false。</summary>
-    public bool SunSync => _settings?.Get("dock.reflection.sunSync", false) ?? false;
+    /// 开启后忽略手动 <see cref="ReflectionSkew"/>。默认 true。</summary>
+    public bool SunSync => _settings?.Get("dock.reflection.sunSync", true) ?? true;
+
+    // ---- 空闲自动隐藏 ----
+    /// <summary>
+    /// 用户无任何输入（鼠标/键盘，GetLastInputInfo 系统级空闲）达到该分钟数后，
+    /// dock 与菜单栏自动隐藏；期间任何输入立即恢复显示，操作中绝不隐藏。
+    /// 默认 20 分钟（shell.idleHideMinutes，dock 与菜单栏共用同一阈值）。
+    /// </summary>
+    public double IdleHideMinutes => Clamp(_settings?.Get("shell.idleHideMinutes", 20d) ?? 20d, 1, 240);
 
     // ---- 材质（dock 窗口自身清晰/模糊） ----
     /// <summary>Dock 窗口材质：<c>blur</c>=透亮模糊（BlurBehind，高斯模糊不叠暗色调），

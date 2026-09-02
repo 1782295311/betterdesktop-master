@@ -86,6 +86,11 @@ public sealed class ProgramSearchProvider : ISearchResultProvider
     /// 子序列匹配打分：query 字符按顺序出现在 name 中则得分；完整匹配才有分。
     /// 词首命中 +3（开头 / 大写 / 分隔符后）、连续匹配 +2、每字符基础 +1。
     /// 例：查询 "not" 能匹配 "Notepad"（10 分）；"gc" 能匹配 "Google Chrome"（双词首 8 分）。
+    /// 【强信号加分，统一跨 Provider 量纲】（FileSearchProvider.ScoreFileName 同一套基准）：
+    ///   - 名字以 query 开头 +50：前缀命中是最高置信信号（"MAA" 对 "maa"、"Notepad" 对 "not"），
+    ///     否则会被散落子序列噪声压过（搜 maa 时 "Microsoft Visual..."（M..a..a = 6 分）
+    ///     曾压过文件 "MAA.exe" 前缀命中）。
+    ///   - query 作为完整词出现 +40：词边界精确命中（"Google Chrome" 对 "chrome"）。
     /// </summary>
     internal static int Score(string query, string name)
     {
@@ -126,6 +131,35 @@ public sealed class ProgramSearchProvider : ISearchResultProvider
             wordStart = false;
         }
 
-        return qi == query.Length ? score : 0;
+        if (qi < query.Length)
+        {
+            return 0;
+        }
+
+        // 强信号加分（在子序列累计之上）：
+        if (name.StartsWith(query, StringComparison.OrdinalIgnoreCase))
+        {
+            score += 50;         // 前缀命中：最高置信
+        }
+        else if (ContainsWholeWord(name, query))
+        {
+            score += 40;         // 完整词命中：词边界精确（如 "Google Chrome" 对 "chrome"）
+        }
+
+        return score;
+    }
+
+    /// <summary>query 是否作为完整词出现在 name 中（按空白/常用分隔符切词后任一词与 query 相等，忽略大小写）。</summary>
+    private static bool ContainsWholeWord(string name, string query)
+    {
+        var separators = new[] { ' ', '-', '_', '.', '(', '（', ')', '）', '/', '\\', '+' };
+        foreach (var word in name.Split(separators, StringSplitOptions.RemoveEmptyEntries))
+        {
+            if (string.Equals(word, query, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+        return false;
     }
 }

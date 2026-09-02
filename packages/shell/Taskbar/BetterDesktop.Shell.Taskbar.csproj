@@ -19,4 +19,14 @@
     <ProjectReference Include="..\shell-settings\BetterDesktop.Shell.Settings.csproj" />
   </ItemGroup>
 
+  <!-- ExplorerTAP.dll（TranslucentTB 源码本地编译，Win11 任务栏注入桥）：
+       曾经只手工放 bin 根目录，bin 清理即丢失 → Win11 桥失效。
+       ① 随工程分发（CopyToOutputDirectory）构建自动补回；
+       ② 输出到 native/ 子目录而非根目录：explorer 注入后会长期锁住根目录那份，
+          构建复制到根目录会在运行期报 MSB3021 文件占用错误（native/ 不会被 explorer 锁，
+          桥按 BaseDirectory → native/ → x64/ 顺序检索必中）。 -->
+  <ItemGroup>
+    <None Include="native\ExplorerTAP.dll" CopyToOutputDirectory="PreserveNewest" Link="native\ExplorerTAP.dll" />
+  </ItemGroup>
+
 </Project>

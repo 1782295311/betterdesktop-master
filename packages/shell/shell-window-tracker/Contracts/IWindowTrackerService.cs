@@ -27,4 +27,7 @@ public interface IWindowTrackerService
 
     /// <summary>前台窗口变化时触发（传入前台窗口句柄）。</summary>
     event EventHandler<IntPtr>? ForegroundWindowChanged;
+
+    /// <summary>取指定窗口的标题（GetWindowText 收口）。无标题/无效句柄返回空串。</summary>
+    string GetWindowTitle(IntPtr hwnd);
 }

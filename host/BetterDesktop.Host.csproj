@@ -37,6 +37,7 @@
     <ProjectReference Include="..\packages\shell\shell-quick-note\BetterDesktop.Shell.QuickNote.csproj" />
     <ProjectReference Include="..\packages\shell\Taskbar\BetterDesktop.Shell.Taskbar.csproj" />
     <ProjectReference Include="..\packages\shell\shell-start-menu\BetterDesktop.Shell.StartMenu.csproj" />
+    <ProjectReference Include="..\packages\shell\shell-desktop\BetterDesktop.Shell.Desktop.csproj" />
   </ItemGroup>
 
 </Project>

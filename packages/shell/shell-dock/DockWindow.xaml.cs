@@ -22,6 +22,7 @@ using BetterDesktop.Shell.Core.Vibrancy;
 using BetterDesktop.Shell.Dock.Native;
 using BetterDesktop.Shell.Dock.Models;
 using BetterDesktop.Shell.Dock.Services;
+using BetterDesktop.Shell.Dock.Windows;
 using BetterDesktop.Shell.Settings.Contracts;
 using BetterDesktop.Shell.WindowTracker;
 using BetterDesktop.Shell.WindowTracker.Native;
@@ -45,6 +46,10 @@ public partial class DockWindow : ShellWindow
     protected override Thickness ChromeMargin => DockChromeMargin;
     // dock 悬浮胶囊：尺寸由图标数量/停靠位置决定（SizeToContent 驱动），resize 会破坏布局，钉死不可缩放。
     protected override ResizeMode DefaultResizeMode => ResizeMode.NoResize;
+
+    // 平时不置顶：dock 显示在窗口下层，不盖在窗口上；
+    // 鼠标贴底部热区或悬停 dock 时经 SetDockVisible(topmost:true) 临时置顶。
+    protected override bool DefaultTopmost => false;
 
     private readonly IDockAppsService _dockAppsService;
     private readonly IDockIconService _dockIconService;
@@ -84,10 +89,13 @@ public partial class DockWindow : ShellWindow
     // 倒影/面板重建防抖：拖动滑块(OnVisualSettingsChanged 高频触发)时合并重建，
     // 避免 BeginInvoke 排队堆积 + 反复创建 RenderTargetBitmap 耗尽渲染线程内存（OOM 崩溃）。
     private bool _settingsRebuildPending;
+    private System.Windows.Threading.DispatcherTimer? _visualDebounce; // 视觉设置 250ms 防抖（拖滑块高频 Set 的合并点）
 
-    // 自动隐藏状态：初始可见，经过首次亮相保留期后再启用边缘隐藏。
+    // 自动隐藏状态：初始可见，经过首次亮相保留期后再启用空闲隐藏判定。
+    // _topmostBoosted：是否因鼠标悬停/贴边热区而临时置顶（平时非置顶，不盖在窗口上）。
     private bool _isDockVisible = true;
     private bool _autoHideEnabled;
+    private bool _topmostBoosted;
 
     public DockWindow(
         IVibrancyService vibrancy,
@@ -189,7 +197,7 @@ public partial class DockWindow : ShellWindow
             // 重建后尺寸可能变化：重新定位到底部居中 + 更新边缘渐隐。
             Dispatcher.BeginInvoke(() =>
             {
-                PositionToBottomCenter();
+                SyncAppBarPosition();
                 UpdateEdgeFade();
             });
         });
@@ -197,9 +205,29 @@ public partial class DockWindow : ShellWindow
 
     /// <summary>dock 视觉配置变更：重建面板（图标大小/间距/名称/倒影）+ 重新定位（底距/材质）。
     /// 经 Dispatcher 回到 UI 线程执行，避免后台设置线程直接碰可视树。
-    /// 防抖：拖动滑块时事件高频触发，用 pending 标志把重建合并到同一消息循环，
-    /// 避免 BeginInvoke 排队堆积（每 tick 一个 lambda 反复重建面板 + 反复建 RTB → 渲染线程 OOM）。</summary>
+    /// ⚠️ 双层防抖：
+    ///   1) 时间防抖（250ms 合并）：滑块拖动时 Set 每 tick 一次 → Changed 每 tick 一次，
+    ///      若每次都全量重建（pinned/start/running/system 四面板 + 反射 + 定位）会卡顿乃至卡死。
+    ///      先合并到"拖动停止后 250ms 重建一次"，期间只重置计时器。
+    ///   2) pending 标志：防抖到期后与其它来源的重建请求合并到同一消息循环。</summary>
     private void OnVisualSettingsChanged(object? sender, EventArgs e)
+    {
+        if (_visualDebounce is null)
+        {
+            _visualDebounce = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(250) };
+            _visualDebounce.Tick += (_, _) =>
+            {
+                _visualDebounce!.Stop();
+                DoVisualSettingsRebuild();
+            };
+        }
+
+        // 拖动中不断重置计时器：只有停顿超过 250ms 才真正重建
+        _visualDebounce.Stop();
+        _visualDebounce.Start();
+    }
+
+    private void DoVisualSettingsRebuild()
     {
         if (_settingsRebuildPending)
         {
@@ -221,7 +249,7 @@ public partial class DockWindow : ShellWindow
             RebuildSystemPanel();
             ApplyDockMaterial();
             if (_visual is not null) _layout.BottomMargin = _visual.BottomMargin;
-            PositionToBottomCenter();
+            SyncAppBarPosition();
         });
     }
 
@@ -285,7 +313,7 @@ public partial class DockWindow : ShellWindow
             DebugLog.Trace("Dock", "布局定位 BeginInvoke 进入");
             try
             {
-                PositionToBottomCenter();
+                SyncAppBarPosition();
                 DebugLog.Trace("Dock", "布局定位 PositionToBottomCenter 完成");
                 UpdateEdgeFade();
                 DebugLog.Trace("Dock", "布局定位 UpdateEdgeFade 完成");
@@ -336,7 +364,11 @@ public partial class DockWindow : ShellWindow
     }
 
     /// <summary>
-    /// 自动隐藏：全屏覆盖时强制隐藏；否则按底部边缘热区决定显隐。
+    /// 自动隐藏（空闲阈值制）：
+    ///   - 用户有任何输入（鼠标/键盘，GetLastInputInfo 系统级空闲）→ **绝不隐藏**，常驻显示；
+    ///   - 鼠标悬停 dock 上 / 贴底部热区 → 置顶显示（用到时才升到窗口之上）；
+    ///   - 无输入 ≥ <see cref="DockVisualSettings.IdleHideMinutes"/>（默认 20 分钟）→ 自动隐藏；
+    ///   - 前台全屏（视频/游戏）仍无条件隐藏。
     /// </summary>
     private void OnAutoHideTick(object? sender, EventArgs e)
     {
@@ -344,7 +376,7 @@ public partial class DockWindow : ShellWindow
         {
             if (_layout.ShouldHideOnFullscreen())
             {
-                SetDockVisible(false);
+                SetDockVisible(false, topmost: false);
                 return;
             }
 
@@ -354,7 +386,34 @@ public partial class DockWindow : ShellWindow
             }
 
             var cursor = GetCursorScreenPoint();
-            SetDockVisible(_layout.ShouldShowOnEdgeHover(cursor));
+
+            // 悬停 dock 上：绝不隐藏且置顶可交互
+            if (IsCursorOverDock(cursor))
+            {
+                SetDockVisible(true, topmost: true);
+                return;
+            }
+
+            // 贴底部热区：唤出（置顶）
+            if (_layout.ShouldShowOnEdgeHover(cursor))
+            {
+                SetDockVisible(true, topmost: true);
+                return;
+            }
+
+            // 系统级空闲判定：GetLastInputInfo 覆盖鼠标移动/点击/键盘，任何输入即"操作中"
+            var idleMinutes = GetSystemIdleMs() / 60000.0;
+            var threshold = _visual?.IdleHideMinutes ?? 20d;
+
+            if (idleMinutes >= threshold)
+            {
+                SetDockVisible(false, topmost: false);
+                return;
+            }
+
+            // 用户活跃 → 常驻显示，但**不置顶**（在窗口下层，不盖在窗口上；
+            // 需要时鼠标贴底边热区或悬停 dock 即临时置顶）
+            SetDockVisible(true, topmost: false);
         }
         catch
         {
@@ -362,17 +421,25 @@ public partial class DockWindow : ShellWindow
         }
     }
 
-    private void SetDockVisible(bool visible)
+    private void SetDockVisible(bool visible, bool topmost = false)
     {
-        if (visible == _isDockVisible)
+        // 健壮状态机：以窗口实际 IsVisible 为准（字段可能因启动时序/外部 Hide 失同步）。
+        var actuallyVisible = IsVisible;
+        if (visible == actuallyVisible && topmost == Topmost)
         {
             return;
         }
 
         _isDockVisible = visible;
+        _topmostBoosted = topmost;
         if (visible)
         {
+            DebugLog.Trace("Dock", $"SetDockVisible -> Show (topmost={topmost})");
+            // 先定层级再显示：置顶态（热区/悬停唤出）与常驻态（窗口下层）分别正确落位。
+            Topmost = topmost;
             Show();
+            EnsureAppBar();
+            SyncAppBarPosition();
             // 淡入（Opacity 0 -> 1），不触碰窗口定位。
             _animation.CreateFadeInAnimation(this, TimeSpan.FromMilliseconds(220))?.Begin();
         }
@@ -383,15 +450,52 @@ public partial class DockWindow : ShellWindow
             var fade = _animation.CreateFadeOutAnimation(this, TimeSpan.FromMilliseconds(220));
             if (fade is not null)
             {
-                fade.Completed += (_, _) => Hide();
+                fade.Completed += (_, _) => { Hide(); ReleaseAppBar(); };
                 fade.Begin();
             }
             else
             {
                 Hide();
+                ReleaseAppBar();
             }
         }
     }
+
+    /// <summary>光标是否落在 dock 窗口矩形内（物理像素 → 窗口 DPI 逻辑坐标换算）。</summary>
+    private bool IsCursorOverDock(Point cursorPhysical)
+    {
+        if (double.IsNaN(cursorPhysical.X) || !IsVisible)
+        {
+            return false;
+        }
+
+        var scale = PresentationSource.FromVisual(this)?.CompositionTarget?.TransformToDevice;
+        var dpiX = scale?.M11 ?? 1.0;
+        var dpiY = scale?.M22 ?? 1.0;
+        var lx = cursorPhysical.X / dpiX;
+        var ly = cursorPhysical.Y / dpiY;
+        return lx >= Left && lx <= Left + ActualWidth && ly >= Top && ly <= Top + ActualHeight;
+    }
+
+    /// <summary>系统级用户空闲毫秒数（最后一次鼠标/键盘输入至今；GetLastInputInfo）。</summary>
+    private static double GetSystemIdleMs()
+    {
+        var info = new LASTINPUTINFO { cbSize = (uint)Marshal.SizeOf<LASTINPUTINFO>() };
+        return GetLastInputInfo(ref info)
+            ? unchecked(Environment.TickCount - (int)info.dwTime)
+            : 0; // 检测失败按"刚有输入"处理 → 不隐藏（宁可常驻不可误隐）
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct LASTINPUTINFO
+    {
+        public uint cbSize;
+        public uint dwTime;
+    }
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool GetLastInputInfo(ref LASTINPUTINFO plii);
 
     private static Point GetCursorScreenPoint()
     {
@@ -1364,13 +1468,23 @@ public partial class DockWindow : ShellWindow
         startMenuItem.Click += (_, _) => _dockPlugin?.ToggleStartMenu();
         menu.Items.Add(startMenuItem);
 
-        // 所有应用（开始菜单 allapps 视图，Step 8 接管的全应用浏览）
-        var managerItem = new MenuItem { Header = "所有应用" };
-        managerItem.Click += (_, _) => _dockPlugin?.ShowAllApps();
+        // 应用提取器（shell-app-source 双模式盘点：干净/全程序 + 筛选/分组/固定/卸载，
+        // AppGrabberWindow 承接 MyDockFinder AppGrabber 形态）
+        var managerItem = new MenuItem { Header = "应用提取器" };
+        managerItem.Click += (_, _) => ShowAppGrabber();
         menu.Items.Add(managerItem);
 
         menu.PlacementTarget = e?.OriginalSource as UIElement ?? this;
         menu.IsOpen = true;
+    }
+
+    /// <summary>打开应用提取器窗口（懒创建复用）。</summary>
+    private AppGrabberWindow? _appGrabberWindow;
+    private void ShowAppGrabber()
+    {
+        _appGrabberWindow ??= new AppGrabberWindow(_dockAppsService, _dockIconService, VibrancyService!, AppearanceService);
+        _appGrabberWindow.Show();
+        _appGrabberWindow.Activate();
     }
 
     private void LaunchApp(DockItemData item)
@@ -1380,14 +1494,41 @@ public partial class DockWindow : ShellWindow
             var path = !string.IsNullOrWhiteSpace(item.TargetPath)
                 ? item.TargetPath
                 : item.ShortcutPath;
-            if (!string.IsNullOrWhiteSpace(path))
+            if (string.IsNullOrWhiteSpace(path))
             {
-                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
-                {
-                    FileName = path,
-                    UseShellExecute = true
-                });
+                return;
             }
+
+            // 已运行则激活最前窗口（对齐 Windows 任务栏标准语义：已运行点击=激活）。
+            // ⚠️ explorer 特殊：单实例程序，二次 ShellExecute 的新进程检测到已有实例直接退出——
+            // 既不开新窗口也不激活 → "点固定区资源管理器没反应"（实测回归；运行区因 pinned
+            // 排除已固定应用，此路径是 explorer 唯一的点击入口）。
+            var matches = RunningAppDetector.GetRunningWindows()
+                .Where(w => string.Equals(w.ExePath, path, StringComparison.OrdinalIgnoreCase))
+                .ToList();
+            if (matches.Count > 0)
+            {
+                var best = matches.FirstOrDefault(w => IsVisibleAndNotMinimized(w.Hwnd));
+                if (best.Hwnd == IntPtr.Zero)
+                {
+                    best = matches[0];
+                }
+
+                if (best.Hwnd != IntPtr.Zero)
+                {
+                    // 同 ActivateFirstWindow：MouseUp 处理中鼠标仍被捕获，SetForegroundWindow 会被拒——延迟激活。
+                    Dispatcher.BeginInvoke(
+                        () => RunningAppDetector.ActivateWindow(best.Hwnd),
+                        System.Windows.Threading.DispatcherPriority.Background);
+                    return;
+                }
+            }
+
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+            {
+                FileName = path,
+                UseShellExecute = true
+            });
         }
         catch
         {
@@ -1672,12 +1813,19 @@ public partial class DockWindow : ShellWindow
                 Grid.SetRow(label, 2);
                 container.Children.Add(label);
 
-                // 悬停即弹出该应用的多窗口缩略图预览（紧贴图标上方，参考 cairoshell 行为）；
-                // 左键点击则直接激活该应用的首个窗口（与缩略图点击行为一致）。
+                // ⚠️ 运行区图标点击异常：explorer 的 onClick 不触发（onHover 正常）。
+                // 直接在 iconZone 上挂点击（最底层容器，绕过可能的遮挡）。
+                iconZone.MouseLeftButtonUp += (_, _) =>
+                {
+                    DebugLog.Trace("Activate", $"running zone clicked exe={capturedItem.TargetPath ?? capturedItem.ShortcutPath}");
+                    ActivateFirstWindow(capturedItem);
+                };
+
+                // 悬停即弹出该应用的多窗口缩略图预览（紧贴图标上方，参考 cairoshell 行为）。
                 AttachItemInteractions(
                     container,
                     iconImage,
-                    onClick: () => ActivateFirstWindow(capturedItem),
+                    onClick: () => { }, // 空操作，点击已由 iconZone 处理
                     onHover: () => ScheduleOpenPreview(capturedItem, GetItemScreenAnchor(container)));
 
                 // 鼠标离开运行项后延迟关闭预览（留出移动到预览层的时间）。
@@ -1965,8 +2113,9 @@ public partial class DockWindow : ShellWindow
 
     /// <summary>
     /// 直接激活该应用的最前运行窗口（左键点击运行项时调用）。
-    /// 取该 exe 的 z-order 最前窗口（EnumWindows 返回顺序从底到顶，最后一个匹配即最前），
-    /// 避免取到底层/隐藏窗口导致"点了唤不出来"（资源管理器多窗口场景尤其明显）。
+    /// EnumWindows 按 Z 序从顶到底返回（MSDN/实测），第一个匹配的可见未最小化窗口即最前窗口，
+    /// 避免取到底层窗口导致"点了唤不出来"（explorer 场景 z-order 最底曾是 Progman 桌面宿主，
+    /// 已在 GetRunningWindows 排除；LastOrDefault 选最底窗口属注释性错误，实测回归）。
     /// </summary>
     private void ActivateFirstWindow(DockItemData item)
     {
@@ -1982,19 +2131,36 @@ public partial class DockWindow : ShellWindow
         DebugLog.Trace("Activate", $"click exe={exe} matched={matches.Count}");
         if (matches.Count == 0)
         {
+            // 窗口已全部关闭（枚举与点击间有时间差）：有真实 exe 时直接启动兜底。
+            if (File.Exists(exe))
+            {
+                try
+                {
+                    Process.Start(new ProcessStartInfo(exe) { UseShellExecute = true });
+                }
+                catch
+                {
+                    // 启动失败静默
+                }
+            }
             return;
         }
 
-        // 优先激活可见且未最小化的窗口；否则取 z-order 最前（最后一个）的窗口。
-        var best = matches.LastOrDefault(w => IsVisibleAndNotMinimized(w.Hwnd));
+        // EnumWindows 顶到底：First = Z 序最前的可见未最小化窗口；全最小化则取最前（第一个）窗口还原。
+        var best = matches.FirstOrDefault(w => IsVisibleAndNotMinimized(w.Hwnd));
         if (best.Hwnd == IntPtr.Zero)
         {
-            best = matches[^1];
+            best = matches[0];
         }
 
         if (best.Hwnd != IntPtr.Zero)
         {
-            RunningAppDetector.ActivateWindow(best.Hwnd);
+            // ⚠️ 不得在 MouseLeftButtonUp 处理中同步激活：此时鼠标仍被本线程捕获，
+            // SetForegroundWindow 会被 Windows 静默拒绝（实测"matched=1 但窗口没反应"根因）。
+            // 延迟到消息队列空闲（capture 已释放）再激活。
+            Dispatcher.BeginInvoke(
+                () => RunningAppDetector.ActivateWindow(best.Hwnd),
+                System.Windows.Threading.DispatcherPriority.Background);
         }
     }
 
@@ -2107,7 +2273,7 @@ public partial class DockWindow : ShellWindow
 
     private void OnSizeChanged(object sender, SizeChangedEventArgs e)
     {
-        PositionToBottomCenter();
+        SyncAppBarPosition();
         UpdateEdgeFade();
     }
 
@@ -2116,9 +2282,32 @@ public partial class DockWindow : ShellWindow
         // 多显示器策略：all/independent 时在"所有显示器"各放一个 Dock（每屏底部居中）；
         // primary 仅在主屏。当前 Dock 实例只负责所在屏（host 决定在哪些屏启动），
         // 定位统一走 _layout 提供的屏幕底部居中换算，不再硬编码 PrimaryScreen。
-        // 当前实例绑定到主屏（多屏多实例由 host 后续扩展），因此取目标屏列表第一个。
-        var targetScreens = _layout.GetDockTargetScreens();
-        var screen = targetScreens.Count > 0 ? targetScreens[0] : new Rect(0, 0, SystemParameters.PrimaryScreenWidth, SystemParameters.PrimaryScreenHeight);
+        // 当前实例绑定到主屏（多屏多实例由 host 后续扩展）。
+        // 坐标参考域（2026-09-02 修复）：⚠️ SystemParameters.PrimaryScreen* 返回的域与窗口 WPF 逻辑域
+        // （PerMonitorV2 按窗口所在屏 DPI）不一致时，会把 dock 定位到工作区之外（实测 125% 屏上
+        // 窗口被放到物理 1679px，而工作区底只有 1380px → AppBar 协商负高度 W=769 H=-299）。
+        // 改为以 GetMonitorInfo 物理工作区为权威源，÷TransformToDevice 换算成 WPF 逻辑坐标。
+        var hwnd = _appBarHwndSource?.Handle ?? new System.Windows.Interop.WindowInteropHelper(this).Handle;
+        var transform = _appBarHwndSource?.CompositionTarget?.TransformToDevice ?? default;
+        var dpiScale = transform.M11 > 0 ? transform.M11 : 1.0;
+        Rect screen;
+        // 优先用注册前缓存的工作区（不含 dock 自己）——实时 GetMonitorWorkArea 在 dock 注册后
+        // 已含自身抬升，会触发"协商→抬升→再定位"循环（dock 被一路抬到屏幕顶，实测回归）。
+        var cachedWork = _appBarWorkArea;
+        if (cachedWork.Right - cachedWork.Left > 0 && cachedWork.Bottom - cachedWork.Top > 0)
+        {
+            screen = new Rect(cachedWork.Left / dpiScale, cachedWork.Top / dpiScale,
+                (cachedWork.Right - cachedWork.Left) / dpiScale, (cachedWork.Bottom - cachedWork.Top) / dpiScale);
+        }
+        else if (DockAppBarReservation.GetMonitorWorkArea(hwnd, out var work))
+        {
+            screen = new Rect(work.Left / dpiScale, work.Top / dpiScale,
+                (work.Right - work.Left) / dpiScale, (work.Bottom - work.Top) / dpiScale);
+        }
+        else
+        {
+            screen = new Rect(0, 0, SystemParameters.PrimaryScreenWidth, SystemParameters.PrimaryScreenHeight);
+        }
         // SizeToContent=Width 下 Width 不一定反映真实渲染宽，用 ActualWidth/ActualHeight（带 fallback 到设置值）。
         var dockW = ActualWidth > 0 ? ActualWidth : Width;
         var dockH = ActualHeight > 0 ? ActualHeight : Height;
@@ -2138,5 +2327,6 @@ public partial class DockWindow : ShellWindow
         var (left, top) = _layout.BottomCenterForScreen(screen, dockW, dockH);
         Left = left;
         Top = top;
+        DebugLog.Trace("Dock", $"PositionToBottomCenter: L={Left:F0} T={Top:F0} W={dockW:F0} H={dockH:F0} visible={IsVisible} topmost={Topmost}");
     }
 }

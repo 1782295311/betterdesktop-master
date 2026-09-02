@@ -105,7 +105,10 @@ public sealed class ThumbnailWindow : Window
 
             cell.MouseLeftButtonUp += (_, _) =>
             {
-                RunningAppDetector.ActivateWindow(captured.Hwnd);
+                // 同 dock 运行区：MouseUp 处理中鼠标仍被本线程捕获，SetForegroundWindow 会被拒——延迟激活。
+                Dispatcher.BeginInvoke(
+                    () => RunningAppDetector.ActivateWindow(captured.Hwnd),
+                    System.Windows.Threading.DispatcherPriority.Background);
                 Close();
             };
 

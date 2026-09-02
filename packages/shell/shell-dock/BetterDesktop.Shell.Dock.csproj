@@ -23,6 +23,7 @@
   <ItemGroup>
     <PackageReference Include="ManagedShell" Version="0.0.370" />
     <PackageReference Include="System.Drawing.Common" Version="8.0.8" />
+    <PackageReference Include="TinyPinyin.Net" Version="1.0.2" />
   </ItemGroup>
 
 </Project>

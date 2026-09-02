@@ -47,7 +47,6 @@ internal static class ExtensionCatalog
         new ExtensionDescriptor("quick-note", "快速笔记", "一键便签速记（常驻浮窗）", "记"),
         new ExtensionDescriptor("programs-menu", "程序菜单", "左区程序菜单（分组/拖放/Win 键）", "单"),
         new ExtensionDescriptor("weather", "天气", "桌面天气卡片（和风天气）", "天"),
-        new ExtensionDescriptor("search", "搜索", "全局搜索（UWP SearchPane）", "搜"),
         new ExtensionDescriptor("stage-manager", "台前调度", "窗口总览与平铺（Mission Control 式）", "窗"),
         new ExtensionDescriptor("screenshot", "截屏工具", "区域/全屏截屏与标注", "截"),
         new ExtensionDescriptor("dynamic-desktop", "动态桌面", "动态壁纸桌面", "动"),
@@ -74,6 +73,7 @@ internal static class ExtensionCatalog
         new ExtensionDescriptor("notification", "通知中心", "打开系统通知中心", "铃", MenuBarStatusButtonId.Notification, External: false),
         new ExtensionDescriptor("datetime", "日期时间", "显示日期时间并打开日历", "时", MenuBarStatusButtonId.DateTime, External: false),
         new ExtensionDescriptor("desktop", "桌面覆盖", "一键显示桌面", "幕", MenuBarStatusButtonId.Desktop, External: false),
+        new ExtensionDescriptor("search", "搜索", "全局搜索（程序/设置/文件）", "搜", MenuBarStatusButtonId.Search, External: false),
     };
 
     /// <summary>

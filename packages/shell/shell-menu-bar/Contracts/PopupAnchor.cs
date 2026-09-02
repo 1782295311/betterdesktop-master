@@ -23,7 +23,7 @@ internal static class PopupAnchor
     /// 计算弹窗 TopLeft 坐标（**逻辑单位**，可直接赋给 Window.Left/Top）。
     /// </summary>
     /// <param name="anchorVisual">被点击的菜单栏按钮（用于取屏幕坐标、DPI 与所在显示器）。</param>
-    /// <param name="buttonWidth">按钮宽度（逻辑单位），用于横向对齐（弹窗默认右端对齐按钮，仿 macOS）。</param>
+    /// <param name="buttonWidth">按钮宽度（逻辑单位）。当前对齐策略为弹窗左端对齐按钮左端（正下方展开），此参数仅保留签名兼容。</param>
     /// <param name="popupSize">弹窗期望尺寸（逻辑单位）。</param>
     /// <param name="menuBarHeight">菜单栏实际高度（逻辑像素），用于把弹窗锚在菜单栏正下方。
     /// 默认取 <see cref="MenuBarMetrics.MenuBarHeight"/>（与 MenuBarWindow 同源），切勿再硬编码 32 等旧值。</param>
@@ -72,8 +72,11 @@ internal static class PopupAnchor
         // 过去硬编码 +32，但真实菜单栏高度是 16（MenuBarWindow.Height），导致弹窗比菜单栏下沿低约 16px 悬空。
         var y = anchor.Y + menuBarHeight + VerticalGap;
 
-        // 横向：仿 macOS，弹窗右端对齐按钮右端
-        var x = anchor.X + buttonWidth - popupSize.Width;
+        // 横向：弹窗左端对齐按钮左端 —— 在功能图标**正下方**展开（cairoshell 规范）。
+        // 原实现仿 macOS 右端对齐，导致弹窗整体跑到按钮左侧、与图标无对齐关系；
+        // 按钮贴近屏幕右缘时由下方回钳保证不越界（弹窗自动左移收进工作区）。
+        _ = buttonWidth; // 保留参数签名兼容调用方；对齐不再依赖按钮宽度
+        var x = anchor.X;
 
         // 回钳到所在显示器工作区（右/下不越界，并保留安全边距）
         var minX = workArea.Left + EdgeMargin;

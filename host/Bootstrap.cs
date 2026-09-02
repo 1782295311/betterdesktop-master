@@ -21,6 +21,7 @@ using BetterDesktop.Shell.Search;
 using BetterDesktop.Shell.Settings.Contracts;
 using BetterDesktop.Shell.Settings.Services;
 using BetterDesktop.Shell.Status;
+using BetterDesktop.Shell.Desktop;
 
 namespace BetterDesktop.Host;
 
@@ -157,6 +158,10 @@ public static class Bootstrap
         //     依赖：ISettingsSectionRegistry(SettingsPlugin) + IAppSourceService/IAppIconService(AppSourcePlugin)
         //     + IVibrancyService + IAppearanceService。必须在上述插件之后加载。
         context.Plugin(new BetterDesktop.Shell.StartMenu.StartMenuPlugin());
+
+        // 6.65 自绘桌面（shell.desktop）：全屏壁纸 + 可导航桌面/文件夹浏览器（Provide IDesktopBrowser
+        //      给菜单栏左区联动）。必须在 menu-bar 之前加载：桌面窗口 Z 序底 + 浏览器先注册。
+        context.Plugin(new BetterDesktop.Shell.Desktop.DesktopPlugin());
 
         // 6.7 顶部菜单栏（shell.menu-bar）：右区 = 移植自 tools/ShellComponentsPlayground 的紧凑状态条
         //     （系统托盘/FPS/CPU/内存/WiFi/实时网速/亮度/输入法/蓝牙/音量/麦克风/电池/通知/时间/桌面），

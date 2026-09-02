@@ -58,7 +58,7 @@ public sealed class AppearanceService : IAppearanceService, IThemeTokens
 
     public double WindowOpacity
     {
-        get => Clamp01(_settings.Get("appearance.windowOpacity", 0.667));
+        get => Clamp01(_settings.Get("appearance.windowOpacity", 0.2)); // 默认 = 2026-09-01 用户实测调优值
         set
         {
             // 用户手动调过透明度 → 标记，模式切换不再覆盖（透明度是全局偏好）。

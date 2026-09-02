@@ -81,6 +81,11 @@ internal sealed class ImeMenuBarExtension : IMenuBarExtension, IDisposable
         if (_popup?.IsVisible == true) { _popup.Hide(); }
     }
 
+    /// <summary>切换输入法后由 MenuBarWindow 主动调用，强制刷新按钮图标。
+    /// 输入法切换（模拟热键）不改变前台窗口，事件泵不触发；500ms 兜底轮询也可能因
+    /// 快照文本未变而判定无变化——主动刷新保证点击切换后图标立即跟随。</summary>
+    public void RefreshVisual() => UpdateVisual();
+
     private void OnChanged(object? sender, StatusSnapshot e)
     {
         UpdateVisual();

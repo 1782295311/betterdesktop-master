@@ -25,6 +25,14 @@
     <!-- 左区「程序菜单」复用开始菜单插件的服务契约（IStartMenuService）。
          已确认无环：shell-start-menu 不反向引用 shell-menu-bar；服务未注册时菜单栏降级为不显示该入口。 -->
     <ProjectReference Include="..\shell-start-menu\BetterDesktop.Shell.StartMenu.csproj" />
+    <!-- 搜索按钮复用 shell-search 的聚合搜索服务（IStartMenuSearchService，程序/设置/文件三类）。 -->
+    <ProjectReference Include="..\shell-search\BetterDesktop.Shell.Search.csproj" />
+    <!-- 搜索结果图标：IAppIconService（shell-app-source 统一图标入口，按 AppItem 提取真实图标）。 -->
+    <ProjectReference Include="..\shell-app-source\BetterDesktop.Shell.AppSource.csproj" />
+    <!-- 左区前台窗口标题：IWindowTrackerService（WinEvent 钩子 + GetWindowText 收口）。 -->
+    <ProjectReference Include="..\shell-window-tracker\BetterDesktop.Shell.WindowTracker.csproj" />
+    <!-- 左区文件夹工具条：IDesktopBrowser（自绘桌面浏览器契约，位置/下载/文档联动 + 文件操作）。 -->
+    <ProjectReference Include="..\shell-desktop\BetterDesktop.Shell.Desktop.csproj" />
   </ItemGroup>
 
 </Project>

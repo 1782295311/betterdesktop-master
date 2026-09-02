@@ -19,8 +19,11 @@ using BetterDesktop.Kernel.Contracts;
 using BetterDesktop.Shell.Core.Surface;
 using BetterDesktop.Shell.Core.Vibrancy;
 using BetterDesktop.Shell.MenuBar.Contracts;
+using BetterDesktop.Shell.MenuBar.Native;
+using BetterDesktop.Shell.Desktop.Contracts;
 using BetterDesktop.Shell.MenuBar.Services;
-using BetterDesktop.Shell.StartMenu.Contracts;
+using BetterDesktop.Shell.Settings.Contracts;
+using BetterDesktop.Shell.WindowTracker.Contracts;
 
 namespace BetterDesktop.Shell.MenuBar.Windows;
 
@@ -33,20 +36,36 @@ internal sealed class MenuBarWindow : ShellWindow
     /// <summary>系统设置变化（含任务栏位置调整，会影响工作区）。</summary>
     private const int WmSettingChange = 0x001A;
 
+    /// <summary>AppBar 回调消息（WM_APP 区间自定义）：系统经它转发 ABN_* 通知。</summary>
+    private const int AppBarCallbackMessage = 0x8100;
+
     private readonly IReadOnlyList<IMenuBarExtension> _extensions;
     private readonly Panel _rightHost;
     private readonly Dictionary<IMenuBarExtension, FrameworkElement> _visuals = new();
+    private MenuBarLeftZone? _leftZone;
     private HwndSource? _hwndSource;
+    private bool _appBarRegistered;
+    private readonly ISettingsService? _settings;
+    private readonly System.Windows.Threading.DispatcherTimer _idleTimer = new()
+    {
+        // 空闲隐藏轮询：1s 粒度足够（阈值以分钟计）
+        Interval = TimeSpan.FromSeconds(1)
+    };
+    private bool _idleHidden;
 
     public MenuBarWindow(
         IReadOnlyList<IMenuBarExtension> extensions,
         IVibrancyService vibrancy,
         IAppearanceService? appearance,
         IKernelLogger logger,
-        IStartMenuService? startMenu = null)
+        ISettingsWindowService? settingsWindow = null,
+        IWindowTrackerService? windowTracker = null,
+        IDesktopBrowser? desktopBrowser = null,
+        ISettingsService? settings = null)
         : base(appearance, vibrancy)
     {
         _extensions = extensions;
+        _settings = settings;
         Title = "BetterDesktop.MenuBar";
         Height = MenuBarMetrics.MenuBarHeight;
         MinHeight = MenuBarMetrics.MenuBarHeight;
@@ -55,8 +74,8 @@ internal sealed class MenuBarWindow : ShellWindow
         if (CanSetProperty("ResizeMode")) ResizeMode = ResizeMode.NoResize;
         if (CanSetProperty("ShowActivated")) ShowActivated = true;
 
-        // 定位：一律使用逻辑单位。MenuBarScreen.PrimaryWorkArea 来自 SystemParameters.WorkArea，
-        // 与 Window.Left/Top/Width 同域（都是 DIP），不受 DPI 缩放影响。
+        // 定位：一律使用逻辑单位。贴主屏顶边（AppBar edge=Top 语义），
+        // 不读 WorkArea——AppBar 是工作区的定义者，读它定位自己是循环依赖。
         Reposition();
 
         // 根布局：ChromeBorder（供 ShellWindow 统一驱动外观） → 内部 Grid 分左区/弹簧/右区
@@ -78,13 +97,13 @@ internal sealed class MenuBarWindow : ShellWindow
         root.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
         root.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
 
-        // 左区：程序菜单 + 位置/下载/文档（服务缺失时该项自动不呈现）
-        var leftZone = new MenuBarLeftZone(startMenu)
+        // 左区：Logo 快捷功能菜单（三态动画图标）+ 前台窗口标题 + 位置/下载/文档 + 文件夹工具条
+        _leftZone = new MenuBarLeftZone(vibrancy, appearance, settingsWindow, windowTracker, desktopBrowser, settings)
         {
             Margin = new Thickness(8, 0, 0, 0)
         };
-        Grid.SetColumn(leftZone, 0);
-        root.Children.Add(leftZone);
+        Grid.SetColumn(_leftZone, 0);
+        root.Children.Add(_leftZone);
 
         _rightHost = new StackPanel
         {
@@ -113,7 +132,13 @@ internal sealed class MenuBarWindow : ShellWindow
             // 其他扩展：左键=打开弹窗
             if (ext.Id == "ime")
             {
-                visual.MouseLeftButtonUp += (_, _) => ImeLayoutEnumerator.CycleOnce();
+                visual.MouseLeftButtonUp += (_, _) =>
+                {
+                    ImeLayoutEnumerator.CycleOnce();
+                    // 切换后立即刷新按钮图标：模拟热键切换不改变前台窗口，事件泵不触发，
+                    // 500ms 兜底轮询也可能判定快照无变化——主动刷新保证图标跟随切换。
+                    if (ext is ImeMenuBarExtension imeExt) imeExt.RefreshVisual();
+                };
                 visual.MouseRightButtonUp += (_, _) => OnExtensionClicked(ext, visual);
             }
             else
@@ -124,34 +149,179 @@ internal sealed class MenuBarWindow : ShellWindow
         }
     }
 
-    /// <summary>按当前主屏工作区重新摆放菜单栏（构造期与显示器变化后共用同一套算法）。</summary>
+    /// <summary>
+    /// 重新摆放菜单栏（构造期与显示器变化后共用同一套算法）。
+    /// 顶部 AppBar 的语义就是"贴主屏顶边"——位置由屏幕边界决定，
+    /// **绝不读 WorkArea**：AppBar 自己是工作区的定义者，读它定位自己是循环依赖
+    /// （坏工作区会把菜单栏推到底部且无法自愈，即"整体被压到屏幕底下"的根因）。
+    /// </summary>
     private void Reposition()
     {
-        var area = MenuBarScreen.PrimaryWorkArea;
-        Left = area.Left;
-        Top = area.Top;
-        Width = area.Width;
+        Left = 0;
+        Top = 0;
+        Width = SystemParameters.PrimaryScreenWidth;
     }
 
-    /// <summary>窗口句柄就绪后挂消息钩子，监听显示器/系统设置变化以自动重排。</summary>
+    /// <summary>
+    /// AppBar 定位统一入口：先摆到贴顶目标位，再向系统申请空间，并把**系统协商后**
+    /// 的矩形回写窗口（物理→逻辑换算）。矩形无变化时跳过赋值，断开
+    /// ABN_POSCHANGED → SETPOS → POSCHANGED 的震荡环（此前程序挂死的根因）。
+    /// </summary>
+    private void SyncAppBarPosition()
+    {
+        if (!_appBarRegistered || _hwndSource is null)
+        {
+            return;
+        }
+
+        Reposition(); // 先站到目标位（申请的 rc = 窗口当前矩形）
+        if (AppBarReservation.TryApplyPos(_hwndSource.Handle, out var agreed))
+        {
+            ApplyAgreedRect(agreed);
+        }
+    }
+
+    /// <summary>把系统协商后的 AppBar 矩形（物理像素）回写到窗口（逻辑单位）；有实际变化才赋值。</summary>
+    private void ApplyAgreedRect(AppBarReservation.NativeRect r)
+    {
+        var transform = _hwndSource?.CompositionTarget?.TransformFromDevice ?? default;
+        var scale = transform.M11 > 0 ? transform.M11 : 1.0;
+        var left = r.Left / scale;
+        var top = r.Top / scale;
+        var width = (r.Right - r.Left) / scale;
+
+        if (Math.Abs(Left - left) > 0.5 || Math.Abs(Top - top) > 0.5 || Math.Abs(Width - width) > 0.5)
+        {
+            Left = left;
+            Top = top;
+            Width = width;
+        }
+    }
+
+    /// <summary>窗口句柄就绪后挂消息钩子 + 注册顶部 AppBar（桌面图标让出菜单栏空间）。</summary>
     protected override void OnSourceInitialized(EventArgs e)
     {
         base.OnSourceInitialized(e);
         _hwndSource = PresentationSource.FromVisual(this) as HwndSource;
         _hwndSource?.AddHook(WndProc);
+
+        // 注册顶部 AppBar：explorer 自动把工作区下移，桌面图标/最大化窗口让出菜单栏条带。
+        // 失败静默降级（如已被其他 AppBar 占用），菜单栏仍显示但桌面不避让（M10）。
+        if (_hwndSource is not null)
+        {
+            _appBarRegistered = AppBarReservation.Register(_hwndSource.Handle, AppBarCallbackMessage);
+            SyncAppBarPosition();
+        }
+
+        // 空闲自动隐藏（与 dock 同阈值 shell.idleHideMinutes，默认 20 分钟）：
+        //   - 用户有任何输入 → 绝不隐藏（淡入恢复）；
+        //   - 无输入 ≥ 阈值 → 淡出（视觉隐藏；**不 Hide 窗口**，AppBar 条带登记保留，
+        //     避免反复注册/注销 AppBar 引发工作区震荡）；
+        //   - 空闲期间鼠标移到屏幕顶部热区（<6px）→ 临时唤出。
+        _idleTimer.Tick += (_, _) =>
+        {
+            try
+            {
+                var threshold = _settings?.Get("shell.idleHideMinutes", 20d) ?? 20d;
+                var idleMinutes = GetSystemIdleMs() / 60000.0;
+
+                // 空闲中贴顶热区 → 临时唤出
+                if (_idleHidden && GetCursorPos(out var pt) && pt.Y < 6)
+                {
+                    SetIdleHidden(false);
+                    return;
+                }
+
+                if (idleMinutes >= threshold)
+                {
+                    SetIdleHidden(true);
+                }
+                else if (_idleHidden)
+                {
+                    // 用户恢复操作：立即淡入
+                    SetIdleHidden(false);
+                }
+            }
+            catch
+            {
+                // 轮询失败不阻断（M10）
+            }
+        };
+        _idleTimer.Start();
     }
+
+    /// <summary>空闲隐藏切换：淡出保留窗口（AppBar 登记），淡入恢复交互。</summary>
+    private void SetIdleHidden(bool hidden)
+    {
+        if (hidden == _idleHidden)
+        {
+            return;
+        }
+
+        _idleHidden = hidden;
+        IsHitTestVisible = !hidden;
+
+        // ⚠️ 必须先写基值再用 FillBehavior.Stop 过渡：
+        //    若只播 1→0 动画而不改基值，Stop 会在动画结束露出基值 1，
+        //    Opacity 弹回 → "菜单栏根本没隐藏"（实测回归）。
+        //    正确姿势：基值=目标值，动画从旧值过渡到基值，结束无跳变、无锁定。
+        var from = Opacity;
+        Opacity = hidden ? 0 : 1;
+        var anim = new System.Windows.Media.Animation.DoubleAnimation(
+            from, hidden ? 0 : 1, TimeSpan.FromMilliseconds(300))
+        {
+            FillBehavior = System.Windows.Media.Animation.FillBehavior.Stop
+        };
+        BeginAnimation(OpacityProperty, anim);
+    }
+
+    /// <summary>系统级用户空闲毫秒数（最后一次鼠标/键盘输入至今；GetLastInputInfo）。</summary>
+    private static double GetSystemIdleMs()
+    {
+        var info = new LastInputInfo { cbSize = (uint)System.Runtime.InteropServices.Marshal.SizeOf<LastInputInfo>() };
+        return GetLastInputInfo(ref info)
+            ? unchecked(Environment.TickCount - (int)info.dwTime)
+            : 0; // 检测失败按"刚有输入"处理 → 不隐藏
+    }
+
+    [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
+    private struct LastInputInfo
+    {
+        public uint cbSize;
+        public uint dwTime;
+    }
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    [return: System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.Bool)]
+    private static extern bool GetLastInputInfo(ref LastInputInfo plii);
+
+    [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
+    private struct NativePoint
+    {
+        public int X;
+        public int Y;
+    }
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern bool GetCursorPos(out NativePoint lpPoint);
 
     private IntPtr WndProc(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
     {
         if (msg == WmDisplayChange || msg == WmSettingChange)
         {
-            // 分辨率/缩放/任务栏位置变了：工作区随之改变，必须重算，否则菜单栏宽度停留在旧值。
-            Reposition();
+            // 分辨率/缩放/任务栏位置变了：重新贴顶 + 重新申请 AppBar 空间（协商制，不会震荡）。
+            SyncAppBarPosition();
             // 已打开的弹窗锚点会失效，收起它们（IMenuBarExtension.ClosePopup 是契约的一部分）
             foreach (var ext in _extensions)
             {
                 ext.ClosePopup();
             }
+        }
+        else if (msg == AppBarCallbackMessage && unchecked((uint)wParam.ToInt64()) == AppBarReservation.AbnPosChanged)
+        {
+            // 系统通知工作区变化（如其他 AppBar 增删）：重新贴顶 + 重新申请。
+            // SyncAppBarPosition 内"协商 rc 无变化则跳过赋值"保证这里最多执行一轮，不会震荡。
+            SyncAppBarPosition();
         }
 
         return IntPtr.Zero;
@@ -161,9 +331,17 @@ internal sealed class MenuBarWindow : ShellWindow
     {
         if (_hwndSource is not null)
         {
+            if (_appBarRegistered)
+            {
+                // 必须注销：否则顶部预留空间在退出后仍被占用（桌面图标回不来）。
+                AppBarReservation.Unregister(_hwndSource.Handle);
+                _appBarRegistered = false;
+            }
             _hwndSource.RemoveHook(WndProc);
             _hwndSource = null;
         }
+        _leftZone?.Dispose(); // 退订前台窗口事件
+        _leftZone = null;
         base.OnClosed(e);
     }
 

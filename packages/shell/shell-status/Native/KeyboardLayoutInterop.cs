@@ -25,7 +25,10 @@ public sealed record KeyboardLayoutItem(
     bool IsIme,            // Layout File 以 .ime 结尾 = 输入法（IMM）
     bool IsActive,         // 是否当前激活
     bool IsTs = false,     // true = TSF 文本服务（纯 TSF 输入法），false = 传统键盘布局/IMM
-    int LangId = 0);       // 语言 ID（如 0x0804=中文简体, 0x0409=英语美国），用于排序
+    int LangId = 0,        // 语言 ID（如 0x0804=中文简体, 0x0409=英语美国），用于排序
+    string? HklHex = null);// TSF 输入法在 SortOrder 注册表里的 KeyboardLayout 值（激活时的真实 HKL，
+                           // 如微软拼音 0xE0200804，8 位十六进制）；非 TSF 或注册表无该值时 null。
+                           // 用于激活判定：TSF 精确匹配不可用时，用 HKL 精确比对区分同语言多输入法。
 
 public static partial class KeyboardLayoutInterop
 {
@@ -96,13 +99,19 @@ public static partial class KeyboardLayoutInterop
         [PreserveSig] int GetActiveLanguageProfile(ushort langid, out Guid pclsid, out Guid pguidProfile, out int pfModified);
     }
 
-    /// <summary>获取当前激活的 TSF 输入法的 KLID（CLSID 前 8 位十六进制），失败返回 null。</summary>
+    /// <summary>
+    /// 获取当前激活的 TSF 输入法的 KLID（CLSID 前 8 位十六进制），失败返回 null。
+    /// 用 ITfInputProcessorProfiles.GetActiveLanguageProfile（Win11 上比 ThreadMgr 的
+    /// ProfileMgr 更稳定），且 langid 取**前台窗口线程**的 HKL（而不是本线程）——
+    /// 否则菜单栏/弹窗抢焦点后读到的是本线程的布局，导致"当前输入法识别不准"。
+    /// </summary>
     private static string? GetActiveTsKlid()
     {
         try
         {
-            // 当前输入语言的 langid（HKL 低 16 位）
-            var hkl = (uint)GetKeyboardLayout(0).ToInt64();
+            // 前台窗口线程的 HKL 低 16 位 = 当前输入语言的 langid
+            var hkl = (uint)GetActiveHkl().ToInt64();
+            if (hkl == 0) return null;
             ushort langid = (ushort)(hkl & 0xFFFF);
 
             var obj = new TfInputProcessorProfilesClass();
@@ -148,6 +157,23 @@ public static partial class KeyboardLayoutInterop
 
     [DllImport("user32.dll", CharSet = CharSet.Unicode)]
     private static extern IntPtr PostMessage(IntPtr hWnd, uint Msg, IntPtr wParam, IntPtr lParam);
+
+    // ===== 输入模拟：keybd_event 模拟 Win+Space（Windows 官方输入法循环切换方式） =====
+    // 272e4a6 历史版本的关键实现："完美运行过"的输入法切换——用 keybd_event 模拟一次完整
+    // Win+Space 按键序列，Windows 系统把它当真实热键处理，循环切换到下一个输入法，
+    // **不会弹输入法选择器浮层**（与用户记忆"原来的程序模拟 Win+Space 是直接切换到下一个输入法，
+    // 不会再出现额外的界面"完全吻合）。e40d64e 把它改成枚举直切后实机失败，现恢复。
+    // 注意：调用方需要 StartKeyHook 放行注入键（isInjected=true 时直接 CallNextHookEx），
+    // 否则钩子会吞掉我们注入的 Win DOWN，导致模拟无效。
+    private const ushort VK_LWIN = 0x5B;
+    private const ushort VK_RWIN = 0x5C;
+    private const ushort VK_SPACE = 0x20;
+    private const ushort VK_LCONTROL = 0xA2;
+    private const ushort VK_LSHIFT = 0xA0;
+    private const uint KEYEVENTF_KEYUP = 0x0002;
+
+    [DllImport("user32.dll")]
+    private static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, UIntPtr dwExtraInfo);
 
     // ===== 图标提取：从 DLL/EXE/IME 中提取图标（ExtractIconEx） =====
     [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
@@ -490,6 +516,7 @@ public static partial class KeyboardLayoutInterop
                     string layoutName;
                     string layoutFile;
                     bool isIme;
+                    string? hklHex = null;
 
                     if (isTs)
                     {
@@ -497,6 +524,15 @@ public static partial class KeyboardLayoutInterop
                         layoutName = ResolveTsDisplayName(clsidVal!, "0x" + langId.ToString("X8"));
                         layoutFile = string.Empty;
                         isIme = true;
+                        // TSF 输入法的 KeyboardLayout 值 = 该输入法激活时的真实 HKL（如微软拼音 0xE0200804）。
+                        // 记录为 HklHex：TSF CLSID 与 HKL 无法互相推导，但 SortOrder 里两者并存，
+                        // 激活判定时用"前台 HKL == 该项 HklHex"精确比对，同语言多输入法也能区分。
+                        hklHex = kbdLayoutObj switch
+                        {
+                            int i2 => ((uint)i2).ToString("X8"),
+                            uint u2 => u2.ToString("X8"),
+                            _ => null
+                        };
                     }
                     else
                     {
@@ -524,7 +560,8 @@ public static partial class KeyboardLayoutInterop
                         IsIme: isIme,
                         IsActive: isActive,
                         IsTs: isTs,
-                        LangId: langId));
+                        LangId: langId,
+                        HklHex: hklHex));
                 }
             }
 
@@ -649,8 +686,11 @@ public static partial class KeyboardLayoutInterop
     {
         var activeHkl = unchecked((uint)GetActiveHkl().ToInt64());
         var activeKlid = activeHkl == 0 ? null : activeHkl.ToString("X8");
-        // TSF 精确匹配：Win11 上 TF_ThreadMgr 常未注册，返回 null 时自动降级到语言匹配。
-        var activeTsfClsid = TsfInputProcessor.TryGetActiveClsidHex();
+        // TSF 精确匹配（双来源）：Win11 上 ThreadMgr 的 ProfileMgr 常未注册（TryGetActiveClsidHex 返回 null），
+        // 此时用 ITfInputProcessorProfiles.GetActiveLanguageProfile（GetActiveTsKlid）补充。
+        // 两路都失败才降级到 HKL / 语言匹配——否则同语言多输入法（搜狗+微软拼音）恒指列表第一项，
+        // 表现为"切到微软拼音仍显示搜狗图标"。
+        var activeTsfClsid = TsfInputProcessor.TryGetActiveClsidHex() ?? GetActiveTsKlid();
         var activeLang = (ushort)(activeHkl & 0xFFFF);
 
         var result = new List<KeyboardLayoutItem>(capacity: cached.Count);
@@ -684,7 +724,19 @@ public static partial class KeyboardLayoutInterop
             return item.IsTs && string.Equals(item.KlidHex, activeTsfClsid, StringComparison.OrdinalIgnoreCase);
         }
 
-        // ② 语言 ID 匹配：TSF 输入法以 CLSID 标识，与 HKL 无法直接比对，只能回退到语言维度。
+        // ② HKL 精确匹配（v7，2026-08-30）：TSF 输入法在 SortOrder 注册表里带 KeyboardLayout 值
+        //    （激活时的真实 HKL，如微软拼音 0xE0200804），与前台 HKL 完全一致即确认激活。
+        //    根治"切换输入法后菜单栏图标不刷新"：TSF 精确匹配不可用（Win11 TF_ThreadMgr 常未注册）
+        //    时，旧逻辑只能按语言 ID 匹配，同语言多输入法（微软拼音/搜狗）恒指列表第一项，
+        //    图标永不跟随切换。HKL 匹配让每个输入法有唯一标识，切换后 active 立即正确。
+        if (activeKlid is not null
+            && !string.IsNullOrEmpty(item.HklHex)
+            && string.Equals(item.HklHex, activeKlid, StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        // ③ 语言 ID 匹配：TSF 输入法以 CLSID 标识，与 HKL 无法直接比对，只能回退到语言维度。
         //    这是 Win11（TF_ThreadMgr 未注册）下的实际生效路径。
         var itemLang = item.LangId != 0
             ? (ushort)(item.LangId & 0xFFFF)
@@ -696,7 +748,7 @@ public static partial class KeyboardLayoutInterop
             return true;
         }
 
-        // ③ KLID 精确匹配：纯键盘布局的常见形态（HKL=0x04090409 ↔ KLID=00000409）。
+        // ④ KLID 精确匹配：纯键盘布局的常见形态（HKL=0x04090409 ↔ KLID=00000409）。
         return activeKlid is not null
             && string.Equals(item.KlidHex, activeKlid, StringComparison.OrdinalIgnoreCase);
     }
@@ -714,37 +766,80 @@ public static partial class KeyboardLayoutInterop
             : null;
     }
 
-    /// <summary>激活指定键盘布局/输入法。isTs=true 时走 TSF 路径（SetDefaultLayoutOrTip），
     /// <summary>
-    /// 切换到下一个输入法/键盘布局（**直接激活，不弹系统输入法选择器 UI**）。
-    /// v5 (2026-08-30)：彻底放弃 SendInput 模拟 Win+Space —— 系统会把模拟按键识别为真实
-    /// 热键并弹出 CTF 输入法选择器浮层（用户反馈"出现额外界面"）。
-    /// 改为：枚举真实布局列表 → 定位当前激活项 → 直接激活下一项：
-    ///   - TSF 输入法：ITfInputProcessorProfiles::ActivateProfile（TSF 官方立即激活，无 UI）
-    ///   - IMM / 纯键盘布局：PostMessage(WM_INPUTLANGCHANGEREQUEST) 到前台窗口
-    /// 全程不依赖 Win 键，与 StartKeyHook 吞 Win DOWN 完全解耦。
+    /// 切换到下一个输入法/键盘布局：用 keybd_event 模拟按键热键，**单步切换**。
+    ///
+    /// 只用 Win+Space（Windows 官方全局输入法循环切换方式，272e4a6 历史"完美运行过"的路径）：
+    ///   - 每调用一次**稳定切一步**，绝不连跳——杜绝"一次点击跳过中间输入法"（如搜狗被快速略过）。
+    ///   - 全局切换（作用于所有窗口），对 IMM 与 TSF 输入法（含微软拼音/搜狗）均有效，
+    ///     **不弹 CTF 输入法选择器浮层**。
+    ///   - 不受用户自定义热键影响（无论用户配的是 Ctrl+Shift / Alt+Shift / 未分配，Win+Space 都生效）。
+    ///
+    /// 历史教训：
+    /// - v7 (2026-08-30) 曾"先模拟 Ctrl+Shift、验证 HKL 未变再降级 Win+Space"：
+    ///   **该策略在实机会连切两步**——TSF 输入法（尤其第三方如搜狗）切换后 HKL 更新可能慢于
+    ///   验证 Sleep(120ms)，`GetActiveHkl()` 读到旧值被误判"没切换"，于是又补一次 Win+Space，
+    ///   一步跳过中间输入法。且 Ctrl+Shift 是 per-window（切的是焦点窗口，焦点在菜单栏时切不到用户应用）。
+    ///   故回归到单步 Win+Space。
+    /// - 272e4a6：keybd_event 模拟 Win+Space（完美运行过，Playground 截图证实）。
+    /// - e40d64e (v5)：枚举→ITfInputProcessorProfiles::ActivateProfile / PostMessage 直切——实机失败。
+    /// - v6：回滚 Win+Space，与 StartKeyHook v6 配套（钩子对注入 Win 键 LLKHF_INJECTED 放行）。
+    ///
+    /// Sleep 是为给系统足够时间逐次消费按键（keybd_event 同步入队但系统异步处理）。
     /// </summary>
     public static bool CycleOnce()
     {
+        // Win+Space 每调用一次全局切一步，不校验 HKL（校验会引入"连跳"风险，见上方历史教训）。
+        return SimulateWinSpace();
+    }
+
+    /// <summary>模拟一次完整的 Ctrl+Shift 按键序列（Windows"在输入语言之间切换"热键）。
+    /// 返回 false 表示模拟失败（异常）。</summary>
+    private static bool SimulateCtrlShift()
+    {
         try
         {
-            var layouts = Enumerate();
-            if (layouts.Count == 0) return false;
-
-            // 定位当前激活项；找不到（极端情况）从第一项开始
-            int current = -1;
-            for (int i = 0; i < layouts.Count; i++)
-            {
-                if (layouts[i].IsActive) { current = i; break; }
-            }
-            int next = current < 0 ? 0 : (current + 1) % layouts.Count;
-            if (next == current) return false; // 只有一个布局，无可切换
-
-            var target = layouts[next];
-            return Activate(target.KlidHex, target.IsTs);
+            keybd_event((byte)VK_LCONTROL, 0, 0, UIntPtr.Zero);
+            System.Threading.Thread.Sleep(50);
+            keybd_event((byte)VK_LSHIFT, 0, 0, UIntPtr.Zero);
+            System.Threading.Thread.Sleep(50);
+            keybd_event((byte)VK_LSHIFT, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
+            System.Threading.Thread.Sleep(50);
+            keybd_event((byte)VK_LCONTROL, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
+            return true;
         }
         catch
         {
+            // 异常时释放可能处于按下状态的修饰键，避免卡键
+            try { keybd_event((byte)VK_LCONTROL, 0, KEYEVENTF_KEYUP, UIntPtr.Zero); } catch { }
+            try { keybd_event((byte)VK_LSHIFT, 0, KEYEVENTF_KEYUP, UIntPtr.Zero); } catch { }
+            return false;
+        }
+    }
+
+    /// <summary>模拟一次完整的 Win+Space 按键序列（Windows 官方全局输入法循环切换方式，
+    /// 272e4a6 历史"完美运行过"的实现）。StartKeyHook v6 对注入的 Win 键一律放行，模拟不会被吞。</summary>
+    private static bool SimulateWinSpace()
+    {
+        try
+        {
+            byte vkLWin = (byte)VK_LWIN;
+            byte vkSpace = (byte)VK_SPACE;
+            keybd_event(vkLWin, 0, 0, UIntPtr.Zero);
+            System.Threading.Thread.Sleep(80);
+            keybd_event(vkSpace, 0, 0, UIntPtr.Zero);
+            System.Threading.Thread.Sleep(60);
+            keybd_event(vkSpace, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
+            System.Threading.Thread.Sleep(60);
+            keybd_event(vkLWin, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
+            System.Threading.Thread.Sleep(150);
+            return true;
+        }
+        catch
+        {
+            // 异常时尽量释放可能处于按下状态的修饰键，避免卡键
+            try { keybd_event((byte)VK_LWIN, 0, KEYEVENTF_KEYUP, UIntPtr.Zero); } catch { }
+            try { keybd_event((byte)VK_SPACE, 0, KEYEVENTF_KEYUP, UIntPtr.Zero); } catch { }
             return false;
         }
     }
@@ -1348,6 +1443,9 @@ public static class ImeNaming
         if (isIme)
         {
             if (layoutName.Contains("搜狗")) return "搜";
+            // 微软拼音官方图标就是"拼"字（用户明确期望），必须先于"微软"匹配，
+            // 否则"微软拼音"会命中"微软"显示成"微"。
+            if (layoutName.Contains("微软拼音")) return "拼";
             if (layoutName.Contains("微软")) return "微";
             if (layoutName.Contains("拼音")) return "拼";
             if (layoutName.Contains("必应")) return "必";

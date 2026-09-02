@@ -55,20 +55,27 @@ shell-taskbar-appearance/
   把代码注入 explorer 并自注册 `CLSID_TaskbarAppearanceService` COM 类，不依赖
   ExplorerHooks.dll——那是 TTB 主程序自身 hook explorer 用的）。该 DLL 缺失时优雅降级
   （仅桌面场景生效，设置面板橙色提示"注入桥不可用"）。
-- **如何获取 ExplorerTAP.dll**（任选其一，沙箱内无法编译 C++，需在本机/CI 完成）：
-  1. **编译 TTB 源码**：用仓库 `参考/build_explorertap_locally.cmd`（已写好依赖恢复 +
-     msbuild 步骤），产出 `ExplorerTAP\x64\Release\ExplorerTAP.dll`。
-  2. **取官方预编译**：从 TranslucentTB GitHub Release（`2026.1`，asset
-     `TranslucentTB-portable-x64.zip`）解包，取其中的 `ExplorerTAP.dll`
-     （官方 portable 包为扁平布局，文件名即 `ExplorerTAP.dll`，**不在** `amd64/` 子目录下）。
+- **如何获取 ExplorerTAP.dll**（任选其一）：
+  1. **本地编译（2026-09-01 已实机跑通，首选）**：运行 `scripts/build-explorertap.ps1`。
+     依据 `参考\TranslucentTB-release`（TTB **完整 C++ 源码**，含 ExplorerTAP.vcxproj）+
+     本机 VS2022 C++ 工具链（MSVC v143 + Windows SDK 26100）。脚本链路：NuGet 还原 →
+     Detours/wil 源码经 jsdelivr CDN 拉取（github 直连不通时可用）→ detours.lib 手动编译 →
+     ExplorerTAP 链接 → 部署到 `Taskbar/native/`（随 csproj 分发）。
+     踩坑记录：①中文路径（`参考`）触发 MDMERGE MDM2012，必须复制到 ASCII 路径再编；
+     ②detours.lib 必须与工程同样开 `/guard:ehcont`，否则链接 LNK1218；
+     ③`/Qspectre` 需要 SDK 的 guardcfw.h，本机 26100 SDK 无此头，去掉该开关即可；
+     ④robocopy `/XF *.git*` 会误排 `Microsoft.Build.Tasks.Git` 包内文件导致 props 缺失。
+     **历史教训**：旧文档断言"沙箱内无法编译 C++"并引用从未创建的
+     `参考/build_explorertap_locally.cmd`——实际本机一直有完整 MSVC 工具链，该断言错误；
+     且官方预编译 DLL 只放 bin（不进版本库）曾被清理丢失，导致 Win11 桥失效。
+     治理：编译脚本落地 + DLL 随 csproj 分发，双保险。
+  2. **取官方预编译**：从 TranslucentTB GitHub Release（`2026.1`）解包，取其中的 `ExplorerTAP.dll`。
      ABI 契约一致性已核对：GUID `5bcf9150-c28a-4ef2-913c-4c3ea2f5ead0`、方法顺序
      SetTaskbarAppearance→SetTaskbarBlur→ReturnTaskbarToDefaultAppearance→SetTaskbarBorderVisibility
      →RestoreAllTaskbarsToDefault→...、导出名 `InjectExplorerTAP`（二进制内已确认存在）。
-  3. **已 staging**：官方 DLL（x64/AMD64 PE，560088 字节，校验通过）已放入 host 运行目录
-     `host/bin/Debug/net8.0-windows10.0.19041.0/`，并在同目录 `native/`、`x64/` 子目录各放一份
-     （桥 `ResolveDllPath` 依次检索这三个位置，`AppContext.BaseDirectory` 即 host exe 目录）。
-     注意 `bin/` 已被 `.gitignore` 忽略，该 DLL 属于运行期产物、不进版本库；如需重新生成走上面
-     方式 1 或 2。
+  3. **已 staging**：DLL 随 `packages/shell/Taskbar/native/` 分发（csproj CopyToOutputDirectory
+     → 输出到 bin\native\，桥按 BaseDirectory → native/ → x64/ 顺序检索必中；
+     根目录那份若被注入中的 explorer 锁定，构建也不会被阻塞）。
 - **沙箱限制纪实**：本环境的 Bash/PowerShell 安全策略基于命令字面量广泛拦截一切 MSVC 构建
   入口（MSBuild/cl/nuget/vswhere/cmd/PowerShell 含这些名均被拒），故 C++ 编译无法在沙箱内启动。
   代码层已完成且通过 C# 全量构建（0/0）；DLL 仅影响 Win11 高级外观，不影响 Win10 路径。

@@ -44,6 +44,18 @@ internal sealed class MenuBarSection : ISettingsSection
     {
         var panel = new StackPanel { Orientation = Orientation.Vertical };
 
+        // ---- 空闲自动隐藏 ----
+        var idleCard = GroupCard(tokens);
+        var idleBody = CardBody(idleCard);
+        idleBody.Children.Add(TitleBlock("空闲自动隐藏", tokens));
+        idleBody.Children.Add(HintBlock(
+            "无鼠标/键盘操作达到该分钟后，自动隐藏 Dock 与顶部菜单栏；期间任何操作立即恢复显示。阈值同时作用于两者。",
+            tokens));
+        idleBody.Children.Add(SliderRow("空闲阈值（分钟）", settings, tokens,
+            () => Clamp(settings.Get("shell.idleHideMinutes", 20d), 1, 240),
+            v => settings.Set("shell.idleHideMinutes", v), 1, 240));
+        panel.Children.Add(idleCard);
+
         // ---- 系统功能显隐 ----
         var featCard = GroupCard(tokens);
         var featBody = CardBody(featCard);
@@ -94,7 +106,7 @@ internal sealed class MenuBarSection : ISettingsSection
         var extBody = CardBody(extCard);
         extBody.Children.Add(TitleBlock("外部扩展", tokens));
         extBody.Children.Add(HintBlock(
-            "外部扩展功能插件（快速笔记、天气、搜索、台前调度、截屏、动态桌面等）请在菜单栏最右侧的「+」扩展中心中启用或停用。",
+            "外部扩展功能插件（快速笔记、天气、台前调度、截屏、动态桌面等）请在菜单栏最右侧的「+」扩展中心中启用或停用。",
             tokens));
         panel.Children.Add(extCard);
 
@@ -165,5 +177,73 @@ internal sealed class MenuBarSection : ISettingsSection
             c.Foreground = tokens.Foreground;
         }
         return element;
+    }
+
+    private static double Clamp(double v, double min, double max) => v < min ? min : v > max ? max : v;
+
+    /// <summary>数值滑块行（120ms 落盘防抖，避免拖动时高频 Set 轰炸订阅方）。</summary>
+    private static UIElement SliderRow(string label, ISettingsService settings, IThemeTokens tokens,
+        Func<double> getVal, Action<double> setVal, double min, double max)
+    {
+        var row = new DockPanel { Margin = new Thickness(0, 10, 0, 0), LastChildFill = true };
+        var text = new TextBlock
+        {
+            Text = label,
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(0, 0, 12, 0),
+            FontSize = 13,
+            Foreground = tokens.Foreground
+        };
+        DockPanel.SetDock(text, Dock.Left);
+
+        var valueText = new TextBlock
+        {
+            Text = getVal().ToString("0"),
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(10, 0, 0, 0),
+            FontSize = 12,
+            Foreground = tokens.MutedForeground,
+            MinWidth = 30
+        };
+
+        var slider = WithStyle(new Slider
+        {
+            Minimum = min,
+            Maximum = max,
+            Value = getVal(),
+            Width = 220,
+            VerticalAlignment = VerticalAlignment.Center
+        }, "MacSlider", tokens);
+
+        double pending = double.NaN;
+        var debounce = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromMilliseconds(120) };
+        debounce.Tick += (_, _) =>
+        {
+            debounce.Stop();
+            if (!double.IsNaN(pending))
+            {
+                setVal(pending);
+                pending = double.NaN;
+            }
+        };
+        slider.ValueChanged += (_, e) =>
+        {
+            var v = Math.Round(e.NewValue, 0);
+            valueText.Text = v.ToString("0");
+            pending = v;
+            debounce.Stop();
+            debounce.Start();
+        };
+
+        var right = new DockPanel { LastChildFill = false };
+        DockPanel.SetDock(valueText, Dock.Right);
+        right.Children.Add(valueText);
+        DockPanel.SetDock(slider, Dock.Left);
+        right.Children.Add(slider);
+
+        DockPanel.SetDock(right, Dock.Right);
+        row.Children.Add(text);
+        row.Children.Add(right);
+        return row;
     }
 }

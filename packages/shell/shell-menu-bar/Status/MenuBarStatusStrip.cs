@@ -34,7 +34,7 @@ internal sealed class BatteryIcon : ContentControl, IDisposable
 	{
 		_bat = bat;
 		base.Width = 54.0;
-		base.Height = 13.0;
+		base.Height = 16.0;
 		Canvas canvas = new Canvas
 		{
 			Width = 58.0,
@@ -90,7 +90,7 @@ internal sealed class BatteryIcon : ContentControl, IDisposable
 		_percentText = new TextBlock
 		{
 			Foreground = MenuBarTheme.Foreground,
-			FontSize = 10.0,
+			FontSize = 12.0,
 			FontWeight = FontWeights.SemiBold,
 			VerticalAlignment = VerticalAlignment.Center,
 			Visibility = Visibility.Visible
@@ -104,7 +104,7 @@ internal sealed class BatteryIcon : ContentControl, IDisposable
 			Child = child,
 			Stretch = Stretch.Uniform,
 			Width = 54.0,
-			Height = 13.0
+			Height = 16.0
 		};
 		if (_bat != null)
 		{
@@ -176,7 +176,7 @@ internal sealed class BluetoothIcon : ContentControl
 	public BluetoothIcon()
 	{
 		base.Width = 9.0;
-		base.Height = 13.0;
+		base.Height = 16.0;
 		Canvas canvas = new Canvas
 		{
 			Width = 18.0,
@@ -199,7 +199,7 @@ internal sealed class BluetoothIcon : ContentControl
 			Child = child,
 			Stretch = Stretch.Uniform,
 			Width = 9.0,
-			Height = 13.0
+			Height = 16.0
 		};
 	}
 }
@@ -218,7 +218,7 @@ internal sealed class BrightnessIcon : ContentControl, IDisposable
 	{
 		_brightness = brightness;
 		base.Width = 13.0;
-		base.Height = 13.0;
+		base.Height = 16.0;
 		Canvas canvas = new Canvas
 		{
 			Width = 22.0,
@@ -259,7 +259,7 @@ internal sealed class BrightnessIcon : ContentControl, IDisposable
 			Child = child,
 			Stretch = Stretch.Uniform,
 			Width = 13.0,
-			Height = 13.0
+			Height = 16.0
 		};
 		if (_brightness != null)
 		{
@@ -375,11 +375,11 @@ internal sealed class CpuIcon : ContentControl, IDisposable
 	{
 		_cpu = cpu;
 		base.Width = 24.0;
-		base.Height = 13.0;
+		base.Height = 16.0;
 		_percentText = new TextBlock
 		{
 			Foreground = MenuBarTheme.Foreground,
-			FontSize = 11.0,
+			FontSize = 13.0,
 			FontWeight = FontWeights.SemiBold,
 			VerticalAlignment = VerticalAlignment.Center,
 			HorizontalAlignment = HorizontalAlignment.Center,
@@ -448,11 +448,11 @@ internal sealed class FpsIcon : ContentControl, IDisposable
 		//IL_00a8: Unknown result type (might be due to invalid IL or missing references)
 		//IL_00c2: Expected O, but got Unknown
 		base.Width = 26.0;
-		base.Height = 13.0;
+		base.Height = 16.0;
 		_fpsText = new TextBlock
 		{
 			Foreground = MenuBarTheme.Foreground,
-			FontSize = 11.0,
+			FontSize = 13.0,
 			FontWeight = FontWeights.SemiBold,
 			VerticalAlignment = VerticalAlignment.Center,
 			HorizontalAlignment = HorizontalAlignment.Center,
@@ -513,7 +513,11 @@ internal sealed class ImeIcon : ContentControl, IDisposable
 
 	private readonly Image _image;
 
-	private readonly UIElement _fallback;
+	/// <summary>语义字符兜底：显示当前输入法状态（"中"/"搜"/"A" 等，来自 <see cref="ImeNaming.ForMenuBar"/>）。</summary>
+	private readonly TextBlock _langText;
+
+	/// <summary>最后兜底：无任何可读信息时的自绘键盘图标。</summary>
+	private readonly UIElement _keyboardIcon;
 
 	private bool _disposed;
 
@@ -521,14 +525,26 @@ internal sealed class ImeIcon : ContentControl, IDisposable
 	{
 		_ime = ime;
 		base.Width = 16.0;
-		base.Height = 13.0;
+		base.Height = 16.0;
 
-		_fallback = BuildKeyboardIcon();
+		_keyboardIcon = BuildKeyboardIcon();
+
+		_langText = new TextBlock
+		{
+			Text = "中",
+			FontSize = 11,
+			FontWeight = FontWeights.SemiBold,
+			Foreground = MenuBarTheme.Foreground,
+			VerticalAlignment = VerticalAlignment.Center,
+			HorizontalAlignment = HorizontalAlignment.Center,
+			TextAlignment = TextAlignment.Center,
+			Visibility = Visibility.Collapsed
+		};
 
 		_image = new Image
 		{
 			Width = 16,
-			Height = 13,
+			Height = 16,
 			Stretch = Stretch.Uniform,
 			SnapsToDevicePixels = true,
 			Visibility = Visibility.Collapsed
@@ -537,7 +553,7 @@ internal sealed class ImeIcon : ContentControl, IDisposable
 
 		base.Content = new Grid
 		{
-			Children = { _fallback, _image }
+			Children = { _keyboardIcon, _langText, _image }
 		};
 
 		if (_ime != null)
@@ -602,7 +618,7 @@ internal sealed class ImeIcon : ContentControl, IDisposable
 		{
 			Child = canvas,
 			Width = 16,
-			Height = 13,
+			Height = 16,
 			Stretch = Stretch.Uniform
 		};
 	}
@@ -622,6 +638,26 @@ internal sealed class ImeIcon : ContentControl, IDisposable
 		});
 	}
 
+	/// <summary>
+	/// 主动刷新按钮图标（切换输入法后由 MenuBarStatusStrip 调用）。
+	/// 模拟热键切换不改变前台窗口 → 事件泵不触发；500ms 兜底轮询也可能因快照文本未变
+	/// （同语言多输入法 / 图标不同但文本相同）而判定无变化。主动刷新保证图标跟随切换立即更新。
+	/// </summary>
+	public void Refresh()
+	{
+		if (_disposed)
+		{
+			return;
+		}
+		UiDispatch.Run((DispatcherObject)(object)this, delegate
+		{
+			if (!_disposed)
+			{
+				RefreshIcon();
+			}
+		});
+	}
+
 	private void UpdateIme(StatusSnapshot snap)
 	{
 		RefreshIcon();
@@ -630,7 +666,8 @@ internal sealed class ImeIcon : ContentControl, IDisposable
 	/// <summary>
 	/// 刷新当前激活输入法/键盘布局的程序图标（用户要求：显示输入法自己的图标，不是“中/英”文字）。
 	/// 图标提取逻辑与 ImePopupWindow.LoadLayoutIcon 相同（KeyboardLayoutInterop.GetLayoutIconHandle）。
-	/// 提取失败时降级为自绘键盘图标。
+	/// 提取失败时降级为语义字符（<see cref="ImeNaming.ForMenuBar"/> 的“中/搜/A”），
+	/// 连语义字符都没有才用自绘键盘图标兜底。
 	/// </summary>
 	private void RefreshIcon()
 	{
@@ -658,7 +695,8 @@ internal sealed class ImeIcon : ContentControl, IDisposable
 
 			_image.Source = source;
 			_image.Visibility = Visibility.Visible;
-			_fallback.Visibility = Visibility.Collapsed;
+			_langText.Visibility = Visibility.Collapsed;
+			_keyboardIcon.Visibility = Visibility.Collapsed;
 		}
 		catch
 		{
@@ -670,7 +708,55 @@ internal sealed class ImeIcon : ContentControl, IDisposable
 	{
 		_image.Source = null;
 		_image.Visibility = Visibility.Collapsed;
-		_fallback.Visibility = Visibility.Visible;
+		_keyboardIcon.Visibility = Visibility.Collapsed;
+
+		// 优先回退到语义字符（"中" / "搜" / "A"），让用户至少能看出当前输入法状态，
+		// 而不只是一个无法区分的自绘键盘图标（这正是"图标显示不对"的来源）。
+		var label = ReadSemanticLabel();
+		if (!string.IsNullOrEmpty(label))
+		{
+			_langText.Text = label;
+			_langText.Visibility = Visibility.Visible;
+			return;
+		}
+
+		// 连语义字符都读不到（监控服务缺失 / 枚举失败）：最后兜底自绘键盘图标。
+		_keyboardIcon.Visibility = Visibility.Visible;
+	}
+
+	/// <summary>读取当前输入法的语义字符（与菜单栏 ImeMonitor 的 ForMenuBar 同源）。</summary>
+	private string ReadSemanticLabel()
+	{
+		try
+		{
+			// 优先用监控服务的语义快照（含中/英模式，最准）
+			if (_ime is not null)
+			{
+				var snap = _ime.GetSnapshot();
+				if (!string.IsNullOrEmpty(snap.ShortText)) return snap.ShortText;
+			}
+			// 监控服务缺失：从枚举 + 语言推断
+			var items = ImeLayoutEnumerator.Enumerate();
+			var active = items.FirstOrDefault(i => i.IsActive) ?? items.FirstOrDefault();
+			if (active is not null)
+			{
+				// ImeLayoutItem.DisplayName 即真实布局名（"微软拼音"/"美式键盘"）；
+				// langId 从 KlidHex 末 4 位解析（中文语言可正确推断"中"，而非品牌字）。
+				int langId = 0;
+				if (active.KlidHex.Length >= 4
+					&& int.TryParse(active.KlidHex[^4..],
+						System.Globalization.NumberStyles.HexNumber, null, out var parsed))
+				{
+					langId = parsed;
+				}
+				return ImeNaming.ForMenuBar(active.DisplayName, active.IsIme, null, langId);
+			}
+		}
+		catch
+		{
+			// 读取失败返回空，走键盘图标兜底
+		}
+		return string.Empty;
 	}
 
 	public void Dispose()
@@ -695,11 +781,11 @@ internal sealed class MemoryIcon : ContentControl, IDisposable
 	{
 		_mem = mem;
 		base.Width = 26.0;
-		base.Height = 13.0;
+		base.Height = 16.0;
 		_percentText = new TextBlock
 		{
 			Foreground = MenuBarTheme.Foreground,
-			FontSize = 11.0,
+			FontSize = 13.0,
 			FontWeight = FontWeights.SemiBold,
 			VerticalAlignment = VerticalAlignment.Center,
 			HorizontalAlignment = HorizontalAlignment.Center,
@@ -783,6 +869,7 @@ public enum MenuBarStatusButtonId
 	Microphone,
 	Battery,
 	Notification,
+	Search,
 	Extensions,
 	DateTime,
 	Desktop
@@ -884,11 +971,12 @@ public sealed class MenuBarStatusStrip : StackPanel, IDisposable
 			notifyToggle.Toggle();
 		};
 		base.Children.Add(border);
+		base.Children.Add(CreateButton(MenuBarStatusButtonId.Search, "搜索", CreateSearchIcon(), 18.0));
 		TextBlock content2 = new TextBlock
 		{
 			Text = "+",
 			Foreground = MenuBarTheme.Foreground,
-			FontSize = 15.0,
+			FontSize = 18.0,
 			FontWeight = FontWeights.Light,
 			VerticalAlignment = VerticalAlignment.Center,
 			HorizontalAlignment = HorizontalAlignment.Center
@@ -897,13 +985,13 @@ public sealed class MenuBarStatusStrip : StackPanel, IDisposable
 		_dateTimeText = new TextBlock
 		{
 			Foreground = MenuBarTheme.Foreground,
-			FontSize = 10.0,
+			FontSize = 12.0,
 			FontWeight = FontWeights.SemiBold,
 			VerticalAlignment = VerticalAlignment.Center,
 			HorizontalAlignment = HorizontalAlignment.Center
 		};
 		UpdateDateTime();
-		base.Children.Add(CreateButton(MenuBarStatusButtonId.DateTime, "日期时间", _dateTimeText, 80.0));
+		base.Children.Add(CreateButton(MenuBarStatusButtonId.DateTime, "日期时间", _dateTimeText, 96.0));
 		Border border2 = CreateButton(MenuBarStatusButtonId.Desktop, "桌面覆盖", CreateDesktopIcon(), 19.0);
 		border2.MouseLeftButtonUp += delegate
 		{
@@ -944,6 +1032,9 @@ public sealed class MenuBarStatusStrip : StackPanel, IDisposable
 
     /// <summary>设置系统托盘是否隐藏与菜单栏专用按钮重复的系统图标（音量/网络/电源/安全与维护）。</summary>
     public void SetTrayHideSystemIcons(bool hide) => _systemTrayIcon.HideSystemIcons = hide;
+
+    /// <summary>切换输入法后主动刷新 IME 按钮图标（点击切换不改变前台窗口，事件泵不触发，主动刷新立即跟随）。</summary>
+    public void RefreshImeIcon() => _imeIcon.Refresh();
 
     /// <summary>读取某个菜单栏组件当前是否可见。</summary>
     public bool IsComponentVisible(MenuBarStatusButtonId id)
@@ -1010,7 +1101,8 @@ public sealed class MenuBarStatusStrip : StackPanel, IDisposable
 		Border btn = new Border
 		{
 			Width = width,
-			Height = 14.0,
+			Height = 18.0,
+			Margin = new Thickness(1, 0, 1, 0), // 按钮间呼吸间距（左右各 1px）
 			Background = Brushes.Transparent,
 			VerticalAlignment = VerticalAlignment.Center,
 			HorizontalAlignment = HorizontalAlignment.Center,
@@ -1068,7 +1160,50 @@ public sealed class MenuBarStatusStrip : StackPanel, IDisposable
 		{
 			Child = canvas,
 			Width = 17.0,
-			Height = 13.0,
+			Height = 16.0,
+			Stretch = Stretch.Uniform
+		};
+	}
+
+	/// <summary>搜索按钮放大镜图标（自绘：Ellipse 圆环 + 斜线手柄），随主题前景色换色。
+	/// 刻意不用 Path 双圆叠加：Fill 透明时会把内外两个圆都描出来（变形来源），Ellipse 最简单可靠。</summary>
+	private static UIElement CreateSearchIcon()
+	{
+		Canvas canvas = new Canvas
+		{
+			Width = 18.0,
+			Height = 14.0
+		};
+		// 镜圈：圆环（圆心 5.5,5.5，半径 4.5），留足呼吸空间避免"画太大"显糊
+		var ring = new Ellipse
+		{
+			Width = 9.0,
+			Height = 9.0,
+			Stroke = MenuBarTheme.Foreground,
+			StrokeThickness = 1.3,
+			Fill = Brushes.Transparent
+		};
+		Canvas.SetLeft(ring, 1.0);
+		Canvas.SetTop(ring, 1.0);
+		canvas.Children.Add(ring);
+		// 手柄：从镜圈右下边缘（45° 方向 ≈ 8.7,8.7）向右下延伸
+		var handle = new Line
+		{
+			X1 = 8.7,
+			Y1 = 8.7,
+			X2 = 13.0,
+			Y2 = 13.0,
+			Stroke = MenuBarTheme.Foreground,
+			StrokeThickness = 1.4,
+			StrokeStartLineCap = PenLineCap.Round,
+			StrokeEndLineCap = PenLineCap.Round
+		};
+		canvas.Children.Add(handle);
+		return new Viewbox
+		{
+			Child = canvas,
+			Width = 16.0,
+			Height = 16.0,
 			Stretch = Stretch.Uniform
 		};
 	}
@@ -1104,7 +1239,7 @@ internal sealed class MicIcon : ContentControl, IDisposable
 	{
 		_mic = mic;
 		base.Width = 12.0;
-		base.Height = 13.0;
+		base.Height = 16.0;
 		Canvas canvas = new Canvas
 		{
 			Width = 18.0,
@@ -1138,7 +1273,7 @@ internal sealed class MicIcon : ContentControl, IDisposable
 			Child = child,
 			Stretch = Stretch.Uniform,
 			Width = 12.0,
-			Height = 13.0
+			Height = 16.0
 		};
 		if (_mic != null)
 		{
@@ -1208,7 +1343,7 @@ internal sealed class NetworkTrafficIcon : ContentControl, IDisposable
 		//IL_02fa: Expected O, but got Unknown
 		_net = net;
 		base.Width = 36.0;
-		base.Height = 13.0;
+		base.Height = 16.0;
 		StackPanel stackPanel = new StackPanel
 		{
 			Orientation = Orientation.Vertical,
@@ -1232,7 +1367,7 @@ internal sealed class NetworkTrafficIcon : ContentControl, IDisposable
 		_upText = new TextBlock
 		{
 			Foreground = MenuBarTheme.Foreground,
-			FontSize = 8.0,
+			FontSize = 10.0,
 			FontWeight = FontWeights.SemiBold,
 			VerticalAlignment = VerticalAlignment.Center,
 			Text = "--"
@@ -1258,7 +1393,7 @@ internal sealed class NetworkTrafficIcon : ContentControl, IDisposable
 		_downText = new TextBlock
 		{
 			Foreground = MenuBarTheme.Foreground,
-			FontSize = 8.0,
+			FontSize = 10.0,
 			FontWeight = FontWeights.SemiBold,
 			VerticalAlignment = VerticalAlignment.Center,
 			Text = "--"
@@ -1271,7 +1406,7 @@ internal sealed class NetworkTrafficIcon : ContentControl, IDisposable
 			Child = stackPanel,
 			Stretch = Stretch.Uniform,
 			Width = 36.0,
-			Height = 13.0
+			Height = 16.0
 		};
 		_speedTimer = new DispatcherTimer((DispatcherPriority)4)
 		{
@@ -1394,7 +1529,7 @@ internal sealed class NotificationToggle : ContentControl
 	public NotificationToggle()
 	{
 		base.Width = 14.0;
-		base.Height = 13.0;
+		base.Height = 16.0;
 		Canvas canvas = new Canvas
 		{
 			Width = 20.0,
@@ -1414,7 +1549,7 @@ internal sealed class NotificationToggle : ContentControl
 			Child = child,
 			Stretch = Stretch.Uniform,
 			Width = 14.0,
-			Height = 13.0
+			Height = 16.0
 		};
 		UpdateState();
 	}
@@ -1841,7 +1976,7 @@ internal sealed class VolumeIcon : ContentControl, IDisposable
 	{
 		_vol = vol;
 		base.Width = 23.0;
-		base.Height = 13.0;
+		base.Height = 16.0;
 		Canvas canvas = new Canvas
 		{
 			Width = 28.0,
@@ -1884,7 +2019,7 @@ internal sealed class VolumeIcon : ContentControl, IDisposable
 			Child = canvas,
 			Stretch = Stretch.Uniform,
 			Width = 23.0,
-			Height = 13.0
+			Height = 16.0
 		};
 		if (_vol != null)
 		{
@@ -1961,7 +2096,7 @@ internal sealed class WifiSignalIcon : ContentControl, IDisposable
 	{
 		_net = net;
 		base.Width = 16.0;
-		base.Height = 13.0;
+		base.Height = 16.0;
 
 		// 同一 24×24 栅格里叠两层：Wi‑Fi 扇形 + 有线水晶头，按链路类型切换可见性。
 		// 画刷一律用 MenuBarTheme.Foreground（共享未冻结画刷），主题切换自动整体换色。
@@ -1976,7 +2111,7 @@ internal sealed class WifiSignalIcon : ContentControl, IDisposable
 		base.Content = new Viewbox
 		{
 			Width = 16.0,
-			Height = 13.0,
+			Height = 16.0,
 			Stretch = Stretch.Uniform,
 			Child = layers
 		};

@@ -107,6 +107,18 @@ public static class RunningAppDetector
     [DllImport("user32.dll")]
     private static extern bool SetForegroundWindow(IntPtr hWnd);
 
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    private static extern int GetClassName(IntPtr hWnd, StringBuilder lpClassName, int nMaxCount);
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr GetForegroundWindow();
+
+    [DllImport("user32.dll")]
+    private static extern bool AttachThreadInput(uint idAttach, uint idAttachTo, bool fAttach);
+
+    [DllImport("kernel32.dll")]
+    private static extern uint GetCurrentThreadId();
+
     [DllImport("user32.dll")]
     private static extern bool BringWindowToTop(IntPtr hWnd);
 
@@ -179,6 +191,19 @@ public static class RunningAppDetector
                     return true;
                 }
 
+                // 排除 shell 桌面宿主窗口（Progman/WorkerW）：属于 explorer.exe 但不是"运行中的应用"。
+                // 不排除的话它们会并入 explorer 的运行图标，且因 z-order 最底、常驻可见，
+                // 点击激活会选中桌面本身 → 看起来"点了资源管理器没反应"（实测回归）。
+                var className = new StringBuilder(64);
+                if (GetClassName(hwnd, className, 64) > 0)
+                {
+                    var cn = className.ToString();
+                    if (cn == "Progman" || cn == "WorkerW")
+                    {
+                        return true;
+                    }
+                }
+
                 result.Add(new RunningWindow(hwnd, pid, exePath, title));
             }
             catch
@@ -207,7 +232,10 @@ public static class RunningAppDetector
     }
 
     /// <summary>
-    /// 把指定窗口激活到前台（还原最小化 + 置前）。
+    /// 把指定窗口激活到前台（还原最小化 + 置前 + 抢前台焦点）。
+    /// ⚠️ 裸 SetForegroundWindow 在本进程非前台时会被 Windows 前台锁静默拒绝（点击 dock 图标后
+    /// 前台是目标应用或桌面，不是本进程）——必须先 AttachThreadInput 把输入队列绑到前台线程
+    /// 再置前（微软经典解法，cairoshell C1 WindowOperations 同款已验证范式）。
     /// </summary>
     public static void ActivateWindow(IntPtr hwnd)
     {
@@ -219,14 +247,63 @@ public static class RunningAppDetector
         try
         {
             ShowWindowAsync(hwnd, SwRestore);
-            BringWindowToTop(hwnd);
-            SetForegroundWindow(hwnd);
+
+            var foreThread = GetWindowThreadProcessId(GetForegroundWindow(), out _);
+            var targetThread = GetWindowThreadProcessId(hwnd, out _);
+            var thisThread = GetCurrentThreadId();
+            var bound = foreThread != 0 && foreThread != thisThread;
+            var boundTarget = bound && targetThread != 0 && targetThread != foreThread;
+
+            if (bound)
+            {
+                _ = AttachThreadInput(thisThread, foreThread, true);
+            }
+
+            if (boundTarget)
+            {
+                _ = AttachThreadInput(targetThread, foreThread, true);
+            }
+
+            try
+            {
+                BringWindowToTop(hwnd);
+                if (!SetForegroundWindow(hwnd))
+                {
+                    // 前台锁兜底：ALT 键抖动为本线程解锁前台权限后再试（经典技巧，无害）。
+                    keybd_event(VkMenu, 0, 0, IntPtr.Zero);
+                    keybd_event(VkMenu, 0, KeyEventFKeyUp, IntPtr.Zero);
+                    var retried = SetForegroundWindow(hwnd);
+                    DebugLog.Trace("Activate", $"SetForegroundWindow retry={retried} hwnd={hwnd:X} foreThread={foreThread} targetThread={targetThread}");
+                }
+                else
+                {
+                    DebugLog.Trace("Activate", $"SetForegroundWindow ok hwnd={hwnd:X} foreThread={foreThread} targetThread={targetThread}");
+                }
+            }
+            finally
+            {
+                if (boundTarget)
+                {
+                    _ = AttachThreadInput(targetThread, foreThread, false);
+                }
+
+                if (bound)
+                {
+                    _ = AttachThreadInput(thisThread, foreThread, false);
+                }
+            }
         }
         catch
         {
             // 激活失败不影响 Dock
         }
     }
+
+    private const byte VkMenu = 0xA4;       // VK_MENU (ALT)
+    private const uint KeyEventFKeyUp = 0x0002;
+
+    [DllImport("user32.dll")]
+    private static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, IntPtr dwExtraInfo);
 
     /// <summary>
     /// 激活指定可执行路径对应的第一个窗口。
@@ -255,7 +332,7 @@ public static class RunningAppDetector
         return DwmGetWindowAttribute(hWnd, DwmwaCloaked, out var cloaked, sizeof(uint)) == 0 && cloaked != 0;
     }
 
-    private static string GetWindowText(IntPtr hwnd)
+    internal static string GetWindowText(IntPtr hwnd)
     {
         var length = GetWindowTextLength(hwnd);
         if (length <= 0)

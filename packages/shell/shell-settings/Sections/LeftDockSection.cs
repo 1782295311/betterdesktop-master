@@ -262,16 +262,35 @@ public sealed class LeftDockSection : ISettingsSection
         {
             Minimum = min,
             Maximum = max,
-            Width = 220,
             Value = getVal(),
+            Width = 220,
             VerticalAlignment = VerticalAlignment.Center,
             AutoToolTipPlacement = AutoToolTipPlacement.None
         }, "MacSlider", tokens);
+
+        // ⚠️ 落盘防抖（120ms）：滑块 ValueChanged 每像素 tick 触发一次，若每 tick 直接
+        //    settings.Set 会同步触发 Changed → 订阅方（Dock 重建面板/反射、DesktopWindow
+        //    重算工作区等）被高频轰炸，表现为拖滑块卡顿乃至卡死。
+        //    数值文本实时跟随；落盘与事件在停顿 120ms 后合并为一次。
+        double pendingValue = double.NaN;
+        var debounce = new System.Windows.Threading.DispatcherTimer
+        { Interval = TimeSpan.FromMilliseconds(120) };
+        debounce.Tick += (_, _) =>
+        {
+            debounce.Stop();
+            if (!double.IsNaN(pendingValue))
+            {
+                setVal(pendingValue);
+                pendingValue = double.NaN;
+            }
+        };
         slider.ValueChanged += (_, e) =>
         {
             var v = Math.Round(e.NewValue, 2);
-            setVal(v);
             valueText.Text = v.ToString("0.00");
+            pendingValue = v;
+            debounce.Stop();
+            debounce.Start();
         };
 
         var right = new DockPanel { LastChildFill = false };

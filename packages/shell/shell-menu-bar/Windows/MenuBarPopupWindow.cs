@@ -31,9 +31,10 @@ internal abstract class MenuBarPopupWindow : ShellWindow
 {
     private bool _shown;
 
-    /// <summary>屏幕顶部菜单栏条带高度（逻辑像素）：菜单栏固定在主屏顶部，
-    /// 点击该条带视为"操作菜单栏"（打开/切换面板），不触发"点击窗口外收起"。</summary>
-    private const double MenuBarStripHeight = 20;
+    /// <summary>屏幕顶部菜单栏条带高度：菜单栏固定在主屏顶部，
+    /// 点击该条带视为"操作菜单栏"（打开/切换面板），不触发"点击窗口外收起"。
+    /// 引用 MenuBarMetrics 单一真相源（此前硬编码 20 与 MenuBarHeight 16 不同源，存在漂移隐患）。</summary>
+    private static readonly double MenuBarStripHeight = Contracts.MenuBarMetrics.MenuBarHeight;
 
     // ---- 全局低级鼠标钩子（点击窗口外 → 自动收起） ----
     private const int WH_MOUSE_LL = 14;

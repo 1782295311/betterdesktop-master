@@ -30,3 +30,6 @@ tools/ilspy/
 b4.txt
 poc/
 **/Native/build/
+
+# 本机运行日志与临时脚本
+Temp/

@@ -43,6 +43,19 @@ public sealed class WindowTrackerService : IWindowTrackerService, IDisposable
     public event EventHandler<IntPtr>? ForegroundWindowChanged;
 
     /// <inheritdoc />
+    public string GetWindowTitle(IntPtr hwnd)
+    {
+        try
+        {
+            return RunningAppDetector.GetWindowText(hwnd) ?? string.Empty;
+        }
+        catch
+        {
+            return string.Empty;
+        }
+    }
+
+    /// <inheritdoc />
     public IReadOnlyList<RunningAppInfo> GetRunningApps()
     {
         try
