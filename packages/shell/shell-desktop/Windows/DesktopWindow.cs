@@ -26,8 +26,10 @@ using System;
 using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Media;
+using BetterDesktop.Kernel.Core;
 using BetterDesktop.Shell.ContextMenus.Contracts;
 using BetterDesktop.Shell.Core.Surface;
 using BetterDesktop.Shell.Core.Vibrancy;
@@ -47,6 +49,7 @@ internal sealed class DesktopWindow : ShellWindow
     private const double DockLabelHeight = 24;
 
     private const int HwndBottom = 1; // HWND_BOTTOM
+    private static readonly IntPtr HwndTop = IntPtr.Zero; // HWND_TOP
     private const uint SwpNoSize = 0x0001;
     private const uint SwpNoMove = 0x0002;
     private const uint SwpNoActivate = 0x0010;
@@ -135,6 +138,11 @@ internal sealed class DesktopWindow : ShellWindow
         var root = new Border { Background = Brushes.Transparent, Child = _icons };
         Content = root;
         ChromeBorder = root;
+
+        // 右键诊断埋点（tunneling 首站）：确认右键消息到达自绘窗口（未到=被 explorer 层截走）。
+        PreviewMouseRightButtonUp += (_, e) =>
+            DiagnosticLog.Trace("shell.desktop",
+                $"窗口层右键 up pos={e.GetPosition(this)} source={e.OriginalSource.GetType().Name}");
 
         // 设置变化（dock 尺寸滑块/组件开关）→ 重算底部避让，避免图标被底栏瞬时遮挡
         if (_settings is not null)
@@ -293,7 +301,7 @@ internal sealed class DesktopWindow : ShellWindow
     private static extern int DwmSetWindowAttribute(IntPtr hwnd, int attr, ref int value, int size);
 
     /// <summary>窗口铺满虚拟屏（高度 -1 防 ABN_FULLSCREENAPP，cairoshell setSize 同款）。</summary>
-    private void FillVirtualScreen()
+    private void FillVirtualScreen(IntPtr insertAfter)
     {
         var hwnd = new WindowInteropHelper(this).Handle;
         if (hwnd == IntPtr.Zero)
@@ -305,7 +313,7 @@ internal sealed class DesktopWindow : ShellWindow
         int y = GetSystemMetrics(SmYvirtualscreen);
         int w = GetSystemMetrics(SmCxvirtualscreen);
         int h = GetSystemMetrics(SmCyvirtualscreen) - 1;
-        _ = SetWindowPos(hwnd, IntPtr.Zero, x, y, w, h, SwpNoZorder | SwpNoActivate);
+        _ = SetWindowPos(hwnd, insertAfter, x, y, w, h, SwpNoActivate);
     }
 
     /// <summary>
@@ -319,12 +327,14 @@ internal sealed class DesktopWindow : ShellWindow
             var hwnd = new WindowInteropHelper(this).Handle;
             if (hwnd == IntPtr.Zero)
             {
+                DiagnosticLog.Trace("shell.desktop", "嵌入失败：hwnd 为空");
                 return false;
             }
 
             var host = FindDesktopHostWindow();
             if (host == IntPtr.Zero)
             {
+                DiagnosticLog.Trace("shell.desktop", "嵌入失败：未找到桌面宿主（Progman/DefView）");
                 return false;
             }
 
@@ -333,11 +343,18 @@ internal sealed class DesktopWindow : ShellWindow
             _ = SetWindowLong(hwnd, GwlStyle, (style | WsChild) & ~WsOverlapped);
             _ = SetParent(hwnd, host);
 
-            FillVirtualScreen(); // 挂载后坐标相对父客户区
+            // ★ 右键/命中生死线：SetParent 后必须把窗口提到宿主子窗口栈顶（HWND_TOP）——
+            //   否则压在 DefView 的 SysListView32（explorer 原生图标层）之下，鼠标点击全被
+            //   explorer 截走：表现为"自绘桌面右键唤不出菜单、空白处弹系统右键菜单"。
+            //   FillVirtualScreen 同时完成提层 + 相对父客户区铺满。
+            FillVirtualScreen(HwndTop);
+            DiagnosticLog.Trace("shell.desktop", $"已嵌入桌面宿主 host=0x{host:X} 并提层 HWND_TOP（覆盖原生图标层命中）");
             return true;
         }
-        catch
+        catch (Exception ex)
         {
+            // 嵌入失败原因必须落盘（此前静默导致"降级顶层 HWND_BOTTOM 被 explorer 盖住"无从排查）
+            DiagnosticLog.Trace("shell.desktop", $"嵌入异常（降级顶层）：{ex.Message}");
             return false;
         }
     }
