@@ -165,6 +165,9 @@ public static class Bootstrap
         //     无依赖（Inject 为空）；必须先于 desktop 装配（其 LoadAsync 消费 IMenuService/IFileClassifier）。
         context.Plugin(new BetterDesktop.Shell.ContextMenus.ContextMenuPlugin());
 
+        // 6.6.5 文档转换（shell-convert）：经贡献项把「转 PDF」平铺进文件右键菜单。
+        context.Plugin(new BetterDesktop.Shell.Convert.ConvertPlugin());
+
         context.Plugin(new BetterDesktop.Shell.Desktop.DesktopPlugin());
 
         // 6.7 顶部菜单栏（shell.menu-bar）：右区 = 移植自 tools/ShellComponentsPlayground 的紧凑状态条

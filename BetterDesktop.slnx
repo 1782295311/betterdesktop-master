@@ -148,6 +148,11 @@
       <Platform Project="x64" />
     </Project>
   </Folder>
+  <Folder Name="/packages/shell/shell-convert/">
+    <Project Path="packages/shell/shell-convert/BetterDesktop.Shell.Convert.csproj">
+      <Platform Project="x64" />
+    </Project>
+  </Folder>
   <Folder Name="/tools/ShellComponentsPlayground/">
     <Project Path="tools/ShellComponentsPlayground/BetterDesktop.Tools.ShellComponentsPlayground.csproj">
       <Platform Project="x64" />
