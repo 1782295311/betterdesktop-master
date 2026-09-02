@@ -8,6 +8,7 @@
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
+using BetterDesktop.Kernel.Core;
 using BetterDesktop.Shell.ContextMenus.Contracts;
 using BetterDesktop.Shell.Core.Surface;
 using BetterDesktop.Shell.Core.Vibrancy;
@@ -44,6 +45,12 @@ internal sealed class ContextMenuPopupWindow : ShellWindow
             var work = SystemParameters.WorkArea;
             Left = Math.Clamp(screenPos.X, work.Left + 2, Math.Max(work.Left + 2, work.Right - ActualWidth - 2));
             Top = Math.Clamp(screenPos.Y, work.Top + 2, Math.Max(work.Top + 2, work.Bottom - ActualHeight - 2));
+
+            // 外观自检埋点（排查"纯黑"：透明是否生效/令牌是否命中/尺寸是否异常）
+            var token = Application.Current?.TryFindResource("PopupBackground");
+            DiagnosticLog.Trace("context-menu",
+                $"菜单窗口 size={ActualWidth:F0}x{ActualHeight:F0} transp={AllowsTransparency} " +
+                $"style={WindowStyle} PopupBackground={(token is System.Windows.Media.Brush b ? b.ToString() : token?.ToString() ?? "缺失")}");
         };
     }
 
