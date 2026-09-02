@@ -68,7 +68,7 @@ public static class MenuHost
     {
         var stack = new StackPanel();
         Fill(stack.Children, items, execute);
-        return new Border
+        var border = new Border
         {
             Background = FindToken("PopupBackground", System.Windows.Media.Brushes.White),
             BorderBrush = FindToken("PopupBorder", System.Windows.Media.Brushes.Gray),
@@ -79,6 +79,13 @@ public static class MenuHost
             UseLayoutRounding = true,
             Child = stack,
         };
+
+        // ★ 前景传导生死线：弹层窗口不经过 ShellWindow.ApplyFontScale 的前景传导路径
+        //   （AppearanceService 可能为 null），必须在面板根上直接挂 ThemeForeground——
+        //   否则 MenuItem 用默认黑字渲染在深色 PopupBackground 上 = 整个菜单看起来"纯黑"。
+        //   用 DynamicResource 绑定：主题亮/暗切换即时跟随。
+        border.SetResourceReference(System.Windows.Controls.Control.ForegroundProperty, "ThemeForeground");
+        return border;
     }
 
     private static System.Windows.Media.Brush FindToken(string key, System.Windows.Media.Brush fallback) =>
