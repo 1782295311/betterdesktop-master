@@ -5,7 +5,7 @@ namespace BetterDesktop.Shell.ContextMenus.Contracts;
 /// <summary>菜单请求（一次右键触发的完整上下文）。</summary>
 /// <param name="Scope">触发作用域。</param>
 /// <param name="Target">目标对象（场景自定义：BrowserEntry/Dock 项/窗口…，贡献者按需解析）。</param>
-/// <param name="ScreenPosition">屏幕坐标（WPF DIP，逻辑坐标）。</param>
+/// <param name="ScreenPosition">屏幕坐标（DIP 逻辑坐标；独立弹层窗口 Left/Top 直接使用）。</param>
 /// <param name="AnchorRect">锚定矩形（可选，图标右键时为图标矩形）。</param>
 /// <param name="File">文件身份（文件场景必填；空白/系统场景为 null）。</param>
 /// <param name="SelectedPaths">选中路径集（多选时能力过滤取交集）。</param>

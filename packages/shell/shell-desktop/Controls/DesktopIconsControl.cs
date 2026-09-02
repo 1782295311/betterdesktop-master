@@ -1614,10 +1614,15 @@ public sealed class DesktopIconsControl : ScrollViewer, IDisposable
                 identity = _classifier?.Classify(target.Entry.Path);
             }
 
+            // PointToScreen 返回物理像素 → 换算 DIP（弹层窗口 Left/Top 使用逻辑坐标）
+            var physical = PointToScreen(e.GetPosition(this));
+            var dpi = VisualTreeHelper.GetDpi(this).PixelsPerDip;
+            var screenPos = new Point(physical.X / dpi, physical.Y / dpi);
+
             var request = new MenuRequest(
                 target is null ? MenuScope.Desktop : MenuScope.DesktopIcon,
                 target,
-                PointToScreen(e.GetPosition(this)), // 记录用（定位由 Placement=MousePoint 负责）
+                screenPos,
                 File: identity,
                 SelectedPaths: [.. _browser.SelectedPaths]);
             await _menus.ShowAsync(request);

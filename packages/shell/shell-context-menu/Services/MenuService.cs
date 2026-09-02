@@ -1,5 +1,4 @@
 using System.Windows;
-using System.Windows.Controls;
 using BetterDesktop.Kernel.Core;
 using BetterDesktop.Shell.ContextMenus.Contracts;
 
@@ -88,13 +87,8 @@ public sealed class MenuService : IMenuService, IDisposable
         if (items.Count == 0)
             return Task.FromResult(new MenuResult(MenuResultKind.None));
 
-        if (request.Target is not FrameworkElement target)
-        {
-            DiagnosticLog.Trace("context-menu", $"Show 跳过：Target 非 FrameworkElement ({request.Target?.GetType().Name ?? "null"})");
-            return Task.FromResult(new MenuResult(MenuResultKind.None));
-        }
-
-        _active = MenuHost.Show(target, items);
+        // 独立弹层窗口承载（不依赖调用方视觉元素）：Target 仅作业务载荷
+        _active = MenuHost.Show(items, request.ScreenPosition);
         return _active.Completion;
     }
 
@@ -102,7 +96,7 @@ public sealed class MenuService : IMenuService, IDisposable
     {
         var session = _active;
         if (session is null) return;
-        session.Menu.Dispatcher.BeginInvoke(session.Dismiss);
+        session.Window.Dispatcher.BeginInvoke(session.Dismiss);
     }
 
     private void DismissInternal()

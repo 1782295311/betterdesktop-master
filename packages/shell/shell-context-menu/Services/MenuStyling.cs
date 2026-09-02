@@ -68,6 +68,12 @@ public static class MenuStyling
         </Style>
         """;
 
+    /// <summary>菜单项主题样式（独立弹层窗口复用；悬停高亮经 IsHighlighted 触发器）。</summary>
+    public static Style CreateItemStyle() => (Style)XamlReader.Parse(ItemStyleXaml);
+
+    /// <summary>分隔线主题样式（独立弹层窗口复用）。</summary>
+    public static Style CreateSeparatorStyle() => (Style)XamlReader.Parse(SeparatorStyleXaml);
+
     /// <summary>创建自绘主题 ContextMenu（根模板 + 菜单项样式 + 分隔线样式）。</summary>
     public static ContextMenu CreateMenu()
     {
