@@ -24,11 +24,19 @@ internal sealed class DesktopBlankTemplate(DesktopIconsControl owner) : IMenuTem
 
     public void Build(IMenuTemplateBuilder b, MenuRequest request)
     {
-        // ① 常用操作组
+        // ① 常用操作组：新建▶（集合语义子菜单，第一菜单原则允许）
         b.AddItem(new MenuItemDef
         {
-            Id = "desktop.new-folder", Text = "新建文件夹", Group = MenuGroup.Common,
-            Command = () => owner.InvokeBrowserNewFolder(),
+            Id = "desktop.new", Text = "新建", Group = MenuGroup.Common, Kind = MenuItemKind.Submenu,
+            Children =
+            [
+                new MenuItemDef { Id = "desktop.new-folder", Text = "文件夹",
+                    Command = () => owner.InvokeBrowserNewFolder() },
+                new MenuItemDef { Id = "desktop.new-text", Text = "文本文档",
+                    Command = () => owner.InvokeCreateTextFile() },
+                new MenuItemDef { Id = "desktop.new-shortcut", Text = "快捷方式",
+                    Command = () => DesktopMenuActions.OpenNewShortcutWizard(owner.InvokeDesktopPath()) },
+            ],
         });
         b.AddItem(new MenuItemDef
         {
@@ -42,7 +50,17 @@ internal sealed class DesktopBlankTemplate(DesktopIconsControl owner) : IMenuTem
             Command = () => owner.InvokeBrowserRefresh(),
         });
 
-        // ② 管理组
+        // ② 管理组：查看▶ / 排序▶（集合语义子菜单）+ 整理图标
+        b.AddItem(new MenuItemDef
+        {
+            Id = "desktop.view", Text = "查看", Group = MenuGroup.Manage, Kind = MenuItemKind.Submenu,
+            Children = ViewChildren(),
+        });
+        b.AddItem(new MenuItemDef
+        {
+            Id = "desktop.sort", Text = "排序方式", Group = MenuGroup.Manage, Kind = MenuItemKind.Submenu,
+            Children = SortChildren(),
+        });
         b.AddItem(new MenuItemDef
         {
             Id = "desktop.compact", Text = "整理图标", Group = MenuGroup.Manage,
@@ -68,6 +86,58 @@ internal sealed class DesktopBlankTemplate(DesktopIconsControl owner) : IMenuTem
                 Command = () => DesktopMenuActions.OpenTerminal(owner.InvokeDesktopPath()),
             });
         }
+    }
+
+    /// <summary>查看子菜单：图标大小三档（Radio，落 desktop.iconSize）+ 自动排列/对齐网格（Toggle）。</summary>
+    private List<MenuItemDef> ViewChildren()
+    {
+        var iconSize = owner.InvokeGetDouble("desktop.iconSize", 44d);
+        MenuItemDef Radio(string text, double value) => new()
+        {
+            Id = $"desktop.view-size-{value}", Text = text, Kind = MenuItemKind.Radio,
+            IsChecked = Math.Abs(iconSize - value) < 1,
+            Command = () => owner.InvokeSetDouble("desktop.iconSize", value),
+        };
+        return
+        [
+            Radio("大图标", 64),
+            Radio("中等图标", 44),
+            Radio("小图标", 30),
+            new MenuItemDef
+            {
+                Id = "desktop.view-autoarrange", Text = "自动排列图标", Kind = MenuItemKind.Toggle,
+                IsChecked = owner.InvokeGetBool("desktop.autoArrange", false),
+                Command = () => owner.InvokeSetBool("desktop.autoArrange",
+                    !owner.InvokeGetBool("desktop.autoArrange", false)),
+            },
+            new MenuItemDef
+            {
+                Id = "desktop.view-snap", Text = "将图标与网格对齐", Kind = MenuItemKind.Toggle,
+                IsChecked = owner.InvokeGetBool("desktop.snapToGrid", true),
+                Command = () => owner.InvokeSetBool("desktop.snapToGrid",
+                    !owner.InvokeGetBool("desktop.snapToGrid", true)),
+            },
+        ];
+    }
+
+    /// <summary>排序子菜单（Radio，落 desktop.sortKey；默认=智能排序）。</summary>
+    private List<MenuItemDef> SortChildren()
+    {
+        var current = owner.InvokeSortKey();
+        (string Text, string? Key)[] options =
+        [
+            ("默认", null),
+            ("名称", "name"),
+            ("大小", "size"),
+            ("项目类型", "type"),
+            ("修改日期", "modified"),
+        ];
+        return options.Select(o => new MenuItemDef
+        {
+            Id = $"desktop.sort-{o.Key ?? "default"}", Text = o.Text, Kind = MenuItemKind.Radio,
+            IsChecked = current == o.Key,
+            Command = () => owner.InvokeSetSort(o.Key),
+        }).ToList();
     }
 }
 
@@ -143,7 +213,21 @@ internal sealed class DesktopIconTemplate(DesktopIconsControl owner) : IMenuTemp
             });
         }
 
-        // ④ 系统组
+        // ④ 系统组：发送到▶（枚举 SendTo 文件夹，集合语义子菜单）+ 属性
+        var sendTo = DesktopMenuActions.EnumerateSendToLinks();
+        if (sendTo.Count > 0)
+        {
+            b.AddItem(new MenuItemDef
+            {
+                Id = "icon.sendto", Text = "发送到", Group = MenuGroup.System, Kind = MenuItemKind.Submenu,
+                Children = [.. sendTo.Select(kv => new MenuItemDef
+                {
+                    Id = $"icon.sendto-{kv.Key}",
+                    Text = kv.Key,
+                    Command = () => DesktopMenuActions.SendTo(kv.Value, entry.Path),
+                })],
+            });
+        }
         b.AddItem(new MenuItemDef
         {
             Id = "icon.properties", Text = "属性", Group = MenuGroup.System,
@@ -217,6 +301,61 @@ internal static class DesktopMenuActions
         catch (Exception ex)
         {
             DiagnosticLog.Trace("shell.desktop", $"打开终端失败: {ex.Message}");
+        }
+    }
+
+    /// <summary>新建快捷方式：Windows 内置"创建快捷方式"向导（rundll32 NewLinkHere，落盘到指定目录）。</summary>
+    public static void OpenNewShortcutWizard(string directory)
+    {
+        try
+        {
+            Process.Start(new ProcessStartInfo("rundll32.exe", $"appwiz.cpl,NewLinkHere \"{directory}\"")
+            {
+                UseShellExecute = true,
+            });
+        }
+        catch (Exception ex)
+        {
+            DiagnosticLog.Trace("shell.desktop", $"打开快捷方式向导失败: {ex.Message}");
+        }
+    }
+
+    /// <summary>枚举用户「发送到」文件夹的快捷方式（显示名 → lnk 全路径；按显示名排序）。</summary>
+    public static List<KeyValuePair<string, string>> EnumerateSendToLinks()
+    {
+        var result = new List<KeyValuePair<string, string>>();
+        try
+        {
+            var sendTo = Environment.GetFolderPath(Environment.SpecialFolder.SendTo);
+            if (string.IsNullOrEmpty(sendTo) || !Directory.Exists(sendTo)) return result;
+            foreach (var lnk in Directory.EnumerateFiles(sendTo, "*.lnk"))
+            {
+                var name = Path.GetFileNameWithoutExtension(lnk);
+                result.Add(new KeyValuePair<string, string>(name, lnk));
+            }
+            result.Sort((a, b) => string.Compare(a.Key, b.Key, StringComparison.CurrentCulture));
+        }
+        catch (Exception ex)
+        {
+            DiagnosticLog.Trace("shell.desktop", $"枚举发送到失败: {ex.Message}");
+        }
+        return result;
+    }
+
+    /// <summary>经 SendTo 快捷方式发送目标路径（lnk 目标程序接收路径参数）。</summary>
+    public static void SendTo(string lnkPath, string targetPath)
+    {
+        try
+        {
+            Process.Start(new ProcessStartInfo(lnkPath)
+            {
+                UseShellExecute = true,
+                Arguments = $"\"{targetPath}\"",
+            });
+        }
+        catch (Exception ex)
+        {
+            DiagnosticLog.Trace("shell.desktop", $"发送到失败 {lnkPath}: {ex.Message}");
         }
     }
 }

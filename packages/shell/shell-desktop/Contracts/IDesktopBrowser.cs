@@ -76,6 +76,15 @@ public interface IDesktopBrowser
     /// <summary>在当前浏览目录新建文件夹（自动生成唯一名"新建文件夹"/"新建文件夹 (2)"），完成后刷新。</summary>
     void NewFolder();
 
+    /// <summary>在当前浏览目录新建文本文档（"新建文本文档.txt"，重名自增），完成后刷新。</summary>
+    void CreateTextFile();
+
+    /// <summary>当前排序键（null=智能默认；name/size/type/modified）。</summary>
+    string? SortKey { get; }
+
+    /// <summary>设置排序键并重新枚举（null 恢复智能默认）。持久化由设置层负责。</summary>
+    void SetSort(string? key);
+
     /// <summary>把外部文件/目录导入当前浏览目录（拖放落点）。move=true 移动、false 复制；重名自动唯一化；完成后刷新。</summary>
     void ImportFiles(System.Collections.Generic.IEnumerable<string> paths, bool move);
 }

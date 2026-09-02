@@ -122,6 +122,12 @@ public sealed class DesktopIconsControl : ScrollViewer, IDisposable
 
         _browser.ItemsChanged += (_, _) => Dispatcher.BeginInvoke(Rebuild);
 
+        // 恢复持久化排序（desktop.sortKey；菜单改排序时同步写此键；空串=默认）
+        if (settings is not null)
+        {
+            _browser.SetSort(settings.Get("desktop.sortKey", string.Empty));
+        }
+
         // 图标大小/间距变化 → 网格格子变了，旧坐标会出现空洞 → 自动紧凑重排补位。
         // BeginInvoke 到 Background 优先级：等 Rebuild/布局完成后再整理，避免对旧 canvas 操作。
         if (settings is not null)
@@ -1661,6 +1667,27 @@ public sealed class DesktopIconsControl : ScrollViewer, IDisposable
     internal void InvokeStartRename(Border cell, TextBlock label, string path) => StartRename(cell, label, path);
 
     internal void InvokeShowProperties(string path) => ShowProperties(path);
+
+    internal double InvokeGetDouble(string key, double defaultValue) =>
+        _settings?.Get(key, defaultValue) ?? defaultValue;
+
+    internal bool InvokeGetBool(string key, bool defaultValue) =>
+        _settings?.Get(key, defaultValue) ?? defaultValue;
+
+    internal void InvokeSetDouble(string key, double value) => _settings?.Set(key, value);
+
+    internal void InvokeSetBool(string key, bool value) => _settings?.Set(key, value);
+
+    internal string? InvokeSortKey() => _browser.SortKey;
+
+    /// <summary>设置排序键：Browser 即时重载 + desktop.sortKey 持久化（下次启动经构造恢复）。</summary>
+    internal void InvokeSetSort(string? key)
+    {
+        _settings?.Set("desktop.sortKey", key ?? string.Empty);
+        _browser.SetSort(key);
+    }
+
+    internal void InvokeCreateTextFile() => _browser.CreateTextFile();
 }
 
 /// <summary>极简 ICommand（双击绑定用）。</summary>

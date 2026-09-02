@@ -184,7 +184,9 @@ public sealed class DesktopBrowser : IDesktopBrowser
                     {
                         if (seen.Add(Path.GetFileName(d)))
                         {
-                            entries.Add(new BrowserEntry(Path.GetFileName(d), d, true));
+                            var info = new FileInfo(d);
+                            entries.Add(new BrowserEntry(Path.GetFileName(d), d, true,
+                                0, info.LastWriteTime, "文件夹"));
                         }
                     }
 
@@ -194,7 +196,11 @@ public sealed class DesktopBrowser : IDesktopBrowser
                         if (name.Equals("desktop.ini", StringComparison.OrdinalIgnoreCase)) continue;
                         if (seen.Add(name))
                         {
-                            entries.Add(new BrowserEntry(name, f, false));
+                            var info = new FileInfo(f);
+                            var ext = Path.GetExtension(f);
+                            var kind = ext.Length > 0 ? ext[1..].ToUpperInvariant() + " 文件" : "文件";
+                            entries.Add(new BrowserEntry(name, f, false,
+                                info.Length, info.LastWriteTime, kind));
                         }
                     }
                 }
@@ -220,12 +226,7 @@ public sealed class DesktopBrowser : IDesktopBrowser
                     entries.Add(new BrowserEntry(ResolveShellName(NetworkClsid, "网络"), NetworkClsid, true));
                 }
 
-                entries = entries
-                    .OrderBy(e => !e.IsShellNamespace)  // 虚拟项排最前（explorer 桌面惯例）
-                    .ThenBy(e => !e.IsDirectory)
-                    .ThenBy(e => e.Name, StringComparer.CurrentCultureIgnoreCase)
-                    .Take(MaxEntries)
-                    .ToList();
+                entries = ApplySort(entries);
             }
             catch
             {
@@ -351,6 +352,48 @@ public sealed class DesktopBrowser : IDesktopBrowser
         });
     }
 
+    // ======== 排序（desktop.sortKey：null=智能默认 / name / size / type / modified） ========
+
+    /// <summary>当前排序键（持久化由设置层负责，Browser 只执行）。</summary>
+    public string? SortKey { get; private set; }
+
+    /// <summary>设置排序键并重载（null 恢复智能默认：虚拟项→文件夹→文件按名）。</summary>
+    public void SetSort(string? key)
+    {
+        var normalized = key?.ToLowerInvariant() switch
+        {
+            "name" or "size" or "type" or "modified" => key.ToLowerInvariant(),
+            _ => null,
+        };
+        if (string.Equals(SortKey, normalized, StringComparison.Ordinal)) return;
+        SortKey = normalized;
+        Refresh();
+    }
+
+    private List<BrowserEntry> ApplySort(List<BrowserEntry> entries)
+    {
+        // 虚拟项恒排最前（explorer 桌面惯例，任何排序键下不变）
+        IOrderedEnumerable<BrowserEntry> ordered = SortKey switch
+        {
+            "size" => entries.OrderBy(e => !e.IsDirectory) // 文件夹在前，再按大小降序
+                             .ThenByDescending(e => e.Size)
+                             .ThenBy(e => e.Name, StringComparer.CurrentCultureIgnoreCase),
+            "type" => entries.OrderBy(e => !e.IsDirectory)
+                             .ThenBy(e => e.Kind, StringComparer.CurrentCulture)
+                             .ThenBy(e => e.Name, StringComparer.CurrentCultureIgnoreCase),
+            "modified" => entries.OrderBy(e => !e.IsDirectory)
+                                 .ThenByDescending(e => e.Modified)
+                                 .ThenBy(e => e.Name, StringComparer.CurrentCultureIgnoreCase),
+            _ => entries.OrderBy(e => !e.IsShellNamespace)  // 默认：虚拟项→文件夹→文件按名
+                        .ThenBy(e => !e.IsDirectory)
+                        .ThenBy(e => e.Name, StringComparer.CurrentCultureIgnoreCase),
+        };
+        return ordered
+            .ThenBy(e => !e.IsShellNamespace) // 非默认排序时虚拟项仍置顶
+            .Take(MaxEntries)
+            .ToList();
+    }
+
     public void NewFolder()
     {
         Task.Run(() =>
@@ -365,6 +408,32 @@ public sealed class DesktopBrowser : IDesktopBrowser
                 }
 
                 Directory.CreateDirectory(dir);
+            }
+            catch
+            {
+                // 新建失败静默（M10）
+            }
+
+            Post(Refresh);
+        });
+    }
+
+    /// <summary>新建文本文档（explorer 同款重名自增："新建文本文档.txt"、"新建文本文档 (2).txt"）。</summary>
+    public void CreateTextFile()
+    {
+        Task.Run(() =>
+        {
+            try
+            {
+                var name = "新建文本文档.txt";
+                var file = Path.Combine(_location, name);
+                var stem = Path.GetFileNameWithoutExtension(name);
+                for (var i = 2; File.Exists(file); i++)
+                {
+                    file = Path.Combine(_location, $"{stem} ({i}).txt");
+                }
+
+                File.WriteAllText(file, string.Empty);
             }
             catch
             {

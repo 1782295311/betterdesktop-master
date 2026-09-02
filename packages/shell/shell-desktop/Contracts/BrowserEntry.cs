@@ -5,7 +5,13 @@ using System;
 namespace BetterDesktop.Shell.Desktop.Contracts;
 
 /// <summary>浏览器条目（目录或文件）。</summary>
-public sealed record BrowserEntry(string Name, string Path, bool IsDirectory)
+public sealed record BrowserEntry(
+    string Name,
+    string Path,
+    bool IsDirectory,
+    long Size = 0,
+    DateTime Modified = default,
+    string Kind = "")
 {
     /// <summary>
     /// 显示名：对快捷方式（.lnk）剥去扩展名，对齐 explorer 桌面惯例（如 "Chrome" 而非 "Chrome.lnk"）。
