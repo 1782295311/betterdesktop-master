@@ -305,4 +305,4 @@ Enabled: bool
 8. ✅ 通用基础菜单 + 场景适配架构（§2.5）+ 文字形状验证（§2.6）。
 9. ⬜ 工作树未提交改动 commit 时机：开工第一步处理（用户确认）。
 
-**计划状态：定版（v1.0），待 commit 后按 §6 顺序开工。**
+**计划状态：M1 已实现（2026-09-02）。落地记录：shell-context-menu（契约/MenuService/MenuHost/FileClassifier）+ shell-convert（转 PDF）+ 桌面两场景迁移 + 用户自定义项；单测 21/21 绿，全仓 0 错；M2 待办：查看/排序子菜单（需 desktop.* 设置键）、发送到、COM 独立代理进程强杀、Assoc API 精细关联、自定义项编辑 UI。**
