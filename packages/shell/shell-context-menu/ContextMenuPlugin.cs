@@ -1,6 +1,8 @@
 using BetterDesktop.Kernel.Contracts;
+using BetterDesktop.Kernel.Core;
 using BetterDesktop.Shell.ContextMenus.Contracts;
 using BetterDesktop.Shell.ContextMenus.Services;
+using BetterDesktop.Shell.Settings.Contracts;
 
 namespace BetterDesktop.Shell.ContextMenus;
 
@@ -12,6 +14,7 @@ namespace BetterDesktop.Shell.ContextMenus;
 public sealed class ContextMenuPlugin : IPlugin
 {
     private MenuService? _service;
+    private readonly List<IDisposable> _handles = [];
 
     public string Name => "context-menu";
 
@@ -23,11 +26,33 @@ public sealed class ContextMenuPlugin : IPlugin
         _service = service;
         context.Provide<IMenuService>(service);
         context.Provide<IFileClassifier>(new FileClassifier());
+
+        // 用户自定义项（零代码 DIY 层）：每个 Scope 注册一个贡献者，Build 时读设置热更新。
+        var settings = context.Get<ISettingsService>();
+        if (settings is not null)
+        {
+            foreach (MenuScope scope in Enum.GetValues<MenuScope>())
+            {
+                var contributor = new UserMenuContributor(settings, scope);
+                _handles.Add(service.RegisterContributor(contributor));
+            }
+        }
+        else
+        {
+            DiagnosticLog.Trace("context-menu", "ISettingsService 缺失：用户自定义菜单项未启用");
+        }
+
         return Task.CompletedTask;
     }
 
     public Task UnloadAsync(CancellationToken cancellationToken = default)
     {
+        foreach (var handle in _handles)
+        {
+            try { handle.Dispose(); }
+            catch { /* 注销失败不阻断（M10） */ }
+        }
+        _handles.Clear();
         _service?.Dismiss();
         _service?.Dispose();
         _service = null;
