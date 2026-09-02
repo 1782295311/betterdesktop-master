@@ -22,6 +22,8 @@
     <!-- 底部避让：读 components.dock / components.wintaskbar / dock.* 计算图标网格底部预留。
          无环：shell-settings 仅依赖 kernel/kernel-hmr/shell-core，不反向引用 shell-desktop。 -->
     <ProjectReference Include="..\shell-settings\BetterDesktop.Shell.Settings.csproj" />
+    <!-- 统一右键菜单：消费 IMenuService/IFileClassifier（服务）与 MenuStyling（主题工厂）。 -->
+    <ProjectReference Include="..\shell-context-menu\BetterDesktop.Shell.ContextMenu.csproj" />
   </ItemGroup>
 
 </Project>

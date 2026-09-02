@@ -16,8 +16,11 @@ using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Media;
+using BetterDesktop.Kernel.Core;
+using BetterDesktop.Shell.ContextMenus.Contracts;
 using BetterDesktop.Shell.Desktop.Contracts;
 using BetterDesktop.Shell.Desktop.Services;
+using BetterDesktop.Shell.Desktop.Templates;
 using BetterDesktop.Shell.Settings.Contracts;
 
 namespace BetterDesktop.Shell.Desktop.Controls;
@@ -27,6 +30,11 @@ public sealed class DesktopIconsControl : ScrollViewer, IDisposable
 {
     private readonly IDesktopBrowser _browser;
     private readonly ISettingsService? _settings;
+    private readonly IMenuService? _menus;
+    private readonly IFileClassifier? _classifier;
+    private readonly bool _useMenuService;
+    private readonly List<IDisposable> _menuHandles = [];
+    private readonly Dictionary<Border, (BrowserEntry Entry, TextBlock Label)> _cellMenuTargets = [];
     private MenuItem? _pasteItem;
     private bool _disposed;
 
@@ -75,10 +83,18 @@ public sealed class DesktopIconsControl : ScrollViewer, IDisposable
     // 内联重命名状态
     private string? _editingPath;
 
-    public DesktopIconsControl(IDesktopBrowser browser, ISettingsService? settings = null)
+    public DesktopIconsControl(
+        IDesktopBrowser browser,
+        ISettingsService? settings = null,
+        IMenuService? menus = null,
+        IFileClassifier? classifier = null)
     {
         _browser = browser;
         _settings = settings;
+        _menus = menus;
+        _classifier = classifier;
+        // 回退开关：context-menu.migrated=false 走旧自绘路径；菜单服务缺失同样自动回退。
+        _useMenuService = menus is not null && (settings?.Get("context-menu.migrated", true) ?? true);
         Background = Brushes.Transparent; // 空白处点击穿透到桌面窗口（右键/框选由窗口层接）
         // 对齐 cairoshell DesktopFolderViewStyle：横向滚动（纵向禁用），先填满一列再横向开新列
         HorizontalScrollBarVisibility = ScrollBarVisibility.Auto;
@@ -92,7 +108,17 @@ public sealed class DesktopIconsControl : ScrollViewer, IDisposable
         DragOver += OnDragOver;
         Drop += OnDrop;
 
-        ContextMenu = BuildBlankMenu();
+        if (_useMenuService)
+        {
+            // 新路径：统一菜单服务（模板 + 贡献项 + 能力过滤）。旧自绘菜单不预赋，右键经路由弹出。
+            _menuHandles.Add(_menus!.RegisterTemplate(new DesktopBlankTemplate(this)));
+            _menuHandles.Add(_menus.RegisterTemplate(new DesktopIconTemplate(this)));
+            MouseRightButtonUp += OnMenuServiceMouseUp;
+        }
+        else
+        {
+            ContextMenu = BuildBlankMenu();
+        }
 
         _browser.ItemsChanged += (_, _) => Dispatcher.BeginInvoke(Rebuild);
 
@@ -650,8 +676,16 @@ public sealed class DesktopIconsControl : ScrollViewer, IDisposable
             };
         }
 
-        // 图标右键菜单（MENU-SPECS §2 实用子集，自绘主题呈现）
-        cell.ContextMenu = BuildIconMenu(entry, cell, label);
+        // 图标右键菜单（MENU-SPECS §2 实用子集，自绘主题呈现）：
+        // 新路径记录 cell→entry 映射，右键统一走 MouseRightButtonUp → IMenuService。
+        if (_useMenuService)
+        {
+            _cellMenuTargets[cell] = (entry, label);
+        }
+        else
+        {
+            cell.ContextMenu = BuildIconMenu(entry, cell, label);
+        }
 
         return cell;
     }
@@ -1510,8 +1544,123 @@ public sealed class DesktopIconsControl : ScrollViewer, IDisposable
     public void Dispose()
     {
         _disposed = true;
+        foreach (var handle in _menuHandles)
+        {
+            try { handle.Dispose(); }
+            catch { /* 注销失败不阻断（M10） */ }
+        }
+        _menuHandles.Clear();
+        _cellMenuTargets.Clear();
         Content = null;
     }
+
+    // ===== 统一右键菜单路由（shell-context-menu 新路径；旧自绘路径见 Build*Menu） =====
+
+    private void OnMenuServiceMouseUp(object sender, MouseButtonEventArgs e)
+    {
+        if (_menus is null || _disposed)
+        {
+            return;
+        }
+
+        var (entry, cell, label) = FindMenuTarget(e.OriginalSource as DependencyObject);
+        if (entry is not null && cell is not null && label is not null)
+        {
+            if (!_browser.SelectedPaths.Contains(entry.Path))
+            {
+                // explorer 同款：右键未选中项 → 先单选再弹菜单
+                _browser.SetSelection([entry.Path]);
+            }
+            _ = ShowMenuAsync(new DesktopIconTarget(entry, cell, label), e);
+        }
+        else
+        {
+            _ = ShowMenuAsync(null, e);
+        }
+        e.Handled = true;
+    }
+
+    private (BrowserEntry? Entry, Border? Cell, TextBlock? Label) FindMenuTarget(DependencyObject? source)
+    {
+        while (source is not null)
+        {
+            if (source is Border border && _cellMenuTargets.TryGetValue(border, out var mapped))
+            {
+                return (mapped.Entry, border, mapped.Label);
+            }
+            source = VisualTreeHelper.GetParent(source);
+        }
+        return (null, null, null);
+    }
+
+    private async Task ShowMenuAsync(DesktopIconTarget? target, MouseButtonEventArgs e)
+    {
+        if (_menus is null)
+        {
+            return;
+        }
+
+        try
+        {
+            FileIdentity? identity = null;
+            if (target is not null && !target.Entry.IsShellNamespace)
+            {
+                identity = _classifier?.Classify(target.Entry.Path);
+            }
+
+            var request = new MenuRequest(
+                target is null ? MenuScope.Desktop : MenuScope.DesktopIcon,
+                target,
+                PointToScreen(e.GetPosition(this)), // 记录用（定位由 Placement=MousePoint 负责）
+                File: identity,
+                SelectedPaths: [.. _browser.SelectedPaths]);
+            await _menus.ShowAsync(request);
+        }
+        catch (Exception ex)
+        {
+            DiagnosticLog.Trace("shell.desktop", $"右键菜单展示失败: {ex.Message}");
+        }
+    }
+
+    // ===== 模板回调包装（DesktopMenuTemplates 经此访问控件能力；保持原 private 方法不动） =====
+
+    internal void InvokeBrowserNewFolder() => _browser.NewFolder();
+
+    internal void InvokeBrowserPaste() => _browser.Paste();
+
+    internal bool InvokeCanPaste() => _browser.CanPaste;
+
+    internal void InvokeBrowserRefresh() => _browser.Refresh();
+
+    internal void InvokeBrowserCut(string path)
+    {
+        _browser.SetSelection([path]);
+        _browser.Cut();
+    }
+
+    internal void InvokeBrowserCopy(string path)
+    {
+        _browser.SetSelection([path]);
+        _browser.Copy();
+    }
+
+    internal void InvokeBrowserDelete(string path)
+    {
+        _browser.SetSelection([path]);
+        _browser.Delete();
+    }
+
+    internal void InvokeCompactLayout() => CompactLayout();
+
+    internal void InvokeOpenSettings(string uri) => OpenSettings(uri);
+
+    internal void InvokeOpenEntry(BrowserEntry entry) => Open(entry);
+
+    internal string InvokeDesktopPath() => _browser.DesktopPath;
+
+    internal void InvokeStartRename(Border cell, TextBlock label, string path) => StartRename(cell, label, path);
+
+    internal void InvokeShowProperties(string path) => ShowProperties(path);
 }
 
 /// <summary>极简 ICommand（双击绑定用）。</summary>

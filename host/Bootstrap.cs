@@ -161,11 +161,11 @@ public static class Bootstrap
 
         // 6.65 自绘桌面（shell.desktop）：全屏壁纸 + 可导航桌面/文件夹浏览器（Provide IDesktopBrowser
         //      给菜单栏左区联动）。必须在 menu-bar 之前加载：桌面窗口 Z 序底 + 浏览器先注册。
-        context.Plugin(new BetterDesktop.Shell.Desktop.DesktopPlugin());
-
-        // 6.6.5 统一右键菜单（shell.context-menu）：五区块骨架 + 场景模板/贡献项注册点。
-        //     无依赖（Inject 为空），须先于消费模板的插件（desktop 迁移后经 IMenuService 注册）加载。
+        // 6.6.4 统一右键菜单（shell.context-menu）：五区块骨架 + 场景模板/贡献项注册点。
+        //     无依赖（Inject 为空）；必须先于 desktop 装配（其 LoadAsync 消费 IMenuService/IFileClassifier）。
         context.Plugin(new BetterDesktop.Shell.ContextMenus.ContextMenuPlugin());
+
+        context.Plugin(new BetterDesktop.Shell.Desktop.DesktopPlugin());
 
         // 6.7 顶部菜单栏（shell.menu-bar）：右区 = 移植自 tools/ShellComponentsPlayground 的紧凑状态条
         //     （系统托盘/FPS/CPU/内存/WiFi/实时网速/亮度/输入法/蓝牙/音量/麦克风/电池/通知/时间/桌面），

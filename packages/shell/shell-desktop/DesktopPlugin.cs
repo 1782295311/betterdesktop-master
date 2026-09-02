@@ -29,6 +29,7 @@ using System.Threading.Tasks;
 using System.Windows;
 using BetterDesktop.Kernel.Contracts;
 using BetterDesktop.Kernel.Core;
+using BetterDesktop.Shell.ContextMenus.Contracts;
 using BetterDesktop.Shell.Core.Surface;
 using BetterDesktop.Shell.Core.Vibrancy;
 using BetterDesktop.Shell.Desktop.Contracts;
@@ -159,7 +160,9 @@ public sealed class DesktopPlugin : IPlugin
 
             var vibrancy = _context.Get<IVibrancyService>() ?? NullVibrancy.Instance;
             var appearance = _context.Get<IAppearanceService>();
-            _window = new DesktopWindow(_browser, vibrancy, appearance, _settings);
+            var menus = _context.Get<IMenuService>();
+            var classifier = _context.Get<IFileClassifier>();
+            _window = new DesktopWindow(_browser, vibrancy, appearance, _settings, menus, classifier);
             _window.Show();
 
             // 幂等隐藏：ShowWindow(SW_HIDE) 重复调用无副作用，无翻转语义的时序坑。

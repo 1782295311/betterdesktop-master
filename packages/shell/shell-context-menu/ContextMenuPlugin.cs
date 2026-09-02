@@ -22,6 +22,7 @@ public sealed class ContextMenuPlugin : IPlugin
         var service = new MenuService();
         _service = service;
         context.Provide<IMenuService>(service);
+        context.Provide<IFileClassifier>(new FileClassifier());
         return Task.CompletedTask;
     }
 

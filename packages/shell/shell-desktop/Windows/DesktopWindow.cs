@@ -28,6 +28,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Interop;
 using System.Windows.Media;
+using BetterDesktop.Shell.ContextMenus.Contracts;
 using BetterDesktop.Shell.Core.Surface;
 using BetterDesktop.Shell.Core.Vibrancy;
 using BetterDesktop.Shell.Desktop.Contracts;
@@ -108,7 +109,9 @@ internal sealed class DesktopWindow : ShellWindow
         IDesktopBrowser browser,
         IVibrancyService vibrancy,
         IAppearanceService? appearance,
-        ISettingsService? settings = null)
+        ISettingsService? settings = null,
+        IMenuService? menus = null,
+        IFileClassifier? classifier = null)
         : base(appearance, vibrancy)
     {
         _browser = browser;
@@ -124,7 +127,7 @@ internal sealed class DesktopWindow : ShellWindow
         Background = new SolidColorBrush(Color.FromArgb(1, 0, 0, 0));
 
         // 图标网格：瀑布列（先填列后换列），避开顶部菜单栏条带 + 底部 dock/原生任务栏
-        _icons = new DesktopIconsControl(_browser, _settings);
+        _icons = new DesktopIconsControl(_browser, _settings, menus, classifier);
         UpdateIconsReserve();
 
         // 根 Border：满足基类 ChromeBorder 约定（DEBUG 断言强制，未设置会 FailFast）。
