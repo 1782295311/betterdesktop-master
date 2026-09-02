@@ -342,6 +342,19 @@ internal static class DesktopMenuActions
         return result;
     }
 
+    /// <summary>Win32 属性页（ShellExecute properties verb；无需宿主 hwnd）。</summary>
+    public static void ShowProperties(string path)
+    {
+        try
+        {
+            Process.Start(new ProcessStartInfo(path) { UseShellExecute = true, Verb = "properties" });
+        }
+        catch (Exception ex)
+        {
+            DiagnosticLog.Trace("shell.desktop", $"打开属性失败 {path}: {ex.Message}");
+        }
+    }
+
     /// <summary>经 SendTo 快捷方式发送目标路径（lnk 目标程序接收路径参数）。</summary>
     public static void SendTo(string lnkPath, string targetPath)
     {

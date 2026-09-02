@@ -13,6 +13,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\kernel\kernel\BetterDesktop.Kernel.csproj" />
+    <ProjectReference Include="..\shell-core\BetterDesktop.Shell.Core.csproj" />
     <ProjectReference Include="..\shell-app-source\BetterDesktop.Shell.AppSource.csproj" />
     <ProjectReference Include="..\shell-settings\BetterDesktop.Shell.Settings.csproj" />
   </ItemGroup>

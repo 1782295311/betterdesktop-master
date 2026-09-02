@@ -2,6 +2,8 @@ using BetterDesktop.Kernel.Contracts;
 using BetterDesktop.Kernel.Core;
 using BetterDesktop.Shell.ContextMenus.Contracts;
 using BetterDesktop.Shell.ContextMenus.Services;
+using BetterDesktop.Shell.Core.Surface;
+using BetterDesktop.Shell.Core.Vibrancy;
 using BetterDesktop.Shell.Settings.Contracts;
 
 namespace BetterDesktop.Shell.ContextMenus;
@@ -22,7 +24,9 @@ public sealed class ContextMenuPlugin : IPlugin
 
     public Task LoadAsync(IContext context, CancellationToken cancellationToken = default)
     {
-        var service = new MenuService();
+        var service = new MenuService(
+            context.Get<IAppearanceService>(),
+            context.Get<IVibrancyService>());
         _service = service;
         context.Provide<IMenuService>(service);
         context.Provide<IFileClassifier>(new FileClassifier());

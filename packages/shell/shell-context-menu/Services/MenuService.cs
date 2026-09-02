@@ -1,13 +1,15 @@
 using System.Windows;
 using BetterDesktop.Kernel.Core;
 using BetterDesktop.Shell.ContextMenus.Contracts;
+using BetterDesktop.Shell.Core.Surface;
+using BetterDesktop.Shell.Core.Vibrancy;
 
 namespace BetterDesktop.Shell.ContextMenus.Services;
 
 /// <summary>
 /// 统一右键菜单服务（五区块骨架在此组装，第一菜单原则固化于此）：
 /// 模板 + 贡献项 → 组排序（Common→Manage→Contribution→System→Dynamic，组间分隔线）
-/// → 能力过滤（隐藏优先，递归）→ Opening 注入点 → MenuHost 渲染。
+/// → 能力过滤（隐藏优先，递归）→ Opening 注入点 → MenuHost 渲染（独立弹层窗口）。
 /// </summary>
 public sealed class MenuService : IMenuService, IDisposable
 {
@@ -36,11 +38,19 @@ public sealed class MenuService : IMenuService, IDisposable
     private readonly object _gate = new();
     private readonly Dictionary<MenuScope, IMenuTemplate> _templates = [];
     private readonly List<Contribution> _contributions = [];
+    private readonly IAppearanceService? _appearance;
+    private readonly IVibrancyService? _vibrancy;
     private int _seq;
 
     private MenuHostSession? _active;
 
     public event EventHandler<MenuOpeningArgs>? Opening;
+
+    public MenuService(IAppearanceService? appearance = null, IVibrancyService? vibrancy = null)
+    {
+        _appearance = appearance;
+        _vibrancy = vibrancy;
+    }
 
     public IDisposable RegisterContributor(IContextMenuContributor contributor)
     {
@@ -87,8 +97,8 @@ public sealed class MenuService : IMenuService, IDisposable
         if (items.Count == 0)
             return Task.FromResult(new MenuResult(MenuResultKind.None));
 
-        // 独立弹层窗口承载（不依赖调用方视觉元素）：Target 仅作业务载荷
-        _active = MenuHost.Show(items, request.ScreenPosition);
+        // 独立弹层窗口承载（ShellWindow 统一基类；不依赖调用方视觉元素）：Target 仅作业务载荷
+        _active = MenuHost.Show(items, request.ScreenPosition, _appearance, _vibrancy);
         return _active.Completion;
     }
 

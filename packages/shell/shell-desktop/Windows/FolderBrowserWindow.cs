@@ -23,10 +23,13 @@ using System.Windows.Documents;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Effects;
+using BetterDesktop.Kernel.Core;
 using BetterDesktop.Shell.Core.Surface;
 using BetterDesktop.Shell.Core.Vibrancy;
 using BetterDesktop.Shell.Desktop.Contracts;
 using BetterDesktop.Shell.Desktop.Controls; // 复用 RelayCommand / DesktopItemRenderer 同款基础设施
+using BetterDesktop.Shell.Desktop.Services;
+using BetterDesktop.Shell.Desktop.Templates;
 using BetterDesktop.Shell.Settings.Contracts;
 
 namespace BetterDesktop.Shell.Desktop.Windows;
@@ -41,6 +44,10 @@ public sealed class FolderBrowserWindow : ShellWindow
 
     private readonly IVibrancyService _vibrancy;
     private readonly ISettingsService? _settings;
+    private readonly BetterDesktop.Shell.ContextMenus.Contracts.IMenuService? _menus;
+    private readonly BetterDesktop.Shell.ContextMenus.Contracts.IFileClassifier? _classifier;
+    private readonly List<IDisposable> _menuHandles = [];
+    private readonly Dictionary<Border, string> _cellPaths = [];
     private string _path;
     private WrapPanel? _panel;
     private TextBlock? _pathText;
@@ -48,11 +55,15 @@ public sealed class FolderBrowserWindow : ShellWindow
     private ScrollViewer? _scroll;
 
     private FolderBrowserWindow(string path, IVibrancyService vibrancy, IAppearanceService? appearance,
-        ISettingsService? settings = null)
+        ISettingsService? settings = null,
+        BetterDesktop.Shell.ContextMenus.Contracts.IMenuService? menus = null,
+        BetterDesktop.Shell.ContextMenus.Contracts.IFileClassifier? classifier = null)
         : base(appearance, vibrancy)
     {
         _vibrancy = vibrancy;
         _settings = settings;
+        _menus = menus;
+        _classifier = classifier;
         _path = path;
 
         Title = "文件";
@@ -63,6 +74,13 @@ public sealed class FolderBrowserWindow : ShellWindow
         MinHeight = 320;
 
         BuildContent();
+
+        // 统一右键菜单（shell-context-menu）：Scope=ShellFile 模板 + 能力过滤
+        if (_menus is not null)
+        {
+            _menuHandles.Add(_menus.RegisterTemplate(new FolderMenuTemplate(this)));
+            PreviewMouseRightButtonUp += OnMenuMouseUp;
+        }
     }
 
     // ======== 窗口属性：文档窗口（可激活、任务栏可见、不置顶、可缩放） ========
@@ -86,7 +104,9 @@ public sealed class FolderBrowserWindow : ShellWindow
 
     /// <summary>打开目录浏览窗口：已有实例则导航到目标目录并置前，否则新建。</summary>
     public static void Open(string path, IVibrancyService vibrancy, IAppearanceService? appearance,
-        ISettingsService? settings = null)
+        ISettingsService? settings = null,
+        BetterDesktop.Shell.ContextMenus.Contracts.IMenuService? menus = null,
+        BetterDesktop.Shell.ContextMenus.Contracts.IFileClassifier? classifier = null)
     {
         if (_instance is { IsLoaded: true })
         {
@@ -334,6 +354,7 @@ public sealed class FolderBrowserWindow : ShellWindow
             Cursor = Cursors.Hand,
             ToolTip = name
         };
+        _cellPaths[cell] = path; // 右键路由映射（统一菜单服务）
 
         var dbl = new MouseBinding(
             new RelayCommand(() =>
@@ -347,6 +368,74 @@ public sealed class FolderBrowserWindow : ShellWindow
         cell.MouseLeave += (_, _) => cell.Background = Brushes.Transparent;
 
         return cell;
+    }
+
+    // ======== 统一右键菜单路由（shell-context-menu；Scope=ShellFile） ========
+
+    private void OnMenuMouseUp(object sender, MouseButtonEventArgs e)
+    {
+        if (_menus is null)
+        {
+            return;
+        }
+
+        var path = FindCellPath(e.OriginalSource as DependencyObject);
+        if (path is null)
+        {
+            return; // 空白处无菜单（浏览窗口空白不弹，避免误触）
+        }
+
+        try
+        {
+            var dpi = VisualTreeHelper.GetDpi(this).PixelsPerDip;
+            var physical = PointToScreen(e.GetPosition(this));
+            var identity = _classifier?.Classify(path);
+            var request = new BetterDesktop.Shell.ContextMenus.Contracts.MenuRequest(
+                BetterDesktop.Shell.ContextMenus.Contracts.MenuScope.ShellFile,
+                new FolderItemTarget(path, Directory.Exists(path)),
+                new Point(physical.X / dpi, physical.Y / dpi),
+                File: identity);
+            _ = _menus.ShowAsync(request);
+        }
+        catch (Exception ex)
+        {
+            DiagnosticLog.Trace("shell.desktop", $"右键菜单展示失败: {ex.Message}");
+        }
+    }
+
+    private string? FindCellPath(DependencyObject? source)
+    {
+        while (source is not null)
+        {
+            if (source is Border border && _cellPaths.TryGetValue(border, out var path))
+            {
+                return path;
+            }
+            source = VisualTreeHelper.GetParent(source);
+        }
+        return null;
+    }
+
+    internal void InvokeOpenEntry(string path, bool isDirectory)
+    {
+        if (isDirectory) NavigateTo(path);
+        else StartFile(path);
+    }
+
+    internal void InvokeDeleteToRecycleBin(string path)
+    {
+        Task.Run(() =>
+        {
+            try
+            {
+                FileOps.DeleteToRecycleBin(path);
+            }
+            catch (Exception ex)
+            {
+                DiagnosticLog.Trace("shell.desktop", $"删除失败 {path}: {ex.Message}");
+            }
+            Dispatcher.BeginInvoke(() => NavigateTo(_path)); // 重载列表
+        });
     }
 
     private static StackPanel Stack(FrameworkElement icon, FrameworkElement label)

@@ -1,12 +1,11 @@
 using System.Windows;
 using System.Windows.Controls;
-using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using BetterDesktop.Kernel.Core;
 using BetterDesktop.Shell.ContextMenus.Contracts;
-
-// 命名空间避让：根命名空间旧名以 ContextMenu 结尾时会遮蔽 WPF 类型（教训见 72 域 README）
-using ContextMenu = System.Windows.Controls.ContextMenu;
+using BetterDesktop.Shell.ContextMenus.Windows;
+using BetterDesktop.Shell.Core.Surface;
+using BetterDesktop.Shell.Core.Vibrancy;
 
 namespace BetterDesktop.Shell.ContextMenus.Services;
 
@@ -31,66 +30,41 @@ public sealed class MenuHostSession
 }
 
 /// <summary>
-/// 菜单弹层宿主：**独立无边框窗口**承载菜单（cordis MenuBarPopupWindow 同款范式）。
+/// 菜单弹层宿主：**独立弹层窗口（ContextMenuPopupWindow，继承统一窗口基类 ShellWindow）**承载菜单。
 /// 为什么不用 WPF ContextMenu（Popup）：自绘桌面窗口被 SetParent 为 explorer 桌面的
 /// WS_CHILD——Popup/ContextMenu 在嵌入 child window 中不可靠（可能不显示/秒关）；
-/// 独立 Topmost Window 在桌面层之上稳定显示，且天然支持失焦关闭与键盘导航。
+/// 独立 Topmost 窗口在桌面层之上稳定显示，且天然支持失焦关闭与键盘导航。
+/// 窗口属性对齐 shell-menu-bar 的 MenuBarPopupWindow 范式（ShellWindow 统一基类驱动）。
 /// </summary>
 public static class MenuHost
 {
     /// <summary>展示菜单（UI 线程调用；立即打开并返回会话）。screenPos 为屏幕 DIP 坐标。</summary>
-    public static MenuHostSession Show(IReadOnlyList<MenuItemDef> items, Point screenPos)
+    public static MenuHostSession Show(IReadOnlyList<MenuItemDef> items, Point screenPos,
+        IAppearanceService? appearance, IVibrancyService? vibrancy)
     {
         string? executedId = null;
         var tcs = new TaskCompletionSource<MenuResult>(TaskCreationOptions.RunContinuationsAsynchronously);
         Window window = null!;
 
-        window = new Window
-        {
-            WindowStyle = WindowStyle.None,
-            AllowsTransparency = true,
-            Background = System.Windows.Media.Brushes.Transparent,
-            ShowInTaskbar = false,
-            ShowActivated = true,           // 接收键盘导航（Esc/方向键）；失焦即关
-            Topmost = true,                 // 盖过 explorer 桌面层与其它窗口（菜单短生命周期）
-            SizeToContent = SizeToContent.WidthAndHeight,
-            ResizeMode = ResizeMode.NoResize,
-            Content = BuildPanel(items, id =>
+        window = new ContextMenuPopupWindow(
+            BuildPanel(items, id =>
             {
                 executedId = id;
                 window.Close();
             }),
-        };
+            screenPos, appearance, vibrancy);
 
-        window.PreviewKeyDown += (_, e) =>
-        {
-            if (e.Key == Key.Escape)
-            {
-                window.Close();
-            }
-        };
-        window.Deactivated += (_, _) => window.Close(); // 点外部/切窗 → 关闭
         window.Closed += (_, _) =>
             tcs.TrySetResult(executedId is null
                 ? new MenuResult(MenuResultKind.Cancelled)
                 : new MenuResult(MenuResultKind.CommandExecuted, executedId));
-
-        // 定位：SizeToContent 需布局完成后才知道尺寸 → Loaded 后贴鼠标点 + 工作区边缘钳制
-        window.Loaded += (_, _) =>
-        {
-            var work = SystemParameters.WorkArea;
-            var left = Math.Min(screenPos.X, work.Right - window.ActualWidth - 2);
-            var top = Math.Min(screenPos.Y, work.Bottom - window.ActualHeight - 2);
-            window.Left = Math.Max(work.Left + 2, left);
-            window.Top = Math.Max(work.Top + 2, top);
-        };
 
         window.Show();
         return new MenuHostSession(window, tcs);
     }
 
     /// <summary>构建菜单面板（主题令牌 Border + MenuItem 树；MenuItem 在普通视觉树中子菜单照常弹出）。</summary>
-    private static UIElement BuildPanel(IReadOnlyList<MenuItemDef> items, Action<string> execute)
+    private static Border BuildPanel(IReadOnlyList<MenuItemDef> items, Action<string> execute)
     {
         var stack = new StackPanel();
         Fill(stack.Children, items, execute);
@@ -130,8 +104,8 @@ public static class MenuHost
                         Header = def.Text,
                         IsEnabled = def.IsEnabled,
                         FontWeight = def.IsDefault ? FontWeights.SemiBold : FontWeights.Normal,
+                        Style = MenuStyling.CreateItemStyle(),
                     };
-                    ApplyItemStyle(sub);
                     if (def.Children is { Count: > 0 })
                         Fill(sub.Items, def.Children, execute);
                     else
@@ -148,8 +122,8 @@ public static class MenuHost
                         IsEnabled = def.IsEnabled,
                         IsChecked = def.IsChecked,
                         FontWeight = def.IsDefault ? FontWeights.SemiBold : FontWeights.Normal,
+                        Style = MenuStyling.CreateItemStyle(),
                     };
-                    ApplyItemStyle(item);
                     item.Click += (_, _) =>
                     {
                         try
@@ -169,7 +143,4 @@ public static class MenuHost
             }
         }
     }
-
-    /// <summary>应用主题项样式（MenuStyling 同源；令牌缺失时 ThemeAdapter 回退由 XAML DynamicResource 处理）。</summary>
-    private static void ApplyItemStyle(FrameworkElement item) => item.Style = MenuStyling.CreateItemStyle();
 }
