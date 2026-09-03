@@ -30,8 +30,9 @@ public sealed class WindowTrackerPlugin : IPlugin
         _service = new WindowTrackerService(appSource, context.Logger);
         context.Provide<IWindowTrackerService>(_service);
 
-        // DWM 窗口缩略图服务（步骤5 下沉）：Dock 预览窗与未来任务栏/开始菜单共用。
-        context.Provide<IWindowThumbnailService>(new WindowThumbnailService());
+        // 注：IWindowThumbnailService 已按 W3 孤儿服务判别表（docs/design-proposals/2026-09-03-孤儿服务判别表.md）
+        // 删除——Provide 后全仓零消费方，Dock 缩略图链路走自有 ThumbnailWindow/DwmThumbnail；
+        // "DockWindow 改为 inject"的旧 TODO（OPEN_SHELL_INTEGRATION_STEPS.md）已被自有实现覆盖。
 
         return Task.CompletedTask;
     }

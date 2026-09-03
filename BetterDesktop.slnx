@@ -133,6 +133,31 @@
       <Platform Project="x64" />
     </Project>
   </Folder>
+  <Folder Name="/packages/shell/shell-context-menu-tests/">
+    <Project Path="packages/shell/shell-context-menu-tests/BetterDesktop.Shell.ContextMenu.Tests.csproj">
+      <Platform Project="x64" />
+    </Project>
+  </Folder>
+  <Folder Name="/packages/shell/shell-menu-bar-tests/">
+    <Project Path="packages/shell/shell-menu-bar-tests/BetterDesktop.Shell.MenuBar.Tests.csproj">
+      <Platform Project="x64" />
+    </Project>
+  </Folder>
+  <Folder Name="/packages/shell/shell-dock-tests/">
+    <Project Path="packages/shell/shell-dock-tests/BetterDesktop.Shell.Dock.Tests.csproj">
+      <Platform Project="x64" />
+    </Project>
+  </Folder>
+  <Folder Name="/packages/shell/shell-window-tracker-tests/">
+    <Project Path="packages/shell/shell-window-tracker-tests/BetterDesktop.Shell.WindowTracker.Tests.csproj">
+      <Platform Project="x64" />
+    </Project>
+  </Folder>
+  <Folder Name="/packages/shell/shell-notification-tests/">
+    <Project Path="packages/shell/shell-notification-tests/BetterDesktop.Shell.Notification.Tests.csproj">
+      <Platform Project="x64" />
+    </Project>
+  </Folder>
   <Folder Name="/packages/shell/shell-menu-bar/">
     <Project Path="packages/shell/shell-menu-bar/BetterDesktop.Shell.MenuBar.csproj">
       <Platform Project="x64" />

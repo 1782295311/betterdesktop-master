@@ -50,8 +50,9 @@ public sealed class StatusPlugin : IPlugin
         context.Provide<IBrightnessMonitor>(brightness);
 
         // 统一轮询器：检测变化 → 触发 Changed + 经 IEventBus 广播 "status.changed"。
+        // 注意：不 Provide<IStatusPoller>——全仓零消费方（面板由 _poller 字段直接驱动），
+        // 注册只会让接口成为"对外承诺但无人取"的准孤儿（W3 孤儿服务判别表 2026-09-03）。
         _poller = new StatusPoller(_monitors, context.Events);
-        context.Provide<IStatusPoller>(_poller);
         context.Provide<ISystemSource>(source);
         _poller.Start();
 
