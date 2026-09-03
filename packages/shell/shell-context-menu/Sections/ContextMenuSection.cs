@@ -52,6 +52,7 @@ public sealed class ContextMenuSection : ISettingsSection
 
         panel.Children.Add(BuildOpacityCard(settings, tokens));
         panel.Children.Add(BuildExtendedCard(settings, tokens));
+        panel.Children.Add(BuildThirdPartyCard(settings, tokens));
         panel.Children.Add(BuildToolsCard(settings, tokens));
         panel.Children.Add(BuildFeaturesCard(tokens));
         panel.Children.Add(BuildControlCard(settings, tokens));
@@ -129,6 +130,32 @@ public sealed class ContextMenuSection : ISettingsSection
         };
         check.Checked += (_, _) => settings.Set(MenuService.ExtendedAlwaysKey, true);
         check.Unchecked += (_, _) => settings.Set(MenuService.ExtendedAlwaysKey, false);
+        CardBody(card).Children.Add(check);
+        return card;
+    }
+
+    // ===== 第三方菜单项展示策略（M2：注册表 verb + COM 透传） =====
+
+    private UIElement BuildThirdPartyCard(ISettingsService settings, IThemeTokens tokens)
+    {
+        var card = GroupCard(tokens);
+        CardBody(card).Children.Add(TitleBlock("第三方菜单项", tokens));
+        CardBody(card).Children.Add(Desc(
+            "第三方软件（7-Zip/WinRAR 等）注册的右键命令默认收纳为子菜单（与资源管理器一致，保持第一层清爽）。" +
+            "开启展开后，厂商顶层命令打散平铺到第一级（更深层命令仍是子菜单）。改动下一次右键生效。",
+            tokens));
+
+        var check = new CheckBox
+        {
+            Content = "展开到第一级（不收纳为子菜单）",
+            FontSize = 13,
+            Foreground = tokens.Foreground,
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(0, 8, 0, 0),
+            IsChecked = settings.Get(ShellMenuContributor.FlattenKey, false),
+        };
+        check.Checked += (_, _) => settings.Set(ShellMenuContributor.FlattenKey, true);
+        check.Unchecked += (_, _) => settings.Set(ShellMenuContributor.FlattenKey, false);
         CardBody(card).Children.Add(check);
         return card;
     }

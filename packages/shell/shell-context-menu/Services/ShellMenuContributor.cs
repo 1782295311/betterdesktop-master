@@ -20,15 +20,24 @@ public sealed class ShellMenuContributor : IContextMenuContributor
 
     public MenuScope Scope { get; }
 
+    /// <summary>第三方入口展开策略设置键（true = 打散到第一级；默认 false = 收纳为子菜单）。</summary>
+    public const string FlattenKey = "context-menu.com.flatten";
+
     private readonly Func<string, bool>? _isClsidDisabled;
+    private readonly Func<bool>? _shouldFlatten;
 
     internal static TimeSpan ComCacheTtl = TimeSpan.FromSeconds(60);
     private static readonly ConcurrentDictionary<string, (List<ShellVerbItem> Items, DateTime Stamp)> ComCache = new();
 
-    public ShellMenuContributor(MenuScope scope, Func<string, bool>? isClsidDisabled = null)
+    /// <summary>
+    /// shouldFlatten：true = 第三方入口打散到第一级（厂商顶层子菜单整体上提一层）；
+    /// false（默认）= 收纳为子菜单（explorer 同款，handler 原生结构原样透传）。
+    /// </summary>
+    public ShellMenuContributor(MenuScope scope, Func<string, bool>? isClsidDisabled = null, Func<bool>? shouldFlatten = null)
     {
         Scope = scope;
         _isClsidDisabled = isClsidDisabled;
+        _shouldFlatten = shouldFlatten;
     }
 
     public IReadOnlyList<MenuItemDef> Build(MenuRequest request)
@@ -66,7 +75,10 @@ public sealed class ShellMenuContributor : IContextMenuContributor
         var cacheKey = $"com|{id.Kind}|{string.Join(";", paths)}";
         if (ComCache.TryGetValue(cacheKey, out var hit) && DateTime.UtcNow - hit.Stamp < ComCacheTtl)
         {
-            items.AddRange(MapComItems(hit.Items, paths, prefix: $"com:{items.Count}"));
+            // 展开策略读设置实时生效：原始树缓存不动，映射时按开关打散/收纳
+            items.AddRange(MapShellItems(
+                hit.Items, paths, prefix: $"com:{items.Count}",
+                flatten: _shouldFlatten?.Invoke() ?? false));
         }
         else
         {
@@ -93,35 +105,68 @@ public sealed class ShellMenuContributor : IContextMenuContributor
         return items;
     }
 
-    private static IEnumerable<MenuItemDef> MapComItems(
-        IReadOnlyList<ShellVerbItem> items, IReadOnlyList<string> paths, string prefix, int depth = 0)
+    /// <summary>
+    /// ShellVerbItem 树 → MenuItemDef。
+    /// flatten=false：handler 原生结构原样透传（顶层子菜单保持子菜单）；
+    /// flatten=true：**顶层**子菜单整体上提一层（打散厂商入口；更深层级仍是子菜单），
+    /// 分隔线去重（去首尾、折叠连续）——打散后厂商内部分隔线容易贴在一起。
+    /// </summary>
+    internal static IEnumerable<MenuItemDef> MapShellItems(
+        IReadOnlyList<ShellVerbItem> items, IReadOnlyList<string> paths, string prefix, bool flatten, int depth = 0)
     {
         if (depth > 3)
         {
             yield break;
         }
+
+        var lastWasSeparator = true; // 头部分隔线直接吞掉
         for (var i = 0; i < items.Count; i++)
         {
             var item = items[i];
             var id = $"{prefix}:{i}";
+
             if (item.IsSeparator)
             {
+                // 尾部/连续分隔线折叠（flatten 打散后尤其常见）
+                if (lastWasSeparator)
+                {
+                    continue;
+                }
+                lastWasSeparator = true;
                 yield return new MenuItemDef { Id = id, Text = string.Empty, Kind = MenuItemKind.Separator, Group = MenuGroup.Contribution };
                 continue;
             }
+
             if (item.IsSubMenu)
             {
+                if (flatten && depth == 0)
+                {
+                    // 打散：上提该子菜单的子项到当前层（厂商入口名不保留——命令文本自描述）
+                    foreach (var child in MapShellItems(item.Children, paths, id, flatten: true, depth + 1))
+                    {
+                        if (child.Kind != MenuItemKind.Separator)
+                        {
+                            lastWasSeparator = false;
+                        }
+                        yield return child;
+                    }
+                    continue;
+                }
+
+                lastWasSeparator = false;
                 yield return new MenuItemDef
                 {
                     Id = id, Text = item.Text, Kind = MenuItemKind.Submenu, Group = MenuGroup.Contribution,
-                    Children = MapComItems(item.Children, paths, id, depth + 1).ToList(),
+                    Children = MapShellItems(item.Children, paths, id, flatten: false, depth + 1).ToList(),
                 };
                 continue;
             }
+
             if (item.Invoke is null)
             {
                 continue;
             }
+            lastWasSeparator = false;
             yield return new MenuItemDef
             {
                 Id = id, Text = item.Text, Group = MenuGroup.Contribution,
