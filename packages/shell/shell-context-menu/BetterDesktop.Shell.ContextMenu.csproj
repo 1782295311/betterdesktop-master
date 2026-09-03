@@ -7,6 +7,14 @@
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <Platforms>x64</Platforms>
     <UseWPF>true</UseWPF>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- M2 RegistryVerbs 解析纯函数单测（shell-context-menu-tests）需要访问 internal 测试缝。 -->
+    <InternalsVisibleTo Include="BetterDesktop.Shell.ContextMenu.Tests" />
+  </ItemGroup>
+
+  <PropertyGroup>
     <RootNamespace>BetterDesktop.Shell.ContextMenus</RootNamespace>
     <AssemblyName>BetterDesktop.Shell.ContextMenu</AssemblyName>
   </PropertyGroup>

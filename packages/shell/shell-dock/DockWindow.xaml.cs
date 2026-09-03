@@ -63,6 +63,7 @@ public partial class DockWindow : ShellWindow
     private readonly ISettingsService? _settings;
     private readonly DockVisualSettings? _visual;
     private readonly IMenuService? _menus;
+    private readonly IFileClassifier? _classifier;
 
     private readonly List<(DockItemData Item, Ellipse Dot)> _pinnedDots = new();
     private readonly DispatcherTimer _refreshTimer = new()
@@ -112,7 +113,8 @@ public partial class DockWindow : ShellWindow
         ISettingsService? settings = null,
         IAppearanceService? appearance = null,
         DockVisualSettings? visual = null,
-        IMenuService? menus = null)
+        IMenuService? menus = null,
+        IFileClassifier? classifier = null)
     {
         VibrancyService = vibrancy;
         // 全局外观服务（主题圆角/描边/字号）：交给基类统一驱动，Dock 窗口与设置窗口观感一致。
@@ -127,6 +129,7 @@ public partial class DockWindow : ShellWindow
         _settings = settings;
         _visual = visual;
         _menus = menus;
+        _classifier = classifier;
 
         // 注意：不在 Window 根级设置 RenderTransform 做滑动动画。
         // 分层透明窗口 + DWM 圆角下做 RenderTransform 位移动画会错位、累积偏移，
@@ -1479,25 +1482,47 @@ public partial class DockWindow : ShellWindow
     }
 
 
+    /// <summary>Dock 项右键：统一菜单模板路径（M3——Scope=DockItem，模板/贡献者/能力过滤全管线）。</summary>
     private void ShowItemContextMenu(DockItemData item, MouseButtonEventArgs? e)
     {
-        var items = new List<MenuItemDef>
+        if (_menus is null)
         {
-            new() { Id = "dockitem.launch", Text = "启动", Command = () => LaunchApp(item) },
-            new()
+            return;
+        }
+
+        try
+        {
+            var targetPath = !string.IsNullOrWhiteSpace(item.TargetPath) ? item.TargetPath : item.ShortcutPath;
+            Point pos;
+            if (e is not null)
             {
-                Id = "dockitem.remove", Text = "从 Dock 移除",
-                Command = () => { _dockAppsService.RemoveById(item.Id); _dockAppsService.Save(); },
-            },
-            new() { Id = "dockitem.dir", Text = "打开所在目录", Command = () => OpenContainingDirectory(item) },
-            Sep("dockitem.sep"),
-            // 开始菜单（shell.start-menu 经典布局，Win 键 / Dock 共用 toggle 契约）
-            new() { Id = "dockitem.startmenu", Text = "开始菜单", Command = () => _dockPlugin?.ToggleStartMenu() },
-            // 应用提取器（shell-app-source 双模式盘点：干净/全程序 + 筛选/分组/固定/卸载，
-            // AppGrabberWindow 承接 MyDockFinder AppGrabber 形态）
-            new() { Id = "dockitem.appgrabber", Text = "应用提取器", Command = ShowAppGrabber },
-        };
-        _ = _menus?.ShowAsync(items, MenuSurface.AtCursor(this));
+                var physical = PointToScreen(e.GetPosition(this));
+                var dpi = VisualTreeHelper.GetDpi(this).PixelsPerDip;
+                pos = new Point(physical.X / dpi, physical.Y / dpi);
+            }
+            else
+            {
+                pos = MenuSurface.AtCursor(this);
+            }
+
+            FileIdentity? identity = null;
+            if (!string.IsNullOrWhiteSpace(targetPath) && _classifier is not null)
+            {
+                try { identity = _classifier.Classify(targetPath); }
+                catch { /* 分类失败 = 无 File 区（M10） */ }
+            }
+
+            _ = _menus.ShowAsync(new MenuRequest(
+                MenuScope.DockItem,
+                item,
+                pos,
+                File: identity,
+                SelectedPaths: [targetPath ?? string.Empty]));
+        }
+        catch (Exception ex)
+        {
+            DebugLog.Trace("Dock", $"Dock 项右键展示失败: {ex.Message}");
+        }
     }
 
     /// <summary>打开应用提取器窗口（懒创建复用）。</summary>
@@ -1508,6 +1533,12 @@ public partial class DockWindow : ShellWindow
         _appGrabberWindow.Show();
         _appGrabberWindow.Activate();
     }
+
+    /// <summary>DockItemTemplate 启动注入点（含"已运行=激活"完整语义）。</summary>
+    internal void InvokeLaunch(DockItemData item) => LaunchApp(item);
+
+    /// <summary>DockItemTemplate 应用提取器注入点。</summary>
+    internal void InvokeShowAppGrabber() => ShowAppGrabber();
 
     private void LaunchApp(DockItemData item)
     {

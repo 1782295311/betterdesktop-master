@@ -1,5 +1,7 @@
 # shell-context-menu · 分场景菜单规格（MENU-SPECS）
 
+> **里程碑状态（2026-09-03）**：M2 已落地——注册表静态 verb（`RegistryVerbs`，MUIVerb/Icon/Extended/隐藏标记全套解析）+ ShellEx COM 透传（`ShellMenuInterop`，IShellExtInit/IContextMenu，缓存 60s + 后台预热秒开）经 `ShellMenuContributor` 并入 DesktopIcon/ShellFile/DockItem 三场景；M3 首波已落地 DockItem 模板（Taskbar/Window/AppCenterItem/ControlCenter 宿主判别与后续见 docs/plans/2026-09-03-context-menu-m3-scenarios.md）。
+
 > 配套 `shell-context-menu/README.md`（组件设计稿）。本文定义**每一种触发场景**下右键菜单的界面与功能布局：菜单项结构、分组/分隔符、图标、行为、置灰条件、动态项、弹层形态。
 > 原则：菜单 = **系统基础项 + 插件贡献项 + Shell 原生项** 三层合成，按统一规范排序分组。
 

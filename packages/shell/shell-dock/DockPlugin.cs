@@ -37,7 +37,7 @@ public sealed class DockPlugin : IPlugin
         typeof(IPinningService)
     };
 
-    private Window? _dockWindow;
+    private DockWindow? _dockWindow;
     private IAppSourceService _appSourceService = null!;
     private IAppIconService _appIconService = null!;
     private IDockAppsService _dockAppsService = null!;
@@ -47,6 +47,7 @@ public sealed class DockPlugin : IPlugin
     private IAppearanceService? _appearance;
     private IEventBus? _events;
     private readonly List<IDisposable> _menuHandles = [];
+    private DockItemTemplate? _dockItemTemplate;
 
     public DockPlugin()
     {
@@ -99,6 +100,11 @@ public sealed class DockPlugin : IPlugin
             {
                 _menuHandles.Add(menus.RegisterContributor(new PinToDockContributor(_dockAppsService, MenuScope.DesktopIcon)));
                 _menuHandles.Add(menus.RegisterContributor(new PinToDockContributor(_dockAppsService, MenuScope.ShellFile)));
+
+                // M3：Dock 项统一右键模板（Scope=DockItem；能力过滤/贡献者管线全量接入）。
+                var classifier = context.Get<IFileClassifier>();
+                _dockItemTemplate = new DockItemTemplate(_dockAppsService);
+                _menuHandles.Add(menus.RegisterTemplate(_dockItemTemplate));
             }
 
             _dockWindow = new DockWindow(
@@ -113,8 +119,17 @@ public sealed class DockPlugin : IPlugin
                 settings,
                 _appearance,
                 dockVisual,
-                context.Get<IMenuService>());
+                context.Get<IMenuService>(),
+                context.Get<IFileClassifier>());
             _dockWindow.Show();
+
+            // DockItemTemplate 回调注入（启动/应用提取器为 DockWindow 实例行为）。
+            if (_dockItemTemplate is { } template)
+            {
+                template.Launch = item => _dockWindow.InvokeLaunch(item);
+                template.ShowAppGrabber = () => _dockWindow.InvokeShowAppGrabber();
+                template.ToggleStartMenu = () => ToggleStartMenu();
+            }
 
             // 应用源变化（开始菜单创建/删除/改名）时失效扫描缓存并刷新 Dock 固定面板，
             // 安装/卸载程序后无需重启即自动生效。

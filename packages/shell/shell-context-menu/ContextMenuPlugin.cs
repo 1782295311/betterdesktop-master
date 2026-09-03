@@ -53,6 +53,15 @@ public sealed class ContextMenuPlugin : IPlugin
             _handles.Add(service.RegisterContributor(new BuiltInOpsContributor(scope)));
         }
 
+        // M2：注册表静态 verb + ShellEx COM 透传（第三方软件右键项拿回）。
+        foreach (var scope in new[] { MenuScope.DesktopIcon, MenuScope.ShellFile, MenuScope.DockItem })
+        {
+            _handles.Add(service.RegisterContributor(new ShellMenuContributor(
+                scope,
+                isClsidDisabled: clsid => settings?.Get<List<string>>("context-menu.com.disabled", new List<string>())?
+                    .Contains(clsid, StringComparer.OrdinalIgnoreCase) == true)));
+        }
+
         // 预热 ShellNew 缓存（计划 §5-2 秒开：HKCR 注册表扫描绝不允许发生在 BuildAsync 同步段）。
         _ = Task.Run(ShellNewCatalog.Enumerate);
 
