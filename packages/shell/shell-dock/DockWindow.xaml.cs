@@ -381,6 +381,8 @@ public partial class DockWindow : ShellWindow
         {
             if (_layout.ShouldHideOnFullscreen())
             {
+                // 全屏隐藏态：光标远离时归慢档（全屏→恢复的显示延迟最坏 ≈250ms，无感知）。
+                ApplyTickInterval(statePending: !IsVisible, cursorNearDock: IsCursorNearSummonBand(GetCursorScreenPoint()));
                 SetDockVisible(false, topmost: false);
                 return;
             }
@@ -395,6 +397,7 @@ public partial class DockWindow : ShellWindow
             // 悬停 dock 上：绝不隐藏且置顶可交互
             if (IsCursorOverDock(cursor))
             {
+                ApplyTickInterval(statePending: false, cursorNearDock: true);
                 SetDockVisible(true, topmost: true);
                 return;
             }
@@ -402,6 +405,7 @@ public partial class DockWindow : ShellWindow
             // 贴底部热区：唤出（置顶）
             if (_layout.ShouldShowOnEdgeHover(cursor))
             {
+                ApplyTickInterval(statePending: false, cursorNearDock: true);
                 SetDockVisible(true, topmost: true);
                 return;
             }
@@ -412,18 +416,57 @@ public partial class DockWindow : ShellWindow
 
             if (idleMinutes >= threshold)
             {
+                // 隐藏等待唤出：光标进入预唤出带即升快档（保证 summon 延迟 ≈310ms 内）
+                ApplyTickInterval(statePending: true, cursorNearDock: IsCursorNearSummonBand(cursor));
                 SetDockVisible(false, topmost: false);
                 return;
             }
 
             // 用户活跃 → 常驻显示，但**不置顶**（在窗口下层，不盖在窗口上；
             // 需要时鼠标贴底边热区或悬停 dock 即临时置顶）
+            ApplyTickInterval(statePending: false, cursorNearDock: IsCursorNearSummonBand(cursor));
             SetDockVisible(true, topmost: false);
         }
         catch
         {
             // 自动隐藏轮询失败不阻断主流程。
         }
+    }
+
+    // H2：当前是否快档（避免每拍重设 Interval——赋值会重置 DispatcherTimer 计时相位）。
+    private bool _tickFast = true; // 构造期以 60ms 启动，初始即快档
+
+    /// <summary>按 tick 裁决结果落档（仅档位变化时写 Interval）。快档=60ms / 慢档=250ms。</summary>
+    private void ApplyTickInterval(bool statePending, bool cursorNearDock)
+    {
+        var fast = DockTickPolicy.NextIntervalMs(statePending, cursorNearDock) == DockTickPolicy.FastMs;
+        if (fast == _tickFast)
+        {
+            return;
+        }
+        _tickFast = fast;
+        _autoHideTimer.Interval = TimeSpan.FromMilliseconds(fast ? DockTickPolicy.FastMs : DockTickPolicy.SlowMs);
+    }
+
+    /// <summary>预唤出带：dock 底部矩形外扩 3×窗口高 / 1×窗口宽（逻辑坐标）。
+    /// 光标进入即提前升快档，使贴边热区唤出延迟最坏 ≈ 慢档 + 快档 ≈ 310ms（可感知门槛 400ms+）。
+    /// 注意：dock 隐藏（Hide）后 Top/Left/ActualWidth/Height 仍保留上次数值，几何判定继续有效——
+    /// 这正是"隐藏态靠带判定提前升档"的前提；窗口从未定位过（NaN）时不判中。</summary>
+    private bool IsCursorNearSummonBand(Point cursorPhysical)
+    {
+        if (double.IsNaN(cursorPhysical.X) || double.IsNaN(Left) || double.IsNaN(Top))
+        {
+            return false;
+        }
+        var scale = PresentationSource.FromVisual(this)?.CompositionTarget?.TransformToDevice;
+        var dpiX = scale?.M11 ?? 1.0;
+        var dpiY = scale?.M22 ?? 1.0;
+        var lx = cursorPhysical.X / dpiX;
+        var ly = cursorPhysical.Y / dpiY;
+        var bandY = ActualHeight * 3;
+        var bandX = ActualWidth;
+        return ly >= Top - bandY && ly <= Top + ActualHeight + bandY
+            && lx >= Left - bandX && lx <= Left + ActualWidth + bandX;
     }
 
     private void SetDockVisible(bool visible, bool topmost = false)
@@ -1373,7 +1416,12 @@ public partial class DockWindow : ShellWindow
             }, DispatcherPriority.Background);
         }
         var srcDpd = DependencyPropertyDescriptor.FromProperty(Image.SourceProperty, typeof(Image));
-        srcDpd.AddValueChanged(iconImage, (_, _) => RebuildFromCurrentSource());
+        EventHandler onSourceChanged = (_, _) => RebuildFromCurrentSource();
+        srcDpd.AddValueChanged(iconImage, onSourceChanged);
+        // H3：DPD AddValueChanged 把 handler 挂在静态描述符上，会对元素（连同整个视觉子树）持强引用——
+        // 面板重建后旧 iconImage 被丢弃但描述符引用滞留，反复重建即累积泄漏。挂 Unloaded 自摘：
+        // 面板重建时旧元素必然触发 Unloaded，handler 与引用随之释放。
+        iconImage.Unloaded += (_, _) => srcDpd.RemoveValueChanged(iconImage, onSourceChanged);
         // 初次加载立即触发一次(图标可能已 Source,或在异步加载即将就绪)。
         RebuildFromCurrentSource();
 
