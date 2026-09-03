@@ -4,6 +4,8 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using BetterDesktop.Shell.AppSource.Models;
+using BetterDesktop.Shell.ContextMenus.Contracts;
+using BetterDesktop.Shell.ContextMenus.Services;
 using BetterDesktop.Shell.Search.Contracts;
 using BetterDesktop.Shell.StartMenu.Contracts;
 using BetterDesktop.Shell.StartMenu.Services;
@@ -174,7 +176,7 @@ public sealed class ClassicLayout : IStartMenuLayoutProvider, IStartMenuLayoutHo
                         Cursor = Cursors.Hand
                     };
                     item.MouseLeftButtonUp += (_, _) => ExecuteResult(result);
-                    item.ContextMenu = BuildResultContextMenu(result);
+                    MenuSurface.Attach(item, () => BuildResultItems(result), _service?.Menus);
                     ResultsList.Items.Add(item);
                 }
             }
@@ -244,9 +246,9 @@ public sealed class ClassicLayout : IStartMenuLayoutProvider, IStartMenuLayoutHo
         _service.Hide();
     }
 
-    private ContextMenu? BuildResultContextMenu(SearchResult result)
+    private IReadOnlyList<MenuItemDef>? BuildResultItems(SearchResult result)
     {
-        return result.AppItem is not null ? AppItemActions.BuildContextMenu(result.AppItem, _service!) : null;
+        return result.AppItem is not null ? AppItemActions.BuildItems(result.AppItem, _service!) : null;
     }
 
     private void PopulateTree(ProgramFolder root, TreeView tree)
@@ -295,7 +297,7 @@ public sealed class ClassicLayout : IStartMenuLayoutProvider, IStartMenuLayoutHo
         };
         if (_service is not null)
         {
-            leaf.ContextMenu = AppItemActions.BuildContextMenu(app, _service);
+            MenuSurface.Attach(leaf, () => AppItemActions.BuildItems(app, _service!), _service?.Menus);
         }
 
         return leaf;

@@ -7,6 +7,8 @@ using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Shapes;
 using BetterDesktop.Shell.AppSource.Models;
+using BetterDesktop.Shell.ContextMenus.Contracts;
+using BetterDesktop.Shell.ContextMenus.Services;
 using BetterDesktop.Shell.Search.Contracts;
 using BetterDesktop.Shell.StartMenu.Contracts;
 using BetterDesktop.Shell.StartMenu.Services;
@@ -285,7 +287,7 @@ public sealed class Win7Layout : IStartMenuLayoutProvider, IStartMenuLayoutHost
         };
         if (_service is not null)
         {
-            row.ContextMenu = AppItemActions.BuildContextMenu(app, _service);
+            MenuSurface.Attach(row, () => AppItemActions.BuildItems(app, _service!), _service?.Menus);
         }
 
         var host = new Border { CornerRadius = new CornerRadius(3), Child = row };
@@ -530,34 +532,26 @@ public sealed class Win7Layout : IStartMenuLayoutProvider, IStartMenuLayoutHost
 
     private void ShowPowerMenu(FrameworkElement placementTarget)
     {
-        var menu = new ContextMenu();
-        // 规格：切换用户 / 注销 / 锁定 / 重新启动 / 睡眠 / 关机。
-        AddPowerItem(menu, "切换用户", () => PowerCommands.SwitchUser());
-        AddPowerItem(menu, "注销", () => PowerCommands.LogOff());
-        AddPowerItem(menu, "锁定", () => PowerCommands.Lock());
-        AddPowerItem(menu, "重新启动", () => PowerCommands.Restart());
-        AddPowerItem(menu, "睡眠", () => PowerCommands.Sleep());
-        AddPowerItem(menu, "关机", () => PowerCommands.Shutdown());
-        menu.PlacementTarget = placementTarget;
-        menu.IsOpen = true;
+        // 统一弹层呈现（ShellWindow + 主题令牌）；弹层抢激活由 StartMenuWindow 的 IsOpen/Closed 豁免兜底。
+        var items = new List<MenuItemDef>
+        {
+            // 规格：切换用户 / 注销 / 锁定 / 重新启动 / 睡眠 / 关机。
+            PowerItem("start.power.switchuser", "切换用户", () => _ = PowerCommands.SwitchUser()),
+            PowerItem("start.power.logoff", "注销", () => _ = PowerCommands.LogOff()),
+            PowerItem("start.power.lock", "锁定", () => _ = PowerCommands.Lock()),
+            PowerItem("start.power.restart", "重新启动", () => _ = PowerCommands.Restart()),
+            PowerItem("start.power.sleep", "睡眠", () => _ = PowerCommands.Sleep()),
+            PowerItem("start.power.shutdown", "关机", () => _ = PowerCommands.Shutdown()),
+        };
+        _ = _service?.Menus?.ShowAsync(items, MenuSurface.BelowOf(placementTarget));
     }
 
-    private static void AddPowerItem(ContextMenu menu, string header, Action action)
+    private static MenuItemDef PowerItem(string id, string text, Action action) => new()
     {
-        var item = new MenuItem { Header = header };
-        item.Click += (_, _) =>
-        {
-            try
-            {
-                action();
-            }
-            catch
-            {
-                // 电源操作失败静默（M10）。
-            }
-        };
-        menu.Items.Add(item);
-    }
+        Id = id,
+        Text = text,
+        Command = action,
+    };
 
     // ===== 所有程序树切换 =====
 
@@ -660,7 +654,7 @@ public sealed class Win7Layout : IStartMenuLayoutProvider, IStartMenuLayoutHost
         };
         if (_service is not null)
         {
-            leaf.ContextMenu = AppItemActions.BuildContextMenu(app, _service);
+            MenuSurface.Attach(leaf, () => AppItemActions.BuildItems(app, _service!), _service?.Menus);
         }
 
         return leaf;
@@ -789,7 +783,7 @@ public sealed class Win7Layout : IStartMenuLayoutProvider, IStartMenuLayoutHost
             item.MouseLeftButtonUp += (_, _) => ExecuteResult(result);
             if (result.AppItem is not null && _service is not null)
             {
-                item.ContextMenu = AppItemActions.BuildContextMenu(result.AppItem, _service);
+                MenuSurface.Attach(item, () => AppItemActions.BuildItems(result.AppItem, _service!), _service?.Menus);
             }
 
             ResultsList.Items.Add(item);

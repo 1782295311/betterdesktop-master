@@ -9,6 +9,7 @@ using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
 using System.Threading.Tasks;
+using BetterDesktop.Shell.ContextMenus.Services;
 using BetterDesktop.Shell.Desktop.Contracts;
 
 namespace BetterDesktop.Shell.Desktop.Services;
@@ -26,8 +27,8 @@ public sealed class DesktopBrowser : IDesktopBrowser
     private readonly SynchronizationContext? _sync;
 
     private string _location;
-    private List<string>? _clipboardPaths; // 本浏览器 Cut/Copy 的源路径
-    private bool _clipboardCut;            // true=剪切（粘贴时移动）
+    // 剪贴板已迁至 FileClipboard（CF_HDROP 系统剪贴板，与资源管理器双向互通）：
+    // 不再持有进程内 _clipboardPaths/_clipboardCut 内存态。
     private int _generation;               // 丢弃过期枚举结果
     private bool _busy;
 
@@ -43,7 +44,7 @@ public sealed class DesktopBrowser : IDesktopBrowser
 
     public IReadOnlyList<string> SelectedPaths => _selection.ToList();
 
-    public bool CanPaste => _clipboardPaths is { Count: > 0 };
+    public bool CanPaste => FileClipboard.HasFiles;
 
     public bool CanGoBack => _back.Count > 0;
 
@@ -270,48 +271,30 @@ public sealed class DesktopBrowser : IDesktopBrowser
     public void Cut()
     {
         if (_selection.Count == 0) return;
-        _clipboardPaths = _selection.ToList();
-        _clipboardCut = true;
+        FileClipboard.SetFiles(_selection.ToList(), cut: true);
     }
 
     public void Copy()
     {
         if (_selection.Count == 0) return;
-        _clipboardPaths = _selection.ToList();
-        _clipboardCut = false;
+        FileClipboard.SetFiles(_selection.ToList(), cut: false);
     }
 
     public void Paste()
     {
-        var sources = _clipboardPaths;
-        if (sources is null || sources.Count == 0) return;
-        var cut = _clipboardCut;
-        _clipboardPaths = null; // 一次性
+        // 系统剪贴板（CF_HDROP）：资源管理器复制的文件同样可粘贴进来，反之亦然。
+        if (!FileClipboard.TryGetFiles(out var sources, out var cut)) return;
+        if (!Directory.Exists(_location)) return;
 
         Task.Run(() =>
         {
-            foreach (var src in sources)
+            // 走 SHFileOperation：系统进度框 + 长路径 + 可撤销（FOF_ALLOWUNDO 视操作而定）
+            var ok = cut
+                ? FileClipboard.Move(sources, _location)
+                : FileClipboard.Copy(sources, _location);
+            if (ok && cut)
             {
-                try
-                {
-                    var dest = Path.Combine(_location, Path.GetFileName(src));
-                    if (!UniquePath(dest, out var unique)) continue;
-                    dest = unique;
-                    if (cut)
-                    {
-                        if (Directory.Exists(src)) Directory.Move(src, dest);
-                        else File.Move(src, dest);
-                    }
-                    else
-                    {
-                        if (Directory.Exists(src)) CopyDirectory(src, dest);
-                        else File.Copy(src, dest, overwrite: false);
-                    }
-                }
-                catch
-                {
-                    // 单项失败不影响其余（M10）
-                }
+                FileClipboard.Clear(); // 剪切是一次性语义
             }
             Post(Refresh);
         });
@@ -344,10 +327,22 @@ public sealed class DesktopBrowser : IDesktopBrowser
 
         Task.Run(() =>
         {
-            foreach (var t in targets)
-            {
-                FileOps.DeleteToRecycleBin(t);
-            }
+            FileClipboard.DeleteToRecycleBin(targets);
+            Post(Refresh);
+        });
+    }
+
+    /// <summary>永久删除（Shift 扩展项；不可恢复，走 SHFileOperation 不带 FOF_ALLOWUNDO）。</summary>
+    public void DeletePermanent()
+    {
+        if (_selection.Count == 0) return;
+        var targets = _selection.ToList();
+        _selection.Clear();
+        Post(() => SelectionChanged?.Invoke(this, EventArgs.Empty));
+
+        Task.Run(() =>
+        {
+            FileClipboard.DeletePermanent(targets);
             Post(Refresh);
         });
     }

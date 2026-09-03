@@ -16,6 +16,8 @@ using System.Windows.Controls;
 using System.Windows.Documents;
 using System.Windows.Input;
 using System.Windows.Media;
+using BetterDesktop.Shell.ContextMenus.Contracts;
+using BetterDesktop.Shell.ContextMenus.Services;
 using BetterDesktop.Shell.Core.Surface;
 using BetterDesktop.Shell.Core.Vibrancy;
 using BetterDesktop.Shell.Dock.Models;
@@ -39,6 +41,7 @@ internal sealed class AppGrabberWindow : ShellWindow
     private readonly IDockAppsService _apps;
     private readonly IDockIconService _icons;
     private readonly AppGroupStore _groups = new();
+    private readonly IMenuService? _menus;
 
     private TextBox? _searchBox;
     private TextBlock? _status;
@@ -65,11 +68,13 @@ internal sealed class AppGrabberWindow : ShellWindow
         IDockAppsService apps,
         IDockIconService icons,
         IVibrancyService vibrancy,
-        IAppearanceService? appearance)
+        IAppearanceService? appearance,
+        IMenuService? menus = null)
         : base(appearance, vibrancy)
     {
         _apps = apps;
         _icons = icons;
+        _menus = menus;
         _apps.PinnedChanged += OnPinnedChanged;
 
         if (CanSetProperty("Title")) Title = "应用提取器";
@@ -778,51 +783,46 @@ internal sealed class AppGrabberWindow : ShellWindow
     private void ShowItemMenu(DockItemData app, FrameworkElement target)
     {
         var isPinned = _pinnedIds.Contains(app.Id);
-        var menu = new ContextMenu();
-
-        var launch = new MenuItem { Header = "启动" };
-        launch.Click += (_, _) => Launch(app);
-        menu.Items.Add(launch);
+        var items = new List<MenuItemDef>
+        {
+            new() { Id = "grab.launch", Text = "启动", Command = () => Launch(app) },
+        };
 
         if (isPinned)
         {
-            var remove = new MenuItem { Header = "从 Dock 移除" };
-            remove.Click += (_, _) =>
+            items.Add(new()
             {
-                _apps.RemoveById(app.Id);
-                _apps.Save();
-            };
-            menu.Items.Add(remove);
+                Id = "grab.remove", Text = "从 Dock 移除",
+                Command = () => { _apps.RemoveById(app.Id); _apps.Save(); },
+            });
         }
         else
         {
-            var pin = new MenuItem { Header = "固定到 Dock" };
-            pin.Click += (_, _) =>
+            items.Add(new()
             {
-                _apps.AddByPath(string.IsNullOrWhiteSpace(app.ShortcutPath) ? app.TargetPath : app.ShortcutPath);
-                _apps.Save();
-            };
-            menu.Items.Add(pin);
+                Id = "grab.pin", Text = "固定到 Dock",
+                Command = () =>
+                {
+                    _apps.AddByPath(string.IsNullOrWhiteSpace(app.ShortcutPath) ? app.TargetPath : app.ShortcutPath);
+                    _apps.Save();
+                },
+            });
         }
 
-        var openDir = new MenuItem { Header = "打开所在目录" };
-        openDir.Click += (_, _) => OpenContainingDirectory(app);
-        menu.Items.Add(openDir);
+        items.Add(new() { Id = "grab.dir", Text = "打开所在目录", Command = () => OpenContainingDirectory(app) });
 
         // 自定义分组（506 范式）：从分组移出 / 移动到分组 ▸（含新建）
         var currentGroup = _groups.GetGroupOf(app.Id);
         if (currentGroup is not null)
         {
-            var ungroup = new MenuItem { Header = $"从「{currentGroup}」移出" };
-            ungroup.Click += (_, _) =>
+            items.Add(new()
             {
-                _groups.RemoveFromGroup(app.Id);
-                ApplyFilter();
-            };
-            menu.Items.Add(ungroup);
+                Id = "grab.ungroup", Text = $"从「{currentGroup}」移出",
+                Command = () => { _groups.RemoveFromGroup(app.Id); ApplyFilter(); },
+            });
         }
 
-        var moveMenu = new MenuItem { Header = "移动到分组" };
+        var moveChildren = new List<MenuItemDef>();
         foreach (var groupName in _groups.Groups)
         {
             if (string.Equals(groupName, currentGroup, StringComparison.OrdinalIgnoreCase))
@@ -831,30 +831,22 @@ internal sealed class AppGrabberWindow : ShellWindow
             }
 
             var captured = groupName;
-            var toGroup = new MenuItem { Header = captured };
-            toGroup.Click += (_, _) =>
+            moveChildren.Add(new()
             {
-                _groups.MoveToGroup(app.Id, captured);
-                ApplyFilter();
-            };
-            moveMenu.Items.Add(toGroup);
+                Id = $"grab.moveto.{captured}", Text = captured,
+                Command = () => { _groups.MoveToGroup(app.Id, captured); ApplyFilter(); },
+            });
         }
-
-        var newGroupItem = new MenuItem { Header = "新建分组…" };
-        newGroupItem.Click += (_, _) => PromptNewGroup(app);
-        moveMenu.Items.Add(newGroupItem);
-        menu.Items.Add(moveMenu);
+        moveChildren.Add(new() { Id = "grab.newgroup", Text = "新建分组…", Command = () => PromptNewGroup(app) });
+        items.Add(new() { Id = "grab.moveto", Text = "移动到分组", Kind = MenuItemKind.Submenu, Children = moveChildren });
 
         // 卸载入口仅"已安装"来源有 UninstallCommand；全程序模式直接删 exe 不清理残留，不暴露
         if (!string.IsNullOrWhiteSpace(app.UninstallCommand))
         {
-            var uninstall = new MenuItem { Header = "卸载…" };
-            uninstall.Click += (_, _) => RunUninstaller(app.UninstallCommand);
-            menu.Items.Add(uninstall);
+            items.Add(new() { Id = "grab.uninstall", Text = "卸载…", Command = () => RunUninstaller(app.UninstallCommand) });
         }
 
-        menu.PlacementTarget = target;
-        menu.IsOpen = true;
+        _ = _menus?.ShowAsync(items, MenuSurface.AtCursor(this));
     }
 
     /// <summary>弹输入框建分组；assign 非空时把该应用移入新分组（工具条入口传 null 仅建空组）。</summary>

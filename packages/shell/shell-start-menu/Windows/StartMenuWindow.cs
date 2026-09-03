@@ -122,10 +122,31 @@ internal sealed class StartMenuWindow : ShellWindow
         {
             // 手动拉伸会话中不因 Deactivated 关闭（系统 resize 可能短暂触发失焦），
             // 否则一拖边框菜单就收起。
-            if (IsVisible && !_inManualResize)
+            if (!IsVisible || _inManualResize)
             {
-                _service.Hide();
+                return;
             }
+
+            // 统一右键弹层豁免（2026-09-02 收口）：弹层（ContextMenuPopupWindow）激活会抢走本窗口
+            // 焦点 → Deactivated。若因此立刻 Hide，弹层会浮在已消失的开始菜单位置。
+            // 豁免：菜单打开期间保持可见，菜单关闭（Closed）后补收尾。
+            var menus = _service.Menus;
+            if (menus is { IsOpen: true })
+            {
+                EventHandler? onClosed = null;
+                onClosed = (_, _) =>
+                {
+                    menus.Closed -= onClosed;
+                    if (IsVisible && !_inManualResize && !menus.IsOpen)
+                    {
+                        _service.Hide();
+                    }
+                };
+                menus.Closed += onClosed;
+                return;
+            }
+
+            _service.Hide();
         };
         PreviewKeyDown += OnPreviewKeyDown;
         Loaded += (_, _) => PositionBottomLeft();

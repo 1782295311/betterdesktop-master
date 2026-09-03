@@ -152,7 +152,7 @@ internal sealed class DesktopIconTemplate(DesktopIconsControl owner) : IMenuTemp
         var entry = target.Entry;
         var kind = request.File?.Kind ?? FileKind.File;
 
-        // ① 常用操作组
+        // ① 常用操作组。回收站内对象不显示"打开"（对象已删除，打开必然失败；审查 P2-3）
         if (kind == FileKind.Unknown)
         {
             // 未知格式定版菜单集：打开方式…(openas) 而非默认"打开"
@@ -162,13 +162,34 @@ internal sealed class DesktopIconTemplate(DesktopIconsControl owner) : IMenuTemp
                 Command = () => DesktopMenuActions.OpenWithDialog(entry.Path),
             });
         }
-        else
+        else if (kind != FileKind.InRecycleBin)
         {
             b.AddItem(new MenuItemDef
             {
                 Id = "icon.open", Text = "打开", Group = MenuGroup.Common, IsDefault = true,
                 Command = () => owner.InvokeOpenEntry(entry),
             });
+            // shell 命名空间虚拟项（此电脑/回收站/网络）也走"打开"（explorer 语义：进入该位置）
+            if (entry.IsShellNamespace)
+            {
+                return;
+            }
+
+            // 关联文件也提供"打开方式…"（explorer 同款；Unknown 场景已在上方定版）
+            b.AddItem(new MenuItemDef
+            {
+                Id = "icon.openas", Text = "打开方式…", Group = MenuGroup.Common,
+                Command = () => DesktopMenuActions.OpenWithDialog(entry.Path),
+            });
+            // 文件夹/驱动器：在新窗口中打开（explorer 同款）
+            if (kind is FileKind.Folder or FileKind.Drive)
+            {
+                b.AddItem(new MenuItemDef
+                {
+                    Id = "icon.newwindow", Text = "在新窗口中打开", Group = MenuGroup.Common,
+                    Command = () => DesktopMenuActions.OpenInNewWindow(entry.Path),
+                });
+            }
         }
         if (!entry.IsShellNamespace)
         {
@@ -211,23 +232,32 @@ internal sealed class DesktopIconTemplate(DesktopIconsControl owner) : IMenuTemp
                 RequiredCapability = FileCapabilities.Rename, IsEnabled = request.File?.IsReadOnly != true,
                 Command = () => owner.InvokeStartRename(target.Cell, target.Label, entry.Path),
             });
-        }
-
-        // ④ 系统组：发送到▶（枚举 SendTo 文件夹，集合语义子菜单）+ 属性
-        var sendTo = DesktopMenuActions.EnumerateSendToLinks();
-        if (sendTo.Count > 0)
-        {
             b.AddItem(new MenuItemDef
             {
-                Id = "icon.sendto", Text = "发送到", Group = MenuGroup.System, Kind = MenuItemKind.Submenu,
-                Children = [.. sendTo.Select(kv => new MenuItemDef
-                {
-                    Id = $"icon.sendto-{kv.Key}",
-                    Text = kv.Key,
-                    Command = () => DesktopMenuActions.SendTo(kv.Value, entry.Path),
-                })],
+                Id = "icon.copypath", Text = "复制文件地址", Group = MenuGroup.Manage,
+                Command = () => DesktopMenuActions.CopyPath(entry.Path),
             });
+
+            // ④ 系统组：发送到▶（枚举 SendTo 文件夹，集合语义子菜单）。
+            // 只对文件系统对象开放：shell 命名空间项（回收站/此电脑，::{CLSID}）不是可发送的
+            // 文件路径，SendTo 目标程序收到 ::{} 参数无法处理（审查 P2-3）。
+            var sendTo = DesktopMenuActions.EnumerateSendToLinks();
+            if (sendTo.Count > 0)
+            {
+                b.AddItem(new MenuItemDef
+                {
+                    Id = "icon.sendto", Text = "发送到", Group = MenuGroup.System, Kind = MenuItemKind.Submenu,
+                    Children = [.. sendTo.Select(kv => new MenuItemDef
+                    {
+                        Id = $"icon.sendto-{kv.Key}",
+                        Text = kv.Key,
+                        Command = () => DesktopMenuActions.SendTo(kv.Value, entry.Path),
+                    })],
+                });
+            }
         }
+
+        // ④ 系统组：属性
         b.AddItem(new MenuItemDef
         {
             Id = "icon.properties", Text = "属性", Group = MenuGroup.System,
@@ -267,6 +297,33 @@ internal static class DesktopMenuActions
         catch (Exception ex)
         {
             DiagnosticLog.Trace("shell.desktop", $"打开方式失败 {path}: {ex.Message}");
+        }
+    }
+
+    /// <summary>在新窗口中打开（explorer 语义：文件夹/驱动器进入独立窗口）。</summary>
+    public static void OpenInNewWindow(string path)
+    {
+        try
+        {
+            Process.Start(new ProcessStartInfo("explorer.exe", $"\"{path}\"") { UseShellExecute = true });
+        }
+        catch (Exception ex)
+        {
+            DiagnosticLog.Trace("shell.desktop", $"新窗口打开失败 {path}: {ex.Message}");
+        }
+    }
+
+    /// <summary>复制完整路径到剪贴板（explorer"复制文件地址"同款）。</summary>
+    public static void CopyPath(string path)
+    {
+        try
+        {
+            Clipboard.SetText(path);
+        }
+        catch (Exception ex)
+        {
+            // 剪贴板被占用等场景静默（M10）
+            DiagnosticLog.Trace("shell.desktop", $"复制地址失败 {path}: {ex.Message}");
         }
     }
 

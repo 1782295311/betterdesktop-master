@@ -85,6 +85,20 @@ internal static class DockAppBarReservation
         return true;
     }
 
+    /// <summary>窗口所在屏的物理**整屏**矩形（rcMonitor，GetMonitorInfo，物理像素）。失败返回 false。
+    /// dock 定位/协商以此为纵向基准（2026-09-02 定稿：dock 底边贴屏幕底边 − bottomMargin）——
+    /// 整屏矩形不受 AppBar 自身抬升影响，天然免疫"协商→抬升→再定位"循环。</summary>
+    public static bool GetMonitorBounds(IntPtr hwnd, out NativeRect monitor)
+    {
+        monitor = default;
+        if (hwnd == IntPtr.Zero) return false;
+        var mon = MonitorFromWindow(hwnd, 2); // MONITOR_DEFAULTTONEAREST
+        var mi = new MonitorInfo { cbSize = Marshal.SizeOf<MonitorInfo>() };
+        if (mon == IntPtr.Zero || !GetMonitorInfo(mon, ref mi)) return false;
+        monitor = mi.rcMonitor;
+        return true;
+    }
+
     /// <summary>把窗口移动到协商矩形（物理像素，与 GetWindowRect 同域）。不动 Z 序、不激活。</summary>
     public static void MoveWindowTo(IntPtr hwnd, NativeRect rect)
     {

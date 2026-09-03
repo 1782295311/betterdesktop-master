@@ -4,6 +4,7 @@ using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
 using BetterDesktop.Shell.AppSource.Models;
+using BetterDesktop.Shell.ContextMenus.Services;
 using BetterDesktop.Shell.StartMenu.Services;
 
 namespace BetterDesktop.Shell.StartMenu.Windows.Layouts;
@@ -76,7 +77,7 @@ internal static class StartMenuAppRowBuilder
             service.ActivateOrLaunch(app);
             service.Hide();
         };
-        row.ContextMenu = AppItemActions.BuildContextMenu(app, service);
+        MenuSurface.Attach(row, () => AppItemActions.BuildItems(app, service), service.Menus);
 
         var host = new Border { CornerRadius = new CornerRadius(4), Child = row };
         host.MouseEnter += (_, _) => host.Background = palette.RowHover;

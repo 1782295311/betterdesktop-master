@@ -1,52 +1,53 @@
 using System;
-using System.Windows.Controls;
+using System.Collections.Generic;
 using BetterDesktop.Shell.AppSource.Models;
+using BetterDesktop.Shell.ContextMenus.Contracts;
 
 namespace BetterDesktop.Shell.StartMenu.Services;
 
 /// <summary>
 /// 程序项右键菜单构建（Step 8：开始菜单接管 AppGrabber 的固定/管理员/位置/卸载能力）。
 /// 供程序树、所有应用列表、搜索结果复用。
+/// 2026-09-02 统一收口：不再构建 WPF ContextMenu（系统样式/非 ShellWindow/失焦语义不可控），
+/// 返回 MenuItemDef 列表，由 MenuSurface.Attach 接到统一弹层（ShellWindow + 主题令牌）。
+/// 命令异常由 MenuHost 统一捕获记录，此处不再逐项 try/catch。
 /// </summary>
 internal static class AppItemActions
 {
-    public static ContextMenu BuildContextMenu(AppItem app, StartMenuService service)
+    public static IReadOnlyList<MenuItemDef> BuildItems(AppItem app, StartMenuService service)
     {
-        var menu = new ContextMenu();
-        menu.Items.Add(Item("启动", () =>
+        var items = new List<MenuItemDef>
         {
-            service.ActivateOrLaunch(app);
-            service.Hide();
-        }));
-        menu.Items.Add(new Separator());
-        menu.Items.Add(Item("固定到 Dock", () => service.PinToZone(app, "dock")));
-        menu.Items.Add(Item("固定到开始菜单", () => service.PinToZone(app, "startmenu")));
-        menu.Items.Add(Item("固定到任务栏", () => service.PinToZone(app, "taskbar")));
-        menu.Items.Add(new Separator());
-        menu.Items.Add(Item("以管理员运行", () => service.LaunchAsAdmin(app)));
-        menu.Items.Add(Item("打开文件位置", () => service.OpenFileLocation(app)));
+            new()
+            {
+                Id = "start.launch",
+                Text = "启动",
+                Command = () =>
+                {
+                    service.ActivateOrLaunch(app);
+                    service.Hide();
+                },
+            },
+            Sep("start.sep1"),
+            new() { Id = "start.pin.dock", Text = "固定到 Dock", Command = () => service.PinToZone(app, "dock") },
+            new() { Id = "start.pin.startmenu", Text = "固定到开始菜单", Command = () => service.PinToZone(app, "startmenu") },
+            new() { Id = "start.pin.taskbar", Text = "固定到任务栏", Command = () => service.PinToZone(app, "taskbar") },
+            Sep("start.sep2"),
+            new() { Id = "start.admin", Text = "以管理员运行", Command = () => service.LaunchAsAdmin(app) },
+            new() { Id = "start.location", Text = "打开文件位置", Command = () => service.OpenFileLocation(app) },
+        };
         if (!string.IsNullOrWhiteSpace(app.UninstallCommand))
         {
-            menu.Items.Add(Item("卸载", () => service.Uninstall(app)));
+            items.Add(new() { Id = "start.uninstall", Text = "卸载", Command = () => service.Uninstall(app) });
         }
 
-        return menu;
+        return items;
     }
 
-    private static MenuItem Item(string header, Action action)
+    private static MenuItemDef Sep(string id) => new()
     {
-        var item = new MenuItem { Header = header };
-        item.Click += (_, _) =>
-        {
-            try
-            {
-                action();
-            }
-            catch
-            {
-                // 动作失败静默（M10）。
-            }
-        };
-        return item;
-    }
+        Id = id,
+        Text = string.Empty,
+        Kind = MenuItemKind.Separator,
+    };
 }

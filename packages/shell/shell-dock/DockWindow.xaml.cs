@@ -16,6 +16,8 @@ using System.Windows.Shapes;
 using System.Windows.Threading;
 using BetterDesktop.Shell.AppSource.Contracts;
 using BetterDesktop.Shell.AppSource.Services;
+using BetterDesktop.Shell.ContextMenus.Contracts;
+using BetterDesktop.Shell.ContextMenus.Services;
 using BetterDesktop.Shell.Core.Animation;
 using BetterDesktop.Shell.Core.Surface;
 using BetterDesktop.Shell.Core.Vibrancy;
@@ -60,6 +62,7 @@ public partial class DockWindow : ShellWindow
     private readonly DockPlugin? _dockPlugin;
     private readonly ISettingsService? _settings;
     private readonly DockVisualSettings? _visual;
+    private readonly IMenuService? _menus;
 
     private readonly List<(DockItemData Item, Ellipse Dot)> _pinnedDots = new();
     private readonly DispatcherTimer _refreshTimer = new()
@@ -108,7 +111,8 @@ public partial class DockWindow : ShellWindow
         IAppIconService? iconProvider = null,
         ISettingsService? settings = null,
         IAppearanceService? appearance = null,
-        DockVisualSettings? visual = null)
+        DockVisualSettings? visual = null,
+        IMenuService? menus = null)
     {
         VibrancyService = vibrancy;
         // 全局外观服务（主题圆角/描边/字号）：交给基类统一驱动，Dock 窗口与设置窗口观感一致。
@@ -122,6 +126,7 @@ public partial class DockWindow : ShellWindow
         _dockPlugin = dockPlugin;
         _settings = settings;
         _visual = visual;
+        _menus = menus;
 
         // 注意：不在 Window 根级设置 RenderTransform 做滑动动画。
         // 分层透明窗口 + DWM 圆角下做 RenderTransform 位移动画会错位、累积偏移，
@@ -875,63 +880,54 @@ public partial class DockWindow : ShellWindow
         _showFallbackStartContextMenu();
     }
 
-    /// <summary>自绘复刻 Win+X 菜单（SendInput 失败时的降级路径，M9/M10）。</summary>
+    /// <summary>自绘复刻 Win+X 菜单（SendInput 失败时的降级路径，M9/M10）。
+    /// 呈现统一走 IMenuService 弹层（ShellWindow + 主题令牌，2026-09-02 右键菜单统一收口）。</summary>
     private void _showFallbackStartContextMenu()
     {
-        var menu = new ContextMenu();
-
-        AddWinX(menu, "系统", () => LaunchUri("ms-settings:system"));
-        AddWinX(menu, "设备管理器", () => LaunchFile("devmgmt.msc"));
-        AddWinX(menu, "网络连接", () => LaunchFile("ncpa.cpl"));
-        AddWinX(menu, "磁盘管理", () => LaunchFile("diskmgmt.msc"));
-        AddWinX(menu, "计算机管理", () => LaunchFile("compmgmt.msc"));
-        AddWinX(menu, "Windows PowerShell (管理员)", LaunchPowerShellAdmin);
-        menu.Items.Add(new Separator());
-        AddWinX(menu, "任务管理器", () => LaunchFile("taskmgr.exe"));
-        menu.Items.Add(new Separator());
-        AddWinX(menu, "设置", () => LaunchUri("ms-settings:"));
-        AddWinX(menu, "文件资源管理器", () => LaunchUri("explorer.exe"));
-        AddWinX(menu, "搜索", () => LaunchUri("ms-search:search"));
-        AddWinX(menu, "运行", () => KeyboardInterop.OpenRunDialog());
-        AddWinX(menu, "关机或注销", null, BuildPowerSubmenu);
-        AddWinX(menu, "桌面", () => KeyboardInterop.ShowDesktop());
-
-        menu.PlacementTarget = this;
-        menu.IsOpen = true;
-    }
-
-    /// <summary>构造「关机或注销」子菜单（注销 / 睡眠 / 关机 / 重启）。</summary>
-    private void BuildPowerSubmenu(MenuItem parent)
-    {
-        AddWinX(parent, "注销", () => RunShell("shutdown.exe", "/l"));
-        AddWinX(parent, "睡眠", () => RunShell("rundll32.exe", "powrprof.dll,SetSuspendState 0,1,0"));
-        AddWinX(parent, "关机", () => RunShell("shutdown.exe", "/s /t 0"));
-        AddWinX(parent, "重启", () => RunShell("shutdown.exe", "/r /t 0"));
-    }
-
-    /// <summary>把一项加到菜单；若提供 buildChildren，则该项成为带子菜单的父项。</summary>
-    private static void AddWinX(ContextMenu menu, string header, Action? onClick, Action<MenuItem>? buildChildren = null)
-    {
-        var item = new MenuItem { Header = header };
-        if (onClick is not null)
+        var items = new List<MenuItemDef>
         {
-            item.Click += (_, _) => onClick();
-        }
-
-        if (buildChildren is not null)
-        {
-            buildChildren(item);
-        }
-
-        menu.Items.Add(item);
+            WinX("winx.system", "系统", () => LaunchUri("ms-settings:system")),
+            WinX("winx.devmgmt", "设备管理器", () => LaunchFile("devmgmt.msc")),
+            WinX("winx.ncpa", "网络连接", () => LaunchFile("ncpa.cpl")),
+            WinX("winx.diskmgmt", "磁盘管理", () => LaunchFile("diskmgmt.msc")),
+            WinX("winx.compmgmt", "计算机管理", () => LaunchFile("compmgmt.msc")),
+            WinX("winx.powershell", "Windows PowerShell (管理员)", LaunchPowerShellAdmin),
+            Sep("winx.sep1"),
+            WinX("winx.taskmgr", "任务管理器", () => LaunchFile("taskmgr.exe")),
+            Sep("winx.sep2"),
+            WinX("winx.settings", "设置", () => LaunchUri("ms-settings:")),
+            WinX("winx.explorer", "文件资源管理器", () => LaunchUri("explorer.exe")),
+            WinX("winx.search", "搜索", () => LaunchUri("ms-search:search")),
+            WinX("winx.run", "运行", () => _ = KeyboardInterop.OpenRunDialog()),
+            new MenuItemDef
+            {
+                Id = "winx.power", Text = "关机或注销", Kind = MenuItemKind.Submenu,
+                Children =
+                [
+                    WinX("winx.power.logoff", "注销", () => RunShell("shutdown.exe", "/l")),
+                    WinX("winx.power.sleep", "睡眠", () => RunShell("rundll32.exe", "powrprof.dll,SetSuspendState 0,1,0")),
+                    WinX("winx.power.shutdown", "关机", () => RunShell("shutdown.exe", "/s /t 0")),
+                    WinX("winx.power.restart", "重启", () => RunShell("shutdown.exe", "/r /t 0")),
+                ],
+            },
+            WinX("winx.desktop", "桌面", () => _ = KeyboardInterop.ShowDesktop()),
+        };
+        _ = _menus?.ShowAsync(items, MenuSurface.AtCursor(this));
     }
 
-    private static void AddWinX(MenuItem parent, string header, Action onClick)
+    private static MenuItemDef WinX(string id, string text, Action onClick) => new()
     {
-        var child = new MenuItem { Header = header };
-        child.Click += (_, _) => onClick();
-        parent.Items.Add(child);
-    }
+        Id = id,
+        Text = text,
+        Command = () => { try { onClick(); } catch { /* 启动失败静默（M10） */ } },
+    };
+
+    private static MenuItemDef Sep(string id) => new()
+    {
+        Id = id,
+        Text = string.Empty,
+        Kind = MenuItemKind.Separator,
+    };
 
     private static void LaunchUri(string uri)
     {
@@ -994,18 +990,12 @@ public partial class DockWindow : ShellWindow
     /// <summary>系统功能右键菜单：打开 / 从 Dock 隐藏（关闭对应设置开关，图标即时消失）。</summary>
     private void ShowSystemEntryMenu((string Key, string Name, string Clsid, uint FallbackStockId, bool IsControlPanel) entry)
     {
-        var menu = new ContextMenu();
-
-        var openItem = new MenuItem { Header = "打开" };
-        openItem.Click += (_, _) => LaunchSystemEntry(entry);
-        menu.Items.Add(openItem);
-
-        var hideItem = new MenuItem { Header = $"隐藏「{entry.Name}」" };
-        hideItem.Click += (_, _) => _settings?.Set(entry.Key, false);
-        menu.Items.Add(hideItem);
-
-        menu.PlacementTarget = this;
-        menu.IsOpen = true;
+        var items = new List<MenuItemDef>
+        {
+            new() { Id = "sysentry.open", Text = "打开", Command = () => LaunchSystemEntry(entry) },
+            new() { Id = "sysentry.hide", Text = $"隐藏「{entry.Name}」", Command = () => _settings?.Set(entry.Key, false) },
+        };
+        _ = _menus?.ShowAsync(items, MenuSurface.AtCursor(this));
     }
 
     private static void LaunchSystemEntry((string Key, string Name, string Clsid, uint FallbackStockId, bool IsControlPanel) entry)
@@ -1443,46 +1433,30 @@ public partial class DockWindow : ShellWindow
 
     private void ShowItemContextMenu(DockItemData item, MouseButtonEventArgs? e)
     {
-        var menu = new ContextMenu();
-
-        var launchItem = new MenuItem { Header = "启动" };
-        launchItem.Click += (_, _) => LaunchApp(item);
-        menu.Items.Add(launchItem);
-
-        var removeItem = new MenuItem { Header = "从 Dock 移除" };
-        removeItem.Click += (_, _) =>
+        var items = new List<MenuItemDef>
         {
-            _dockAppsService.RemoveById(item.Id);
-            _dockAppsService.Save();
+            new() { Id = "dockitem.launch", Text = "启动", Command = () => LaunchApp(item) },
+            new()
+            {
+                Id = "dockitem.remove", Text = "从 Dock 移除",
+                Command = () => { _dockAppsService.RemoveById(item.Id); _dockAppsService.Save(); },
+            },
+            new() { Id = "dockitem.dir", Text = "打开所在目录", Command = () => OpenContainingDirectory(item) },
+            Sep("dockitem.sep"),
+            // 开始菜单（shell.start-menu 经典布局，Win 键 / Dock 共用 toggle 契约）
+            new() { Id = "dockitem.startmenu", Text = "开始菜单", Command = () => _dockPlugin?.ToggleStartMenu() },
+            // 应用提取器（shell-app-source 双模式盘点：干净/全程序 + 筛选/分组/固定/卸载，
+            // AppGrabberWindow 承接 MyDockFinder AppGrabber 形态）
+            new() { Id = "dockitem.appgrabber", Text = "应用提取器", Command = ShowAppGrabber },
         };
-        menu.Items.Add(removeItem);
-
-        var openDirItem = new MenuItem { Header = "打开所在目录" };
-        openDirItem.Click += (_, _) => OpenContainingDirectory(item);
-        menu.Items.Add(openDirItem);
-
-        menu.Items.Add(new Separator());
-
-        // 开始菜单（shell.start-menu 经典布局，Win 键 / Dock 共用 toggle 契约）
-        var startMenuItem = new MenuItem { Header = "开始菜单" };
-        startMenuItem.Click += (_, _) => _dockPlugin?.ToggleStartMenu();
-        menu.Items.Add(startMenuItem);
-
-        // 应用提取器（shell-app-source 双模式盘点：干净/全程序 + 筛选/分组/固定/卸载，
-        // AppGrabberWindow 承接 MyDockFinder AppGrabber 形态）
-        var managerItem = new MenuItem { Header = "应用提取器" };
-        managerItem.Click += (_, _) => ShowAppGrabber();
-        menu.Items.Add(managerItem);
-
-        menu.PlacementTarget = e?.OriginalSource as UIElement ?? this;
-        menu.IsOpen = true;
+        _ = _menus?.ShowAsync(items, MenuSurface.AtCursor(this));
     }
 
     /// <summary>打开应用提取器窗口（懒创建复用）。</summary>
     private AppGrabberWindow? _appGrabberWindow;
     private void ShowAppGrabber()
     {
-        _appGrabberWindow ??= new AppGrabberWindow(_dockAppsService, _dockIconService, VibrancyService!, AppearanceService);
+        _appGrabberWindow ??= new AppGrabberWindow(_dockAppsService, _dockIconService, VibrancyService!, AppearanceService, _menus);
         _appGrabberWindow.Show();
         _appGrabberWindow.Activate();
     }
@@ -2286,18 +2260,23 @@ public partial class DockWindow : ShellWindow
         // 坐标参考域（2026-09-02 修复）：⚠️ SystemParameters.PrimaryScreen* 返回的域与窗口 WPF 逻辑域
         // （PerMonitorV2 按窗口所在屏 DPI）不一致时，会把 dock 定位到工作区之外（实测 125% 屏上
         // 窗口被放到物理 1679px，而工作区底只有 1380px → AppBar 协商负高度 W=769 H=-299）。
-        // 改为以 GetMonitorInfo 物理工作区为权威源，÷TransformToDevice 换算成 WPF 逻辑坐标。
+        // 改为以 GetMonitorInfo 物理矩形为权威源，÷TransformToDevice 换算成 WPF 逻辑坐标。
+        // 纵向基准（2026-09-02 定稿）：**整屏**矩形——dock 底边 = 屏幕底边 − bottomMargin
+        // （dock 独占底部、原生任务栏隐藏）。整屏不受 AppBar 抬升影响，"协商→抬升→再定位"循环免疫。
         var hwnd = _appBarHwndSource?.Handle ?? new System.Windows.Interop.WindowInteropHelper(this).Handle;
         var transform = _appBarHwndSource?.CompositionTarget?.TransformToDevice ?? default;
         var dpiScale = transform.M11 > 0 ? transform.M11 : 1.0;
         Rect screen;
-        // 优先用注册前缓存的工作区（不含 dock 自己）——实时 GetMonitorWorkArea 在 dock 注册后
-        // 已含自身抬升，会触发"协商→抬升→再定位"循环（dock 被一路抬到屏幕顶，实测回归）。
-        var cachedWork = _appBarWorkArea;
-        if (cachedWork.Right - cachedWork.Left > 0 && cachedWork.Bottom - cachedWork.Top > 0)
+        var cachedScreen = _appBarScreen;
+        if (cachedScreen.Right - cachedScreen.Left > 0 && cachedScreen.Bottom - cachedScreen.Top > 0)
         {
-            screen = new Rect(cachedWork.Left / dpiScale, cachedWork.Top / dpiScale,
-                (cachedWork.Right - cachedWork.Left) / dpiScale, (cachedWork.Bottom - cachedWork.Top) / dpiScale);
+            screen = new Rect(cachedScreen.Left / dpiScale, cachedScreen.Top / dpiScale,
+                (cachedScreen.Right - cachedScreen.Left) / dpiScale, (cachedScreen.Bottom - cachedScreen.Top) / dpiScale);
+        }
+        else if (DockAppBarReservation.GetMonitorBounds(hwnd, out var mon))
+        {
+            screen = new Rect(mon.Left / dpiScale, mon.Top / dpiScale,
+                (mon.Right - mon.Left) / dpiScale, (mon.Bottom - mon.Top) / dpiScale);
         }
         else if (DockAppBarReservation.GetMonitorWorkArea(hwnd, out var work))
         {

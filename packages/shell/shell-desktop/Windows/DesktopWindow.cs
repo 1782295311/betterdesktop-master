@@ -45,9 +45,6 @@ internal sealed class DesktopWindow : ShellWindow
     /// <summary>菜单栏条带高度（逻辑像素，图标网格避开此区域）。</summary>
     private const double MenuBarSafeTop = 24;
 
-    /// <summary>Dock 名称行高度（对齐 DockLayoutService.Measure 的 labelHeight）。</summary>
-    private const double DockLabelHeight = 24;
-
     private const int HwndBottom = 1; // HWND_BOTTOM
     private static readonly IntPtr HwndTop = IntPtr.Zero; // HWND_TOP
     private const uint SwpNoSize = 0x0001;
@@ -96,8 +93,22 @@ internal sealed class DesktopWindow : ShellWindow
     private static extern IntPtr GetParent(IntPtr hWnd);
 
     [DllImport("user32.dll")]
-    [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool IsWindowVisible(IntPtr hWnd);
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct RECT
+    {
+        public int Left;
+        public int Top;
+        public int Right;
+        public int Bottom;
+    }
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect);
+
+    private const int SmCyscreen = 1; // SM_CYSCREEN：主屏物理像素高度
 
     [DllImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]
@@ -132,6 +143,13 @@ internal sealed class DesktopWindow : ShellWindow
         // 图标网格：瀑布列（先填列后换列），避开顶部菜单栏条带 + 底部 dock/原生任务栏
         _icons = new DesktopIconsControl(_browser, _settings, menus, classifier);
         UpdateIconsReserve();
+        ApplyIconsHidden();
+
+        // 双击空白处 → 切换隐藏桌面图标。两条触发路径按布局模式互补：
+        //   自动排列：WrapPanel 空白不吞事件，冒泡到窗口层（图标 cell 的按下已 Handled，不会误触发）；
+        //   自由布局：空白按下被框选逻辑 Handled，由 DesktopIconsControl.BlankAreaDoubleClick 上报。
+        _icons.BlankAreaDoubleClick += (_, _) => ToggleIconsHidden();
+        MouseLeftButtonDown += OnWindowBlankDoubleClick;
 
         // 根 Border：满足基类 ChromeBorder 约定（DEBUG 断言强制，未设置会 FailFast）。
         // 附带收益：字号缩放（ApplyFontScale）与主题前景传导经此 Border 生效。
@@ -144,6 +162,20 @@ internal sealed class DesktopWindow : ShellWindow
             DiagnosticLog.Trace("shell.desktop",
                 $"窗口层右键 up pos={e.GetPosition(this)} source={e.OriginalSource.GetType().Name}");
 
+        // ★ 原生菜单抑制生死线（2026-09-02 截图实证）：本窗口 WS_CHILD 嵌入 explorer 桌面。
+        //   右键已由 WPF 层（MouseRightButtonUp → IMenuService）接管并弹统一菜单，但 WPF 不吞
+        //   WM_CONTEXTMENU——DefWindowProc 会把未处理的 WM_CONTEXTMENU 转发给父窗口
+        //   （explorer 桌面）→ 原生右键菜单与统一菜单**同时弹出并存**（截图实证）。
+        //   故在 hwnd hook 一律吞掉 WM_CONTEXTMENU（覆盖整棵子窗口树的转发链）。
+        SourceInitialized += (_, _) =>
+        {
+            var hwnd = new WindowInteropHelper(this).Handle;
+            if (hwnd != IntPtr.Zero && HwndSource.FromHwnd(hwnd) is { } src)
+            {
+                src.AddHook(DesktopWndProc);
+            }
+        };
+
         // 设置变化（dock 尺寸滑块/组件开关）→ 重算底部避让，避免图标被底栏瞬时遮挡
         if (_settings is not null)
         {
@@ -152,8 +184,8 @@ internal sealed class DesktopWindow : ShellWindow
     }
 
     /// <summary>
-    /// 图标网格避让：顶部菜单栏（desktop.reserveMenuBar）+ 底部 dock/原生任务栏
-    /// （desktop.reserveDock / desktop.reserveTaskbar，桌面分区独立开关）。
+    /// 图标网格避让：顶部菜单栏（desktop.reserveMenuBar）+ 底部原生任务栏
+    /// （desktop.reserveTaskbar，Shell_TrayWnd 实际可见高度）。dock 为浮动条，不占用桌面基准。
     /// </summary>
     private void UpdateIconsReserve()
     {
@@ -164,30 +196,31 @@ internal sealed class DesktopWindow : ShellWindow
 
         double bottomReserve = 0;
 
-        // Dock 高度估算：contentHeight = iconSize + labelHeight + bottomMargin*2，
-        // 距底 bottomMargin，故占用 = iconSize + labelHeight + bottomMargin*3（对齐 DockLayoutService.Measure）。
-        // ⚠️ 必须**同时**满足「桌面侧开关 desktop.reserveDock」与「Dock 组件真的启用 components.dock」：
-        //    否则 Dock 关闭时仍预留约 98 DIP，桌面下方会空出一大块（用户反馈的布局 bug）。
-        var dockReserveOn = _settings?.Get("desktop.reserveDock", true) ?? true;
-        var dockEnabled = _settings?.Get("components.dock", true) ?? true;
-        if (dockReserveOn && dockEnabled)
-        {
-            var iconSize = _settings?.Get("dock.iconSize", 44d) ?? 44d;
-            var showLabel = _settings?.Get("dock.showLabel", true) ?? true;
-            var bottomMargin = _settings?.Get("dock.bottomMargin", 10d) ?? 10d;
-            var dockHeight = iconSize + (showLabel ? DockLabelHeight : 0) + bottomMargin * 3;
-            bottomReserve = Math.Max(bottomReserve, dockHeight);
-        }
-
-        // 原生任务栏高度：占主屏底边（WorkArea 差值）。
-        // 同样需满足桌面侧开关 + 任务栏组件真的显示（components.wintaskbar；隐藏时 WorkArea 差值本就≈0，
-        // 此处再加一道判断，避免任务栏被隐藏后仍按缓存的工作区数值预留）。
+        // 底部基准 = 原生任务栏（Shell_TrayWnd）的实际可见高度——它是唯一【恒久】占底部的部件。
+        // dock 是浮动条（空闲/全屏自动隐藏、用到时才出现），【不参与】抬高桌面基准：
+        // 此前按 dock 高度估算（≈98 DIP，大于 dock 实际 footprint 且恒久生效），是
+        // "桌面基准被抬高"的根因（用户 2026-09-02 定稿：让出高度以任务栏为基准，而非 dock）。
+        // dock 显示时浮在图标之上（平时非置顶，不挡窗口层操作），隐藏时零占用。
+        // 原生任务栏被 components.wintaskbar=false 隐藏时 IsWindowVisible=false → 基准自动归 0。
         var taskbarReserveOn = _settings?.Get("desktop.reserveTaskbar", true) ?? true;
-        var taskbarShown = _settings?.Get("components.wintaskbar", true) ?? true;
-        if (taskbarReserveOn && taskbarShown)
+        if (taskbarReserveOn)
         {
-            var taskbarHeight = SystemParameters.PrimaryScreenHeight - SystemParameters.WorkArea.Height;
-            bottomReserve = Math.Max(bottomReserve, taskbarHeight);
+            var tray = FindWindowEx(IntPtr.Zero, IntPtr.Zero, "Shell_TrayWnd", null);
+            if (tray != IntPtr.Zero && IsWindowVisible(tray) && GetWindowRect(tray, out RECT rc))
+            {
+                var trayPhysical = rc.Bottom - rc.Top;
+                if (trayPhysical > 0)
+                {
+                    // GetWindowRect 是物理像素，图标 Margin 是 DIP：
+                    // dpiScale = 主屏物理高(SM_CYSCREEN) / SystemParameters.PrimaryScreenHeight(DIP)。
+                    var screenPhysical = GetSystemMetrics(SmCyscreen);
+                    var dpiScale = screenPhysical / SystemParameters.PrimaryScreenHeight;
+                    if (dpiScale > 0)
+                    {
+                        bottomReserve = Math.Max(bottomReserve, trayPhysical / dpiScale);
+                    }
+                }
+            }
         }
 
         var topReserve = (_settings?.Get("desktop.reserveMenuBar", true) ?? true)
@@ -217,12 +250,51 @@ internal sealed class DesktopWindow : ShellWindow
         Dispatcher.BeginInvoke(new Action(() =>
         {
             UpdateIconsReserve();
-            // 图标类设置（格尺寸/字号/.lnk 隐藏/菜单与拖放开关）需重建网格才生效
-            if (isDesktop)
+            ApplyIconsHidden();
+            // 图标类设置（格尺寸/字号/.lnk 隐藏/菜单与拖放开关）需重建网格才生效；
+            // iconsHidden 只切网格可见性，无需整网格重建
+            if (isDesktop && e.Key != "desktop.iconsHidden")
             {
                 _icons?.Rebuild();
             }
         }));
+    }
+
+    /// <summary>切换「隐藏桌面图标」（desktop.iconsHidden，持久化）——仅自绘模式路径。
+    /// ⚠️ 只动自绘网格这一层：explorer 原生图标由 DesktopPlugin 幂等管理（恒隐藏 + 退出兜底恢复），
+    /// 两条线各自独立、绝不交叉操作——若在这里再去 Show/Hide 原生 SysListView32，
+    /// 任何状态漂移都会造成两层图标同时可见/互相错位（"打架"根源）。
+    /// 原生桌面模式（components.desktop=false）的另一条路径在 DesktopPlugin 的 WH_MOUSE_LL 钩子，
+    /// 两者共享同一意图键但各管各的层，靠模式与类名过滤天然互斥。
+    /// 窗口本体保持可见可交互：藏的只是图标网格，恢复通道（再次双击）永远在本窗口上；
+    /// 若 Hide() 整个窗口，第二次双击会落进 explorer DefView，自绘层就再也收不回来了。</summary>
+    private void ToggleIconsHidden()
+    {
+        var hidden = _settings?.Get("desktop.iconsHidden", false) ?? false;
+        DiagnosticLog.Trace("shell.desktop", $"双击桌面空白：desktop.iconsHidden {hidden} → {!hidden}");
+        _settings?.Set("desktop.iconsHidden", !hidden);
+    }
+
+    /// <summary>应用桌面图标网格可见性（desktop.iconsHidden；启动与设置变更两条入口共用）。</summary>
+    private void ApplyIconsHidden()
+    {
+        if (_icons is null)
+        {
+            return;
+        }
+
+        var hidden = _settings?.Get("desktop.iconsHidden", false) ?? false;
+        _icons.Visibility = hidden ? Visibility.Collapsed : Visibility.Visible;
+    }
+
+    /// <summary>窗口层空白双击（自动排列路径：WrapPanel 空白不吞事件冒泡到此）。
+    /// 图标上的双击（打开文件）在 cell 层已标记 Handled，不会到达这里。</summary>
+    private void OnWindowBlankDoubleClick(object sender, MouseButtonEventArgs e)
+    {
+        if (e.ClickCount >= 2)
+        {
+            ToggleIconsHidden();
+        }
     }
 
     // ======== ShellWindow 基类行为重写（见文件头说明） ========
@@ -443,6 +515,20 @@ internal sealed class DesktopWindow : ShellWindow
         while (dv == IntPtr.Zero && worker != IntPtr.Zero);
 
         return dv != IntPtr.Zero ? dv : progman; // 兜底 Progman（罕见）
+    }
+
+    /// <summary>
+    /// 吞 WM_CONTEXTMENU：右键菜单统一经 IMenuService（见构造函数注释）。
+    /// 不吞则 DefWindowProc 转发给父窗口（explorer 桌面）→ 原生右键菜单与统一菜单并存。
+    /// </summary>
+    private IntPtr DesktopWndProc(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
+    {
+        const int WM_CONTEXTMENU = 0x007B;
+        if (msg == WM_CONTEXTMENU)
+        {
+            handled = true;
+        }
+        return IntPtr.Zero;
     }
 
     // ======== 降级路径：顶层窗口时失焦回底 ========

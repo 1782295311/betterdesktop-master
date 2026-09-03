@@ -1,10 +1,8 @@
-// BetterDesktop.Shell.Desktop — 自绘右键菜单样式工厂
-// 桌面/文件夹浏览器的右键菜单从 WPF 原生样式改为自绘主题风格：
-//   - 根模板：PopupBackground 底 + PopupBorder 描边 + 圆角，悬停高亮 PopupItemHover，
-//     前景 ThemeForeground，全部走 App 级主题令牌（DynamicResource），随主题模式即时切换。
-//   - MenuItem：统一行高 + 悬停高亮（IsHighlighted 触发器）+ 分隔线（ThemeSeparator）。
-// 用法：DesktopIconsControl 用 CreateMenu() 创建后 AddItem/AddSeparator 填充；
-//       保留 WPF ContextMenu 的定位/失焦/Esc 行为，仅换呈现。
+// BetterDesktop.Shell.Desktop — 自绘右键菜单样式工厂（旧回退路径专用）
+// 2026-09-02 统一收口：样式唯一权威源 = shell-context-menu/MenuStyling（主题令牌 XamlReader.Parse）。
+// 本文件只服务旧回退路径（context-menu.migrated=false 或 IMenuService 缺失）——为消除双样式源
+// 漂移，CreateMenu 直接委托 MenuStyling.CreateMenu()，本文件不再自持任何 XAML。
+// 主路径（IMenuService）经 MenuHost 渲染，与这里的令牌完全同源。
 //
 // 【实现说明（踩坑记录）】
 //   本文件曾用 FrameworkElementFactory.SetValue(dp, DynamicResourceExtension.ProvideValue(null))
@@ -16,78 +14,15 @@
 using System;
 using System.Windows;
 using System.Windows.Controls;
-using System.Windows.Markup;
+using BetterDesktop.Shell.ContextMenus.Services;
 
 namespace BetterDesktop.Shell.Desktop.Controls;
 
-/// <summary>自绘右键菜单样式工厂（主题令牌驱动，随主题模式即时切换）。</summary>
+/// <summary>自绘右键菜单样式工厂（旧回退路径；样式委托 shell-context-menu/MenuStyling 唯一权威源）。</summary>
 internal static class DesktopMenuStyling
 {
-    private const string TemplateXaml =
-        """
-        <ControlTemplate xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-                         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-                         TargetType="{x:Type ContextMenu}">
-            <Border Background="{DynamicResource PopupBackground}"
-                    BorderBrush="{DynamicResource PopupBorder}"
-                    BorderThickness="1"
-                    CornerRadius="8"
-                    Padding="4"
-                    SnapsToDevicePixels="True"
-                    UseLayoutRounding="True">
-                <ItemsPresenter/>
-            </Border>
-        </ControlTemplate>
-        """;
-
-    private const string ItemStyleXaml =
-        """
-        <Style xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-               xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-               TargetType="{x:Type MenuItem}">
-            <Setter Property="Height" Value="30"/>
-            <Setter Property="Padding" Value="10,0,10,0"/>
-            <Setter Property="Margin" Value="2,1,2,1"/>
-            <Setter Property="Background" Value="Transparent"/>
-            <Setter Property="Foreground" Value="{DynamicResource ThemeForeground}"/>
-            <Setter Property="Cursor" Value="Hand"/>
-            <Setter Property="FontSize" Value="12.5"/>
-            <Style.Triggers>
-                <Trigger Property="IsHighlighted" Value="True">
-                    <Setter Property="Background" Value="{DynamicResource PopupItemHover}"/>
-                </Trigger>
-            </Style.Triggers>
-        </Style>
-        """;
-
-    private const string SeparatorStyleXaml =
-        """
-        <Style xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-               xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-               TargetType="{x:Type Separator}">
-            <Setter Property="Height" Value="1"/>
-            <Setter Property="Margin" Value="8,4,8,4"/>
-            <Setter Property="Background" Value="{DynamicResource ThemeSeparator}"/>
-        </Style>
-        """;
-
-    /// <summary>创建自绘主题 ContextMenu（根模板 + 菜单项样式 + 分隔线样式）。</summary>
-    public static ContextMenu CreateMenu()
-    {
-        var menu = new ContextMenu
-        {
-            Template = (ControlTemplate)XamlReader.Parse(TemplateXaml),
-            ItemContainerStyle = (Style)XamlReader.Parse(ItemStyleXaml),
-            HasDropShadow = false,
-            SnapsToDevicePixels = true,
-            UseLayoutRounding = true,
-            Resources =
-            {
-                [typeof(Separator)] = (Style)XamlReader.Parse(SeparatorStyleXaml)
-            }
-        };
-        return menu;
-    }
+    /// <summary>创建自绘主题 ContextMenu（根模板 + 菜单项样式 + 分隔线样式；样式与统一弹层同源）。</summary>
+    public static ContextMenu CreateMenu() => MenuStyling.CreateMenu();
 
     /// <summary>向自绘菜单追加一个普通菜单项（默认项加粗）。</summary>
     public static void AddItem(ContextMenu menu, string header, Action onClick, bool isDefault = false)

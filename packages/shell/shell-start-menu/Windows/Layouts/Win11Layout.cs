@@ -6,6 +6,7 @@ using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
 using BetterDesktop.Shell.AppSource.Models;
+using BetterDesktop.Shell.ContextMenus.Services;
 using BetterDesktop.Shell.Recent.Contracts;
 using BetterDesktop.Shell.Search.Contracts;
 using BetterDesktop.Shell.StartMenu.Contracts;
@@ -182,7 +183,7 @@ public sealed class Win11Layout : IStartMenuLayoutProvider, IStartMenuLayoutHost
         };
         if (_service is not null)
         {
-            row.ContextMenu = AppItemActions.BuildContextMenu(app, _service);
+            MenuSurface.Attach(row, () => AppItemActions.BuildItems(app, _service!), _service?.Menus);
         }
 
         var hoverHost = new Border { CornerRadius = new CornerRadius(6), Background = _palette.Tile11, Child = row };
@@ -195,7 +196,7 @@ public sealed class Win11Layout : IStartMenuLayoutProvider, IStartMenuLayoutHost
         };
         if (_service is not null)
         {
-            hoverHost.ContextMenu = AppItemActions.BuildContextMenu(app, _service);
+            MenuSurface.Attach(hoverHost, () => AppItemActions.BuildItems(app, _service!), _service?.Menus);
         }
 
         _ = LoadIconAsync(app, icon);

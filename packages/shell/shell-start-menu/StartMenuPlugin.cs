@@ -8,6 +8,7 @@ using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 using BetterDesktop.Kernel.Contracts;
+using BetterDesktop.Shell.ContextMenus.Contracts;
 using BetterDesktop.Shell.AppSource.Contracts;
 using BetterDesktop.Shell.Core.Surface;
 using BetterDesktop.Shell.Core.Vibrancy;
@@ -78,6 +79,9 @@ public sealed class StartMenuPlugin : IPlugin
         service.RegisterSection(new RecentSectionProvider());
         service.RegisterSection(new PlacesSectionProvider());
         service.RegisterSection(new PowerSectionProvider());
+
+        // 统一右键菜单服务（context-menu 插件先于本插件加载，此处可解析到；缺失则右键降级不弹）
+        service.Menus = context.Get<IMenuService>();
 
         // 默认样式（startmenu.style：win7 / win10 / win11）→ 活动布局。
         var style = context.Get<ISettingsService>()!.Get("startmenu.style", "win11") ?? "win11";

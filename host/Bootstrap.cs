@@ -182,16 +182,30 @@ public static class Bootstrap
         context.Plugin(new QuickNotePlugin());
 
         // 7. 原生 Windows 部件管理（参考 Cairo 的 ExplorerHelper.HideExplorerTaskbar）：
-        //    本桌面环境不实现原生任务栏，只管理其显示/隐藏。components.wintaskbar=false 时隐藏原生任务栏
-        //    （让 Dock 独占底部区域）；true（默认）则保留原生任务栏。退出时恢复显示，避免桌面环境退出后
-        //    原生任务栏消失（对齐 Cairo 在 Dispose 时把 HideExplorerTaskbar 复位为 false 的行为）。
+        //    本桌面环境不实现原生任务栏，只管理其显示/隐藏。
+        //    2026-09-02 定稿：dock 启用（components.dock，默认 true）即隐藏原生任务栏——dock 独占
+        //    底部条带，dock.bottomMargin 从屏幕底边算起（AppBar 协商才不会被任务栏顶回去）；
+        //    关闭 dock 时回退到 components.wintaskbar 的显隐意图。两键任一变更即时生效。
+        //    退出时无条件恢复显示，避免桌面环境退出后原生任务栏消失（环境不可破坏）。
         var settings = context.Get<ISettingsService>();
-        var showNativeTaskbar = settings is null || settings.Get("components.wintaskbar", true);
-        NativeTaskbarManager.SetTaskbarVisible(showNativeTaskbar);
-        if (!showNativeTaskbar)
+        void ApplyNativeTaskbar()
         {
-            Application.Current.Exit += (_, _) => NativeTaskbarManager.SetTaskbarVisible(true);
+            var show = settings is null || (!settings.Get("components.dock", true) &&
+                                            settings.Get("components.wintaskbar", true));
+            NativeTaskbarManager.SetTaskbarVisible(show);
         }
+        ApplyNativeTaskbar();
+        if (settings is not null)
+        {
+            settings.Changed += (_, e) =>
+            {
+                if (e.Key is "components.dock" or "components.wintaskbar")
+                {
+                    ApplyNativeTaskbar();
+                }
+            };
+        }
+        Application.Current.Exit += (_, _) => NativeTaskbarManager.SetTaskbarVisible(true);
         // 进程退出时释放设置服务（落盘末次 debounce 内的改动 + 释放后台 Timer）。
         Application.Current.Exit += (_, _) => settingsSvc.Dispose();
         // 进程退出时释放 HMR 管理器（释放内存治理器 Timer 与监控任务）。

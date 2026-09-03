@@ -9,6 +9,7 @@ using System.Windows;
 using BetterDesktop.Kernel.Contracts;
 using BetterDesktop.Shell.AppSource.Contracts;
 using BetterDesktop.Shell.AppSource.Models;
+using BetterDesktop.Shell.ContextMenus.Contracts;
 using BetterDesktop.Shell.Core.Surface;
 using BetterDesktop.Shell.Core.Vibrancy;
 using BetterDesktop.Shell.Pinning.Contracts;
@@ -48,6 +49,12 @@ public sealed class StartMenuService : IStartMenuService, IDisposable
     private bool _hookInstalled;
 
     public event EventHandler? OpenStateChanged;
+
+    /// <summary>
+    /// 统一右键菜单服务（context-menu 插件注入；布局/条目右键经 MenuSurface 接统一弹层）。
+    /// 缺失时右键降级不弹（装配顺序兜底：context-menu 先于本插件加载）。
+    /// </summary>
+    public IMenuService? Menus { get; set; }
 
     /// <summary>活动布局切换通知（窗口据此重建内容）。</summary>
     public event Action? LayoutChanged;

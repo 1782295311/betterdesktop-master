@@ -6,6 +6,7 @@ using System.Threading.Tasks;
 using System.Windows;
 using BetterDesktop.Kernel.Contracts;
 using BetterDesktop.Shell.AppSource.Contracts;
+using BetterDesktop.Shell.ContextMenus.Contracts;
 using BetterDesktop.Shell.Settings.Contracts;
 using BetterDesktop.Shell.Core.Animation;
 using BetterDesktop.Shell.Core.Surface;
@@ -102,7 +103,8 @@ public sealed class DockPlugin : IPlugin
                 _appIconService,
                 settings,
                 _appearance,
-                dockVisual);
+                dockVisual,
+                context.Get<IMenuService>());
             _dockWindow.Show();
 
             // 应用源变化（开始菜单创建/删除/改名）时失效扫描缓存并刷新 Dock 固定面板，

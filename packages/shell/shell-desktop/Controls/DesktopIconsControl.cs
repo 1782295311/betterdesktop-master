@@ -146,6 +146,12 @@ public sealed class DesktopIconsControl : ScrollViewer, IDisposable
         _browser.Refresh();
     }
 
+    /// <summary>
+    /// 空白处双击（图标之外的自由布局空白区）。供 DesktopWindow 实现「双击切换隐藏桌面图标」。
+    /// 图标自身的双击（打开文件）在 cell 层已处理并标记 Handled，不会触发本事件。
+    /// </summary>
+    public event EventHandler? BlankAreaDoubleClick;
+
     // ======== 桌面设置（与设置中心「桌面」分区同键同默认；默认值 = 2026-09-01 用户实测调优值） ========
 
     private double IconSize => Clamp(_settings?.Get("desktop.iconSize", 31d) ?? 31d, 24, 96);
@@ -272,6 +278,22 @@ public sealed class DesktopIconsControl : ScrollViewer, IDisposable
         // 空白处按下 → 开始框选（图标上的按下由 cell 自己处理并标记 Handled，不会冒泡到这里）
         canvas.MouseLeftButtonDown += (_, e) =>
         {
+            // 空白处双击 → 切换「隐藏桌面图标」（DesktopWindow 订阅 BlankAreaDoubleClick）。
+            // 双击的第一次按下已启动框选并捕获鼠标，必须先撤干净，否则残留的 rubber band
+            // 会跟着双击闪一下、捕获的鼠标也影响后续交互。
+            if (e.ClickCount >= 2)
+            {
+                _rubberActive = false;
+                canvas.ReleaseMouseCapture();
+                if (_rubberBand is not null)
+                {
+                    _rubberBand.Visibility = Visibility.Collapsed;
+                }
+                e.Handled = true;
+                BlankAreaDoubleClick?.Invoke(this, EventArgs.Empty);
+                return;
+            }
+
             _rubberActive = true;
             _rubberCtrl = Keyboard.Modifiers.HasFlag(ModifierKeys.Control);
             _rubberStart = e.GetPosition(canvas);
@@ -1387,7 +1409,8 @@ public sealed class DesktopIconsControl : ScrollViewer, IDisposable
             MaxWidth = CellWidth - 10,
             MaxLength = 255,
             HorizontalContentAlignment = HorizontalAlignment.Center,
-            VerticalContentAlignment = VerticalAlignment.Center
+            VerticalContentAlignment = VerticalAlignment.Center,
+            ContextMenu = null // 抑制 WPF 默认剪贴板右键菜单（系统样式，2026-09-02 统一收口）
         };
         sp.Children[idx] = box;
         box.Focus();
@@ -1611,7 +1634,13 @@ public sealed class DesktopIconsControl : ScrollViewer, IDisposable
             FileIdentity? identity = null;
             if (target is not null && !target.Entry.IsShellNamespace)
             {
-                identity = _classifier?.Classify(target.Entry.Path);
+                // 多选（右键项在选中集内）→ 交集能力过滤（ClassifyMany，单文件专属项自动隐藏）；
+                // 单选 → 单项分类（审查 P1-1：MenuRequest.SelectedPaths 语义兑现）
+                var selected = _browser.SelectedPaths;
+                identity = _classifier is null ? null
+                    : selected.Count > 1 && selected.Contains(target.Entry.Path)
+                        ? _classifier.ClassifyMany([.. selected])
+                        : _classifier.Classify(target.Entry.Path);
             }
 
             // PointToScreen 返回物理像素 → 换算 DIP（弹层窗口 Left/Top 使用逻辑坐标）
@@ -1643,21 +1672,33 @@ public sealed class DesktopIconsControl : ScrollViewer, IDisposable
 
     internal void InvokeBrowserRefresh() => _browser.Refresh();
 
+    // 多选语义（explorer 同款，审查 P1-1）：右键项在选中集内 → 整集操作，**不得重置选中集**；
+    // 否则单选该项再操作。（多选身份的能力交集过滤在 ShowMenuAsync 经 ClassifyMany 提供）
+
     internal void InvokeBrowserCut(string path)
     {
-        _browser.SetSelection([path]);
+        if (!_browser.SelectedPaths.Contains(path))
+        {
+            _browser.SetSelection([path]);
+        }
         _browser.Cut();
     }
 
     internal void InvokeBrowserCopy(string path)
     {
-        _browser.SetSelection([path]);
+        if (!_browser.SelectedPaths.Contains(path))
+        {
+            _browser.SetSelection([path]);
+        }
         _browser.Copy();
     }
 
     internal void InvokeBrowserDelete(string path)
     {
-        _browser.SetSelection([path]);
+        if (!_browser.SelectedPaths.Contains(path))
+        {
+            _browser.SetSelection([path]);
+        }
         _browser.Delete();
     }
 

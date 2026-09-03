@@ -79,15 +79,13 @@ public sealed class DesktopSection : ISettingsSection
         var layoutCard = GroupCard();
         var layoutBody = CardBody(layoutCard);
         layoutBody.Children.Add(TitleBlock("布局避让", tokens));
-        layoutBody.Children.Add(ToggleRow("为 Dock 让出底部空间", settings, tokens,
-            "desktop.reserveDock", true));
         layoutBody.Children.Add(ToggleRow("为 Windows 原生任务栏让出底部空间", settings, tokens,
             "desktop.reserveTaskbar", true));
         layoutBody.Children.Add(ToggleRow("为顶部菜单栏让出空间", settings, tokens,
             "desktop.reserveMenuBar", true));
         layoutBody.Children.Add(NoteBlock(
-            "Dock 占用高度按 dock.iconSize / dock.showLabel / dock.bottomMargin 估算；" +
-            "任务栏高度取主屏工作区差值。", tokens));
+            "底部基准 = 原生任务栏（Shell_TrayWnd）实际可见高度，任务栏被隐藏时基准自动归 0；" +
+            "dock 为浮动条（空闲/全屏自动隐藏），不占用桌面基准，显示时浮于图标之上。", tokens));
         panel.Children.Add(layoutCard);
 
         // ---- 排列与拖动 ----
@@ -98,6 +96,8 @@ public sealed class DesktopSection : ISettingsSection
             "desktop.autoArrange", false));
         arrangeBody.Children.Add(ToggleRow("拖动后对齐网格", settings, tokens,
             "desktop.snapToGrid", true));
+        arrangeBody.Children.Add(ToggleRow("隐藏桌面图标（也可在桌面空白处双击切换）", settings, tokens,
+            "desktop.iconsHidden", false));
 
         var resetHint = NoteBlock("", tokens);
         var resetBtn = WithStyle(new Button

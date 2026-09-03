@@ -20,13 +20,14 @@ public partial class DockWindow
     private bool _appBarRegistered;
     private bool _appBarSetPosDone;
 
-    /// <summary>注册前缓存的工作区（物理像素，**不含 dock 自己**）。
-    /// ⚠️ dock 注册为底部 AppBar 后，系统会把工作区抬升到 dock 顶（work.Bottom = dock.Top）；
-    /// 若定位读实时工作区，会形成"协商→抬升→再定位→再抬升"循环，dock 被一路抬到屏幕顶（实测回归）。
-    /// 因此定位/协商一律基于这份注册前缓存。</summary>
-    private DockAppBarReservation.NativeRect _appBarWorkArea;
+    /// <summary>注册前缓存的所在屏**整屏**矩形（物理像素，rcMonitor）。
+    /// 2026-09-02 定稿：dock 底边 = 屏幕底边 − dock.bottomMargin（dock 独占底部，原生任务栏隐藏）。
+    /// ⚠️ 不再用工作区做纵向基准：dock 注册为底部 AppBar 后系统把工作区抬到 dock 顶，
+    /// 读实时工作区会形成"协商→抬升→再定位→再抬升"循环（dock 被抬到屏幕顶，实测回归）；
+    /// 整屏矩形不受 AppBar 抬升影响，循环天然消失，也无需再依赖注册前时序。</summary>
+    private DockAppBarReservation.NativeRect _appBarScreen;
 
-    /// <summary>句柄就绪：挂消息钩子 + 缓存工作区 + 注册底部 AppBar。
+    /// <summary>句柄就绪：挂消息钩子 + 缓存整屏矩形 + 注册底部 AppBar。
     /// ⚠️ 首次协商**不在这里做**：此时窗口尚未布局（SizeToContent 尺寸未定），
     /// 用无效矩形协商会得到负高度，回写 Height 抛异常使插件加载失败（实测回归）。
     /// 首次协商由 Loaded 后的布局定位路径（OnLoadedCore → SyncAppBarPosition）触发。</summary>
@@ -39,16 +40,20 @@ public partial class DockWindow
         if (_appBarHwndSource is not null)
         {
             var hwnd = _appBarHwndSource.Handle;
-            // 注册前缓存"不含 dock 的工作区"——注册后 GetMonitorWorkArea 返回的已含 dock 的抬升
-            _ = DockAppBarReservation.GetMonitorWorkArea(hwnd, out _appBarWorkArea);
+            // 缓存整屏矩形（不受 dock 注册后的工作区抬升影响）；取不到再退工作区
+            if (!DockAppBarReservation.GetMonitorBounds(hwnd, out _appBarScreen))
+            {
+                _ = DockAppBarReservation.GetMonitorWorkArea(hwnd, out _appBarScreen);
+            }
             _appBarRegistered = DockAppBarReservation.Register(hwnd, AppBarCallbackMessage);
             _appBarSetPosDone = false;
-            DebugLog.Trace("Dock", $"AppBar 注册: {_appBarRegistered} (work={_appBarWorkArea.Left},{_appBarWorkArea.Top},{_appBarWorkArea.Right},{_appBarWorkArea.Bottom})");
+            DebugLog.Trace("Dock", $"AppBar 注册: {_appBarRegistered} (screen={_appBarScreen.Left},{_appBarScreen.Top},{_appBarScreen.Right},{_appBarScreen.Bottom})");
         }
     }
 
-    /// <summary>AppBar 协商定位：先按底部居中落位，再以"期望物理矩形"（基于所在屏物理工作区）向系统申请，
-    /// 协商结果用 SetWindowPos 物理应用，WPF 侧只回写 Left/Top（Width/Height 由 SizeToContent 布局决定）。
+    /// <summary>AppBar 协商定位：先按底部居中落位，再以"期望物理矩形"（基于所在屏**整屏**矩形，
+    /// 底边贴屏幕底 − bottomMargin）向系统申请，协商结果用 SetWindowPos 物理应用，
+    /// WPF 侧只回写 Left/Top（Width/Height 由 SizeToContent 布局决定）。
     /// 未注册（AppBar 失败降级）时退化为纯定位。
     /// ⚠️ 回写协商矩形前必须校验宽高有效（协商可能给出异常矩形，负 Height 会抛异常）。
     /// ⚠️ 协商输入必须用期望矩形而非 GetWindowRect 当前位置：窗口被 SystemParameters 域误导定位到
@@ -72,13 +77,15 @@ public partial class DockWindow
         var transform = _appBarHwndSource.CompositionTarget?.TransformToDevice ?? default;
         var scale = transform.M11 > 0 ? transform.M11 : 1.0; // 物理像素 / WPF 逻辑
 
-        // 期望矩形（物理域）：底部居中 + 距"注册前缓存工作区"底留白 BottomMargin。
-        // ⚠️ 用缓存而非实时 GetMonitorWorkArea——实时值已含 dock 自己的抬升，会导致协商循环。
-        var work = _appBarWorkArea;
-        if (work.Right - work.Left <= 0 || work.Bottom - work.Top <= 0)
+        // 期望矩形（物理域）：底部居中 + 距**屏幕底边**留白 BottomMargin（2026-09-02 定稿，
+        // dock 独占底部、原生任务栏隐藏——此前锚工作区底会把 dock 抬高一个任务栏高度）。
+        // ⚠️ 用缓存整屏矩形而非实时工作区——工作区已含 dock 自己的抬升，会导致协商循环。
+        var screen = _appBarScreen;
+        if (screen.Right - screen.Left <= 0 || screen.Bottom - screen.Top <= 0)
         {
-            // 缓存无效（极端时序：未注册/窗口尚未映射屏）→ 实时查，仅本次兜底
-            if (!DockAppBarReservation.GetMonitorWorkArea(hwnd, out work))
+            // 缓存无效（极端时序：未注册/窗口尚未映射屏）→ 实时查整屏，再退工作区，仅本次兜底
+            if (!DockAppBarReservation.GetMonitorBounds(hwnd, out screen) &&
+                !DockAppBarReservation.GetMonitorWorkArea(hwnd, out screen))
             {
                 return;
             }
@@ -87,8 +94,8 @@ public partial class DockWindow
         var pw = Math.Max(1, (int)Math.Round(ActualWidth * scale));
         var ph = Math.Max(1, (int)Math.Round(ActualHeight * scale));
         var margin = (int)Math.Round(_layout.BottomMargin * scale);
-        var bottom = Math.Max(work.Top + ph, work.Bottom - margin);
-        var left = work.Left + Math.Max(0, (work.Right - work.Left - pw) / 2);
+        var bottom = Math.Max(screen.Top + ph, screen.Bottom - margin);
+        var left = screen.Left + Math.Max(0, (screen.Right - screen.Left - pw) / 2);
         var desired = new DockAppBarReservation.NativeRect
         {
             Left = left,

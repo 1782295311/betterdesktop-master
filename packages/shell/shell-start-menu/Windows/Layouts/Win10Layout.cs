@@ -7,6 +7,8 @@ using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
 using BetterDesktop.Shell.AppSource.Models;
+using BetterDesktop.Shell.ContextMenus.Contracts;
+using BetterDesktop.Shell.ContextMenus.Services;
 using BetterDesktop.Shell.Search.Contracts;
 using BetterDesktop.Shell.StartMenu.Contracts;
 using BetterDesktop.Shell.StartMenu.Services;
@@ -553,7 +555,7 @@ public sealed class Win10Layout : IStartMenuLayoutProvider, IStartMenuLayoutHost
         };
         if (_service is not null)
         {
-            tile.ContextMenu = AppItemActions.BuildContextMenu(app, _service);
+            MenuSurface.Attach(tile, () => AppItemActions.BuildItems(app, _service!), _service?.Menus);
         }
 
         // 仅主网格支持拖拽重排/建夹；文件夹钻取视图只读，避免跨层复杂编排。
@@ -933,31 +935,23 @@ public sealed class Win10Layout : IStartMenuLayoutProvider, IStartMenuLayoutHost
 
     private void ShowPowerMenu(FrameworkElement placementTarget)
     {
-        var menu = new ContextMenu();
-        AddPowerItem(menu, "睡眠", () => PowerCommands.Sleep());
-        AddPowerItem(menu, "重新启动", () => PowerCommands.Restart());
-        AddPowerItem(menu, "关机", () => PowerCommands.Shutdown());
-        AddPowerItem(menu, "锁定", () => PowerCommands.Lock());
-        menu.PlacementTarget = placementTarget;
-        menu.IsOpen = true;
+        // 统一弹层呈现（ShellWindow + 主题令牌）；弹层抢激活由 StartMenuWindow 的 IsOpen/Closed 豁免兜底。
+        var items = new List<MenuItemDef>
+        {
+            PowerItem("start.power.sleep", "睡眠", () => _ = PowerCommands.Sleep()),
+            PowerItem("start.power.restart", "重新启动", () => _ = PowerCommands.Restart()),
+            PowerItem("start.power.shutdown", "关机", () => _ = PowerCommands.Shutdown()),
+            PowerItem("start.power.lock", "锁定", () => _ = PowerCommands.Lock()),
+        };
+        _ = _service?.Menus?.ShowAsync(items, MenuSurface.BelowOf(placementTarget));
     }
 
-    private static void AddPowerItem(ContextMenu menu, string header, Action action)
+    private static MenuItemDef PowerItem(string id, string text, Action action) => new()
     {
-        var item = new MenuItem { Header = header };
-        item.Click += (_, _) =>
-        {
-            try
-            {
-                action();
-            }
-            catch
-            {
-                // 电源操作失败静默（M10）。
-            }
-        };
-        menu.Items.Add(item);
-    }
+        Id = id,
+        Text = text,
+        Command = action,
+    };
 
     /// <inheritdoc />
     public void RefreshItems()
@@ -1020,7 +1014,7 @@ public sealed class Win10Layout : IStartMenuLayoutProvider, IStartMenuLayoutHost
             item.MouseLeftButtonUp += (_, _) => ExecuteResult(result);
             if (result.AppItem is not null && _service is not null)
             {
-                item.ContextMenu = AppItemActions.BuildContextMenu(result.AppItem, _service);
+                MenuSurface.Attach(item, () => AppItemActions.BuildItems(result.AppItem, _service!), _service?.Menus);
             }
 
             ResultsList.Items.Add(item);

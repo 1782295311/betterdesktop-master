@@ -5,6 +5,7 @@ using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
 using BetterDesktop.Shell.AppSource.Models;
+using BetterDesktop.Shell.ContextMenus.Services;
 using BetterDesktop.Shell.Search.Contracts;
 using BetterDesktop.Shell.StartMenu.Contracts;
 using BetterDesktop.Shell.StartMenu.Services;
@@ -374,7 +375,7 @@ public sealed class AllAppsLayout : IStartMenuLayoutProvider, IStartMenuLayoutHo
             item.MouseLeftButtonUp += (_, _) => ExecuteResult(result);
             if (result.AppItem is not null && _service is not null)
             {
-                item.ContextMenu = AppItemActions.BuildContextMenu(result.AppItem, _service);
+                MenuSurface.Attach(item, () => AppItemActions.BuildItems(result.AppItem, _service!), _service?.Menus);
             }
 
             _appsList.Items.Add(item);
