@@ -12,6 +12,11 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <!-- H1b ProcessAppInfo 行为/测量单测（shell-menu-bar-tests）需要访问 internal 静态缓存。 -->
+    <InternalsVisibleTo Include="BetterDesktop.Shell.MenuBar.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
     <PackageReference Include="LibreHardwareMonitorLib" Version="0.9.6" />
     <PackageReference Include="ManagedShell" Version="0.0.370" />
     <PackageReference Include="System.Drawing.Common" Version="8.0.8" />
