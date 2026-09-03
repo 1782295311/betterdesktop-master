@@ -150,7 +150,7 @@ public class SkinTests : IDisposable
     public void SkinImageParams_DefaultsAndSet()
     {
         var svc = CreateService();
-        Assert.Equal(0, svc.SkinImageStretch);     // 默认铺满裁切
+        Assert.Equal(1, svc.SkinImageStretch);     // 默认 Uniform 完整居中（不变形，窗口适应皮肤）
         Assert.Equal(0.25, svc.SkinImageDarken);   // 默认轻暗化
         Assert.Equal(0.0, svc.SkinImageBlur);
         Assert.Equal(1.0, svc.SkinImageOpacity);

@@ -14,6 +14,7 @@ using System.Windows.Media.Imaging;
 using System.Windows.Shapes;
 using System.Windows.Threading;
 using System.Windows;
+using BetterDesktop.Kernel.Core;
 using System;
 
 namespace BetterDesktop.Shell.MenuBar.Status;
@@ -1673,7 +1674,7 @@ internal sealed class SystemTrayIcon : ContentControl, IDisposable
                         if (_notificationArea.Handle == IntPtr.Zero)
                         {
                             try { _notificationArea.Initialize(); }
-                            catch (Exception ex) { System.Diagnostics.Debug.WriteLine("[SystemTrayIcon] NotificationArea.Initialize 失败: " + ex.Message); }
+                            catch (Exception ex) { DiagnosticLog.Trace("menu-bar.status", "SystemTrayIcon NotificationArea.Initialize 失败: " + ex.Message); }
                         }
                     }
                     _refCount++;
@@ -1681,7 +1682,7 @@ internal sealed class SystemTrayIcon : ContentControl, IDisposable
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine("[SystemTrayIcon] ShellManager init failed: " + ex.Message);
+                DiagnosticLog.Trace("menu-bar.status", "SystemTrayIcon ShellManager init failed: " + ex.Message);
                 _notificationArea = null;
                 _shellManager = null;
             }
@@ -1711,12 +1712,12 @@ internal sealed class SystemTrayIcon : ContentControl, IDisposable
                     _notificationArea.UnpinnedIcons.CollectionChanged += OnIconsChanged;
                     RebuildIcons();
                 }
-                catch (Exception ex) { System.Diagnostics.Debug.WriteLine("[SystemTrayIcon] Subscribe failed: " + ex.Message); }
+                catch (Exception ex) { DiagnosticLog.Trace("menu-bar.status", "SystemTrayIcon Subscribe failed: " + ex.Message); }
             }
         }
         catch (Exception ex)
         {
-            System.Diagnostics.Debug.WriteLine("[SystemTrayIcon] FATAL ctor failed: " + ex.Message);
+            DiagnosticLog.Trace("menu-bar.status", "SystemTrayIcon FATAL ctor failed: " + ex.Message);
             Content = new TextBlock { Text = string.Empty, Width = 1, Height = 1 };
         }
     }
@@ -1747,7 +1748,7 @@ internal sealed class SystemTrayIcon : ContentControl, IDisposable
                 }
                 IconCountChanged?.Invoke(this, _elements.Count);
             }
-            catch (Exception ex) { System.Diagnostics.Debug.WriteLine("[SystemTrayIcon] OnIconsChanged failed: " + ex.Message); }
+            catch (Exception ex) { DiagnosticLog.Trace("menu-bar.status", "SystemTrayIcon OnIconsChanged failed: " + ex.Message); }
         });
     }
 
@@ -1826,7 +1827,7 @@ internal sealed class SystemTrayIcon : ContentControl, IDisposable
         }
         catch (Exception ex)
         {
-            System.Diagnostics.Debug.WriteLine("[SystemTrayIcon] IsDuplicateSystemIcon failed: " + ex.Message);
+            DiagnosticLog.Trace("menu-bar.status", "SystemTrayIcon IsDuplicateSystemIcon failed: " + ex.Message);
         }
         return false;
     }
@@ -1861,7 +1862,7 @@ internal sealed class SystemTrayIcon : ContentControl, IDisposable
             };
             action(icon, GetCursorPos());
         }
-        catch (Exception ex) { System.Diagnostics.Debug.WriteLine("[SystemTrayIcon] UpdatePlacement failed: " + ex.Message); }
+        catch (Exception ex) { DiagnosticLog.Trace("menu-bar.status", "SystemTrayIcon UpdatePlacement failed: " + ex.Message); }
     }
 
     /// <summary>系统双击判定阈值（原实现硬编码 500ms，与用户设置不一致会误判双击）。</summary>
@@ -1909,7 +1910,7 @@ internal sealed class SystemTrayIcon : ContentControl, IDisposable
                 },
             });
         }
-        catch (Exception ex) { System.Diagnostics.Debug.WriteLine("[SystemTrayIcon] SetTrayHostSize failed: " + ex.Message); }
+        catch (Exception ex) { DiagnosticLog.Trace("menu-bar.status", "SystemTrayIcon SetTrayHostSize failed: " + ex.Message); }
     }
 
     private void Toggle()
@@ -1932,14 +1933,14 @@ internal sealed class SystemTrayIcon : ContentControl, IDisposable
                 _notificationArea.UnpinnedIcons.CollectionChanged -= OnIconsChanged;
             }
         }
-        catch (Exception ex) { System.Diagnostics.Debug.WriteLine("[SystemTrayIcon] 退订失败: " + ex.Message); }
+        catch (Exception ex) { DiagnosticLog.Trace("menu-bar.status", "SystemTrayIcon 退订失败: " + ex.Message); }
         lock (_initLock)
         {
             _refCount--;
             if (_refCount <= 0 && _shellManager != null)
             {
                 try { _shellManager.Dispose(); }
-                catch (Exception ex) { System.Diagnostics.Debug.WriteLine("[SystemTrayIcon] ShellManager.Dispose 失败: " + ex.Message); }
+                catch (Exception ex) { DiagnosticLog.Trace("menu-bar.status", "SystemTrayIcon ShellManager.Dispose 失败: " + ex.Message); }
                 _shellManager = null;
                 _notificationArea = null;
             }

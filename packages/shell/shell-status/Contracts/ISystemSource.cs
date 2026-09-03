@@ -32,4 +32,10 @@ public interface ISystemSource
 
     /// <summary>读取当前键盘布局 KLID；失败返回空串。</summary>
     string ReadKeyboardLayoutId();
+
+    /// <summary>枚举当前已加载键盘布局/输入法（含激活标记）；失败返回 null（调用方降级 KLID 映射）。</summary>
+    IReadOnlyList<KeyboardLayoutItem>? ReadKeyboardLayouts();
+
+    /// <summary>枚举系统已注册键盘布局（注册表 Layouts 表）；失败返回 null。</summary>
+    IReadOnlyList<KeyboardLayoutItem>? ReadRegisteredKeyboardLayouts();
 }

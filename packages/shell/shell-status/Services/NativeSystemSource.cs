@@ -33,4 +33,8 @@ public sealed class NativeSystemSource : ISystemSource
     public bool HasActiveConnection() => NetworkInterop.HasActiveConnection();
 
     public string ReadKeyboardLayoutId() => ImeInterop.GetKeyboardLayoutId();
+
+    public IReadOnlyList<KeyboardLayoutItem>? ReadKeyboardLayouts() => KeyboardLayoutInterop.Enumerate();
+
+    public IReadOnlyList<KeyboardLayoutItem>? ReadRegisteredKeyboardLayouts() => KeyboardLayoutInterop.GetRegisteredLayouts();
 }

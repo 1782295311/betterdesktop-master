@@ -18,6 +18,8 @@ internal sealed class FakeSystemSource : ISystemSource
     public IReadOnlyList<WirelessAdapterStatus> WirelessAdapters { get; set; } = Array.Empty<WirelessAdapterStatus>();
     public bool HasConnection { get; set; }
     public string LayoutId { get; set; } = string.Empty;
+    public IReadOnlyList<KeyboardLayoutItem> KeyboardLayouts { get; set; } = Array.Empty<KeyboardLayoutItem>();
+    public IReadOnlyList<KeyboardLayoutItem> RegisteredLayouts { get; set; } = Array.Empty<KeyboardLayoutItem>();
 
     public MemoryStatusEx? ReadMemory() => Memory;
     public SystemPowerStatus? ReadPower() => Power;
@@ -26,6 +28,8 @@ internal sealed class FakeSystemSource : ISystemSource
     public IReadOnlyList<WirelessAdapterStatus> ReadWirelessAdapters() => WirelessAdapters;
     public bool HasActiveConnection() => HasConnection;
     public string ReadKeyboardLayoutId() => LayoutId;
+    public IReadOnlyList<KeyboardLayoutItem>? ReadKeyboardLayouts() => KeyboardLayouts;
+    public IReadOnlyList<KeyboardLayoutItem>? ReadRegisteredKeyboardLayouts() => RegisteredLayouts;
 
     /// <summary>便捷：构造一条原始内存记录。</summary>
     public static MemoryStatusEx MakeMemory(uint loadPercent, ulong total = 32ul * 1024 * 1024 * 1024)

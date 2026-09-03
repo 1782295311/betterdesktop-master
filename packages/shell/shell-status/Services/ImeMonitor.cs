@@ -29,16 +29,18 @@ public sealed class ImeMonitor : IImeMonitor, IStatusChangeSource, IEventDrivenM
 
     public StatusSnapshot GetSnapshot()
     {
-        // 优先从真实键盘布局枚举拿当前激活的 LayoutName
+        // 优先从注入源（生产=真实键盘布局枚举）拿当前激活的 LayoutName。
+        // 注意：布局枚举必须经 ISystemSource（测试缝）——此前直接调 KeyboardLayoutInterop.Enumerate
+        // 会把真实机器输入法状态泄漏进单测（本机装搜狗时 Fake 注入被无视）。
         KeyboardLayoutItem? active = null;
         IReadOnlyList<KeyboardLayoutItem>? allLayouts = null;
         try
         {
-            allLayouts = KeyboardLayoutInterop.Enumerate();
-            active = allLayouts.FirstOrDefault(x => x.IsActive);
+            allLayouts = _source.ReadKeyboardLayouts();
+            active = allLayouts?.FirstOrDefault(x => x.IsActive);
             // 兜底：枚举到了布局但没有标记为活动（常见于 TSF 输入法未被旧逻辑识别），
             // 取列表第一项作为当前布局显示，避免降级到粗糙的 KLID → "中文" 映射。
-            if (active is null && allLayouts.Count > 0)
+            if (active is null && allLayouts is { Count: > 0 })
             {
                 active = allLayouts[0];
             }
@@ -101,8 +103,8 @@ public sealed class ImeMonitor : IImeMonitor, IStatusChangeSource, IEventDrivenM
         bool isIme = false;
         try
         {
-            var registered = KeyboardLayoutInterop.GetRegisteredLayouts();
-            var match = registered.FirstOrDefault(x =>
+            var registered = _source.ReadRegisteredKeyboardLayouts();
+            var match = registered?.FirstOrDefault(x =>
                 string.Equals(x.KlidHex, layoutId, StringComparison.OrdinalIgnoreCase));
             if (match is not null)
             {

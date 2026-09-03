@@ -214,7 +214,12 @@ public class ImeMonitorTests
     [Fact]
     public void ChineseLayout_ShowsShortName()
     {
-        var source = new FakeSystemSource { LayoutId = "00000804" };
+        // 注册布局注入 Fake（空枚举 → 走 KLID 兜底路径），保证单测不依赖真实机器输入法/注册表状态。
+        var source = new FakeSystemSource
+        {
+            LayoutId = "00000804",
+            RegisteredLayouts = new[] { new KeyboardLayoutItem("00000804", "中文(简体，中国)", "kbdus.dll", IsIme: false, IsActive: false) }
+        };
         var snap = new ImeMonitor(source).GetSnapshot();
 
         Assert.Equal(StatusSeverity.Normal, snap.Severity);

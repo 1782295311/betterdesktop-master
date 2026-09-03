@@ -521,6 +521,14 @@ public sealed class AppearanceService : IAppearanceService, IThemeTokens
         SetAppResource(app, "CardBorderBrush", CardBorder);
         SetAppResource(app, "CardShadowEffect", CardShadow); // 档位 0 时为 null（无阴影）
 
+        // 主色/色调扩散：把 AccentBrush/AccentColor/WindowTintColor/WindowOpacityValue 推到 App 资源，
+        // 供插件 XAML / 代码用 DynamicResource 直接取当前主色与色调（契约见 Accent/WindowTint setter 注释
+        // 与 BackgroundDiffusionTests.Accent_And_Tint_PropagateToAppResources——此前推送缺失为回归）。
+        SetAppResource(app, "AccentBrush", new SolidColorBrush(Accent));
+        SetAppResource(app, "AccentColor", Accent);
+        SetAppResource(app, "WindowTintColor", WindowTint);
+        SetAppResource(app, "WindowOpacityValue", WindowOpacity);
+
         // 窗口根背景画刷：有皮肤时即用户选的皮肤图（ImageBrush），所有外壳窗口通过基类 BackgroundBrush
         // 统一铺上。这里也推一份到 App 资源，供需要 DynamicResource 绑定的场景（如设置面板根 Border）。
         SetAppResource(app, "BackgroundBrush", BackgroundBrush);
