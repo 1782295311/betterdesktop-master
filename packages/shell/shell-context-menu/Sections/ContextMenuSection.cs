@@ -51,6 +51,7 @@ public sealed class ContextMenuSection : ISettingsSection
         });
 
         panel.Children.Add(BuildOpacityCard(settings, tokens));
+        panel.Children.Add(BuildExtendedCard(settings, tokens));
         panel.Children.Add(BuildToolsCard(settings, tokens));
         panel.Children.Add(BuildFeaturesCard(tokens));
         panel.Children.Add(BuildControlCard(settings, tokens));
@@ -103,6 +104,32 @@ public sealed class ContextMenuSection : ISettingsSection
         row.Children.Add(slider);
         row.Children.Add(valueText);
         CardBody(card).Children.Add(row);
+        return card;
+    }
+
+    // ===== Shift 扩展项（计划 H1：Win10 式扩展机制开关） =====
+
+    private UIElement BuildExtendedCard(ISettingsService settings, IThemeTokens tokens)
+    {
+        var card = GroupCard(tokens);
+        CardBody(card).Children.Add(TitleBlock("扩展项", tokens));
+        CardBody(card).Children.Add(Desc(
+            "Win10 式 Shift 扩展机制：永久删除、以其他用户身份运行、复制到文件夹…等低频/危险项，" +
+            "默认仅在按住 Shift 右键时出现（不进二级收纳）。开启下方开关后全部常驻显示。",
+            tokens));
+
+        var check = new CheckBox
+        {
+            Content = "扩展项常驻（不按 Shift 也显示）",
+            FontSize = 13,
+            Foreground = tokens.Foreground,
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(0, 8, 0, 0),
+            IsChecked = settings.Get(MenuService.ExtendedAlwaysKey, false),
+        };
+        check.Checked += (_, _) => settings.Set(MenuService.ExtendedAlwaysKey, true);
+        check.Unchecked += (_, _) => settings.Set(MenuService.ExtendedAlwaysKey, false);
+        CardBody(card).Children.Add(check);
         return card;
     }
 

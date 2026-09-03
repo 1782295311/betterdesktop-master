@@ -10,6 +10,9 @@ namespace BetterDesktop.Shell.ContextMenus.Services;
 /// <summary>快捷方式创建（动态 COM：WScript.Shell）。</summary>
 public static class ShellShortcut
 {
+    /// <summary>WScript.Shell COM 可用（隐藏优先：不可用时贡献项不生成——OQ4 降级路径）。</summary>
+    public static bool IsAvailable => Type.GetTypeFromProgID("WScript.Shell", throwOnError: false) is not null;
+
     /// <summary>
     /// 为目标文件/文件夹创建快捷方式。
     /// linkDirectory 为空 → 与目标同目录；返回生成的 lnk 路径，失败返回 null。

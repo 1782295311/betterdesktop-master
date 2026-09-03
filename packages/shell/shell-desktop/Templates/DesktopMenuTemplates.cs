@@ -9,6 +9,7 @@ using System.Windows;
 using System.Windows.Controls;
 using BetterDesktop.Kernel.Core;
 using BetterDesktop.Shell.ContextMenus.Contracts;
+using BetterDesktop.Shell.ContextMenus.Services;
 using BetterDesktop.Shell.Desktop.Contracts;
 using BetterDesktop.Shell.Desktop.Controls;
 
@@ -24,23 +25,18 @@ internal sealed class DesktopBlankTemplate(DesktopIconsControl owner) : IMenuTem
 
     public void Build(IMenuTemplateBuilder b, MenuRequest request)
     {
-        // ① 常用操作组：新建▶（集合语义子菜单，第一菜单原则允许）
+        // ① 常用操作组：新建▶（集合语义子菜单，第一菜单原则允许）。
+        // 计划 D1：固定顶（文件夹/快捷方式）+ 分隔 + ShellNewCatalog 全量枚举（进程级缓存，
+        // ContextMenuPlugin LoadAsync 已预热，Build 同步段零注册表 IO——§5-2 秒开纪律）。
         b.AddItem(new MenuItemDef
         {
             Id = "desktop.new", Text = "新建", Group = MenuGroup.Common, Kind = MenuItemKind.Submenu,
-            Children =
-            [
-                new MenuItemDef { Id = "desktop.new-folder", Text = "文件夹",
-                    Command = () => owner.InvokeBrowserNewFolder() },
-                new MenuItemDef { Id = "desktop.new-text", Text = "文本文档",
-                    Command = () => owner.InvokeCreateTextFile() },
-                new MenuItemDef { Id = "desktop.new-shortcut", Text = "快捷方式",
-                    Command = () => DesktopMenuActions.OpenNewShortcutWizard(owner.InvokeDesktopPath()) },
-            ],
+            Children = BuildNewChildren(),
         });
         b.AddItem(new MenuItemDef
         {
             Id = "desktop.paste", Text = "粘贴", Group = MenuGroup.Common,
+            GestureText = "Ctrl+V",
             IsEnabled = owner.InvokeCanPaste(),
             Command = () => owner.InvokeBrowserPaste(),
         });
@@ -78,14 +74,45 @@ internal sealed class DesktopBlankTemplate(DesktopIconsControl owner) : IMenuTem
             Id = "desktop.personalize", Text = "个性化", Group = MenuGroup.System,
             Command = () => owner.InvokeOpenSettings("ms-settings:personalization"),
         });
-        if (DesktopMenuActions.HasWindowsTerminal)
+        // 终端回退链（计划 C6/D1）：wt → pwsh → powershell → cmd；无任何终端则隐藏（隐藏优先）
+        var terminal = TerminalLocator.Resolve();
+        if (terminal is not null)
         {
             b.AddItem(new MenuItemDef
             {
                 Id = "desktop.terminal", Text = "在终端中打开", Group = MenuGroup.System,
-                Command = () => DesktopMenuActions.OpenTerminal(owner.InvokeDesktopPath()),
+                Command = () => DesktopMenuActions.OpenTerminalExe(terminal, owner.InvokeDesktopPath()),
             });
         }
+    }
+
+    /// <summary>新建子菜单：固定顶（文件夹/快捷方式）+ 分隔 + ShellNew 全量枚举（含文本文档兜底）。</summary>
+    private List<MenuItemDef> BuildNewChildren()
+    {
+        var children = new List<MenuItemDef>
+        {
+            new() { Id = "desktop.new-folder", Text = "文件夹", Command = () => owner.InvokeBrowserNewFolder() },
+            new()
+            {
+                Id = "desktop.new-shortcut", Text = "快捷方式",
+                Command = () => DesktopMenuActions.OpenNewShortcutWizard(owner.InvokeDesktopPath()),
+            },
+        };
+        foreach (var entry in ShellNewCatalog.Enumerate())
+        {
+            if (entry.DisplayName == "文件夹")
+            {
+                continue; // 固定顶已提供，枚举项去重
+            }
+            var captured = entry;
+            children.Add(new MenuItemDef
+            {
+                Id = $"desktop.new-shellnew-{(string.IsNullOrEmpty(captured.Extension) ? "dir" : captured.Extension)}-{children.Count}",
+                Text = captured.DisplayName,
+                Command = () => ShellNewCatalog.Create(captured, owner.InvokeDesktopPath()),
+            });
+        }
+        return children;
     }
 
     /// <summary>查看子菜单：图标大小三档（Radio，落 desktop.iconSize）+ 自动排列/对齐网格（Toggle）。</summary>
@@ -206,16 +233,19 @@ internal sealed class DesktopIconTemplate(DesktopIconsControl owner) : IMenuTemp
                 Command = () => DesktopMenuActions.OpenContainingFolder(entry.Path),
             });
 
-            // ② 管理组（只读：删除/重命名置灰带说明，非隐藏——定版例外规则）
+            // ② 管理组（只读：删除/重命名置灰带说明，非隐藏——定版例外规则）。
+            // GestureText 红线（计划 §5-3）：所标快捷键全部已在 DesktopIconsControl.OnControlPreviewKeyDown 落地。
             b.AddItem(new MenuItemDef
             {
                 Id = "icon.cut", Text = "剪切", Group = MenuGroup.Manage,
+                GestureText = "Ctrl+X",
                 RequiredCapability = FileCapabilities.Cut, IsEnabled = request.File?.IsReadOnly != true,
                 Command = () => owner.InvokeBrowserCut(entry.Path),
             });
             b.AddItem(new MenuItemDef
             {
                 Id = "icon.copy", Text = "复制", Group = MenuGroup.Manage,
+                GestureText = "Ctrl+C",
                 RequiredCapability = FileCapabilities.Copy,
                 Command = () => owner.InvokeBrowserCopy(entry.Path),
             });
@@ -223,19 +253,23 @@ internal sealed class DesktopIconTemplate(DesktopIconsControl owner) : IMenuTemp
             {
                 Id = "icon.delete", Text = request.File?.IsReadOnly == true ? "删除（只读）" : "删除",
                 Group = MenuGroup.Manage,
+                GestureText = "Del",
                 RequiredCapability = FileCapabilities.Delete, IsEnabled = request.File?.IsReadOnly != true,
                 Command = () => owner.InvokeBrowserDelete(entry.Path),
             });
             b.AddItem(new MenuItemDef
             {
                 Id = "icon.rename", Text = "重命名", Group = MenuGroup.Manage,
+                GestureText = "F2",
                 RequiredCapability = FileCapabilities.Rename, IsEnabled = request.File?.IsReadOnly != true,
                 Command = () => owner.InvokeStartRename(target.Cell, target.Label, entry.Path),
             });
             b.AddItem(new MenuItemDef
             {
                 Id = "icon.copypath", Text = "复制文件地址", Group = MenuGroup.Manage,
-                Command = () => DesktopMenuActions.CopyPath(entry.Path),
+                GestureText = "Ctrl+Shift+C",
+                Command = () => DesktopMenuActions.CopyPaths(
+                    request.SelectedPaths is { Count: > 0 } selected ? selected : [entry.Path]),
             });
 
             // ④ 系统组：发送到▶（枚举 SendTo 文件夹，集合语义子菜单）。
@@ -261,6 +295,7 @@ internal sealed class DesktopIconTemplate(DesktopIconsControl owner) : IMenuTemp
         b.AddItem(new MenuItemDef
         {
             Id = "icon.properties", Text = "属性", Group = MenuGroup.System,
+            GestureText = "Alt+Enter",
             RequiredCapability = FileCapabilities.Properties,
             Command = () => owner.InvokeShowProperties(entry.Path),
         });
@@ -313,7 +348,21 @@ internal static class DesktopMenuActions
         }
     }
 
-    /// <summary>复制完整路径到剪贴板（explorer"复制文件地址"同款）。</summary>
+    /// <summary>复制完整路径到文本剪贴板（OQ8：多选每行一条、不包裹引号；explorer "复制文件地址"同款）。</summary>
+    public static void CopyPaths(IReadOnlyList<string> paths)
+    {
+        try
+        {
+            Clipboard.SetText(string.Join(Environment.NewLine, paths));
+        }
+        catch (Exception ex)
+        {
+            // 剪贴板被占用等场景静默（M10）
+            DiagnosticLog.Trace("shell.desktop", $"复制地址失败: {ex.Message}");
+        }
+    }
+
+    /// <summary>复制完整路径到剪贴板（单值旧入口；保留给旧自绘菜单路径）。</summary>
     public static void CopyPath(string path)
     {
         try
@@ -337,6 +386,19 @@ internal static class DesktopMenuActions
         catch (Exception ex)
         {
             DiagnosticLog.Trace("shell.desktop", $"打开文件位置失败 {path}: {ex.Message}");
+        }
+    }
+
+    /// <summary>在终端中打开（TerminalLocator 回退链产物直接启动；wt/pwsh/powershell/cmd）。</summary>
+    public static void OpenTerminalExe(string exePath, string workingDir)
+    {
+        try
+        {
+            Process.Start(new ProcessStartInfo(exePath) { UseShellExecute = true, WorkingDirectory = workingDir });
+        }
+        catch (Exception ex)
+        {
+            DiagnosticLog.Trace("shell.desktop", $"打开终端失败: {ex.Message}");
         }
     }
 

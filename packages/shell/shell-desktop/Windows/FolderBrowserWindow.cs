@@ -394,7 +394,8 @@ public sealed class FolderBrowserWindow : ShellWindow
                 BetterDesktop.Shell.ContextMenus.Contracts.MenuScope.ShellFile,
                 new FolderItemTarget(path, Directory.Exists(path)),
                 new Point(physical.X / dpi, physical.Y / dpi),
-                File: identity);
+                File: identity,
+                ShiftPressed: (System.Windows.Input.Keyboard.Modifiers & System.Windows.Input.ModifierKeys.Shift) != 0);
             _ = _menus.ShowAsync(request);
         }
         catch (Exception ex)

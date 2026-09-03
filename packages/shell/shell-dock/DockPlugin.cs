@@ -46,6 +46,7 @@ public sealed class DockPlugin : IPlugin
     private IVibrancyService? _vibrancy;
     private IAppearanceService? _appearance;
     private IEventBus? _events;
+    private readonly List<IDisposable> _menuHandles = [];
 
     public DockPlugin()
     {
@@ -91,6 +92,14 @@ public sealed class DockPlugin : IPlugin
             context.Provide<IDockAppsService>(_dockAppsService);
             context.Provide<IDockIconService>(_dockIconService);
             context.Provide<DockVisualSettings>(dockVisual);
+
+            // 「固定到 Dock」贡献者（计划 E1/E2；MENU-SPECS §2 规划落空项补齐）：
+            // 桌面图标 / 文件管理器右键 → 固定/取消固定（AddByPath/RemoveById 现成能力）。
+            if (context.Get<IMenuService>() is { } menus)
+            {
+                _menuHandles.Add(menus.RegisterContributor(new PinToDockContributor(_dockAppsService, MenuScope.DesktopIcon)));
+                _menuHandles.Add(menus.RegisterContributor(new PinToDockContributor(_dockAppsService, MenuScope.ShellFile)));
+            }
 
             _dockWindow = new DockWindow(
                 _vibrancy,
@@ -183,6 +192,13 @@ public sealed class DockPlugin : IPlugin
     public Task UnloadAsync(CancellationToken cancellationToken = default)
     {
         _appSourceService.AppSourceChanged -= OnAppSourceChanged;
+
+        foreach (var handle in _menuHandles)
+        {
+            try { handle.Dispose(); }
+            catch { /* 注销失败不阻断（M10） */ }
+        }
+        _menuHandles.Clear();
 
         _dockWindow?.Close();
         _dockWindow = null;

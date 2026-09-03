@@ -5,6 +5,7 @@ using System.Windows;
 using System.Windows.Controls;
 using BetterDesktop.Kernel.Core;
 using BetterDesktop.Shell.ContextMenus.Contracts;
+using BetterDesktop.Shell.ContextMenus.Services;
 using BetterDesktop.Shell.Desktop.Windows;
 
 namespace BetterDesktop.Shell.Desktop.Templates;
@@ -42,6 +43,17 @@ internal sealed class FolderMenuTemplate(FolderBrowserWindow owner) : IMenuTempl
             {
                 Id = "folder.location", Text = "打开文件位置", Group = MenuGroup.Common,
                 Command = () => DesktopMenuActions.OpenContainingFolder(path),
+            });
+        }
+
+        // 终端回退链（计划 D2）：wt → pwsh → powershell → cmd；仅目录显示
+        var terminal = TerminalLocator.Resolve();
+        if (terminal is not null && target.IsDirectory)
+        {
+            b.AddItem(new MenuItemDef
+            {
+                Id = "folder.terminal", Text = "在终端中打开", Group = MenuGroup.Common,
+                Command = () => DesktopMenuActions.OpenTerminalExe(terminal, path),
             });
         }
 

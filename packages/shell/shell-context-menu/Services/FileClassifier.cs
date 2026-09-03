@@ -74,9 +74,10 @@ public sealed class FileClassifier : IFileClassifier
         if (path.StartsWith("::", StringComparison.Ordinal))
             return new FileIdentity(FileKind.ShellNamespace, FileCapabilities.Open, false, false, path);
 
-        // 2) 回收站内对象（还原/删除/属性）。不给 Open：对象已删除，"打开"必然失败（审查 P2-3）
+        // 2) 回收站内对象（还原/删除/属性/定位）。不给 Open：对象已删除，"打开"必然失败（审查 P2-3）。
+        //    Browse 供 C7「在资源管理器中显示」消费（计划 A4/C7）。
         if (path.Contains(RecycleBinMarker, StringComparison.OrdinalIgnoreCase))
-            return new FileIdentity(FileKind.InRecycleBin, FileCapabilities.Restore | FileCapabilities.Delete | FileCapabilities.Properties, false, false, path);
+            return new FileIdentity(FileKind.InRecycleBin, FileCapabilities.Restore | FileCapabilities.Delete | FileCapabilities.Properties | FileCapabilities.Browse, false, false, path);
 
         // 3) 目录 / 驱动器
         if (Directory.Exists(path))

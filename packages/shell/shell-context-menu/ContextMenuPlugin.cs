@@ -47,6 +47,15 @@ public sealed class ContextMenuPlugin : IPlugin
             DiagnosticLog.Trace("context-menu", "ISettingsService 缺失：用户自定义菜单项未启用");
         }
 
+        // 内置文件操作贡献者（计划 C7：记事本/编辑/打印/预览/ZIP/壁纸/快捷方式/还原/粘贴到/扩展 3 项）。
+        foreach (var scope in new[] { MenuScope.DesktopIcon, MenuScope.ShellFile })
+        {
+            _handles.Add(service.RegisterContributor(new BuiltInOpsContributor(scope)));
+        }
+
+        // 预热 ShellNew 缓存（计划 §5-2 秒开：HKCR 注册表扫描绝不允许发生在 BuildAsync 同步段）。
+        _ = Task.Run(ShellNewCatalog.Enumerate);
+
         // 设置分区（「右键菜单」：功能状态 roadmap + 控制开关）
         context.Get<ISettingsSectionRegistry>()?.Register(new Sections.ContextMenuSection());
 

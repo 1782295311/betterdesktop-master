@@ -18,6 +18,7 @@ using System.Windows.Interop;
 using System.Windows.Media;
 using BetterDesktop.Kernel.Core;
 using BetterDesktop.Shell.ContextMenus.Contracts;
+using BetterDesktop.Shell.ContextMenus.Services;
 using BetterDesktop.Shell.Desktop.Contracts;
 using BetterDesktop.Shell.Desktop.Services;
 using BetterDesktop.Shell.Desktop.Templates;
@@ -119,6 +120,10 @@ public sealed class DesktopIconsControl : ScrollViewer, IDisposable
         {
             ContextMenu = BuildBlankMenu();
         }
+
+        // 计划 G1 全键盘：F2/Del/Shift+Del/Ctrl+C·X·V·A/Ctrl+Shift+C/Alt+Enter 真实响应——
+        // 模板快捷键列写出的键全部在此兑现（反假提示红线，计划 §5-3）。
+        PreviewKeyDown += OnControlPreviewKeyDown;
 
         _browser.ItemsChanged += (_, _) => Dispatcher.BeginInvoke(Rebuild);
 
@@ -1653,7 +1658,8 @@ public sealed class DesktopIconsControl : ScrollViewer, IDisposable
                 target,
                 screenPos,
                 File: identity,
-                SelectedPaths: [.. _browser.SelectedPaths]);
+                SelectedPaths: [.. _browser.SelectedPaths],
+                ShiftPressed: (Keyboard.Modifiers & ModifierKeys.Shift) != 0);
             await _menus.ShowAsync(request);
         }
         catch (Exception ex)
@@ -1700,6 +1706,97 @@ public sealed class DesktopIconsControl : ScrollViewer, IDisposable
             _browser.SetSelection([path]);
         }
         _browser.Delete();
+    }
+
+    /// <summary>永久删除选中集（Shift+Del；不带 FOF_ALLOWUNDO，保留系统确认框）。</summary>
+    internal void InvokePermanentDelete()
+    {
+        var paths = _browser.SelectedPaths;
+        if (paths.Count == 0)
+        {
+            return;
+        }
+        FileClipboard.DeletePermanent(paths);
+    }
+
+    /// <summary>复制路径到文本剪贴板（OQ8：多选每行一条，不包裹引号）。</summary>
+    internal void InvokeCopyPaths()
+    {
+        var paths = _browser.SelectedPaths;
+        if (paths.Count == 0)
+        {
+            return;
+        }
+        try
+        {
+            Clipboard.SetText(string.Join(Environment.NewLine, paths));
+        }
+        catch (Exception ex)
+        {
+            DiagnosticLog.Trace("shell.desktop", $"复制路径失败: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// 控件级键盘快捷键（计划 G1）。菜单弹层打开期间让位给菜单自身的键盘处理；
+    /// 无选中项的组合键不消费（不劫持纯导航键）。
+    /// </summary>
+    private void OnControlPreviewKeyDown(object sender, KeyEventArgs e)
+    {
+        if (_menus is { IsOpen: true })
+        {
+            return; // 弹层打开：按键由 MenuHost 自身处理，避免重复触发
+        }
+
+        var primary = _browser.SelectedPaths.FirstOrDefault();
+        var mod = Keyboard.Modifiers;
+
+        switch (e.Key, mod)
+        {
+            // 组合键按"精确修饰键集合"判定；Ctrl+Shift+C 必须先于 Ctrl+C 判定
+            case (Key.C, _) when mod == (ModifierKeys.Control | ModifierKeys.Shift) && primary is not null:
+                InvokeCopyPaths();
+                e.Handled = true;
+                break;
+            case (Key.C, _) when mod == ModifierKeys.Control && primary is not null:
+                InvokeBrowserCopy(primary);
+                e.Handled = true;
+                break;
+            case (Key.X, _) when mod == ModifierKeys.Control && primary is not null:
+                InvokeBrowserCut(primary);
+                e.Handled = true;
+                break;
+            case (Key.V, _) when mod == ModifierKeys.Control:
+                if (_browser.CanPaste)
+                {
+                    _browser.Paste();
+                    e.Handled = true;
+                }
+                break;
+            case (Key.A, _) when mod == ModifierKeys.Control:
+                _browser.SetSelection(_browser.Items.Select(i => i.Path));
+                e.Handled = true;
+                break;
+            case (Key.F2, _) when mod == ModifierKeys.None && primary is not null:
+                if (_cellMenuTargets.FirstOrDefault(kv => kv.Value.Entry.Path == primary) is { } pair)
+                {
+                    StartRename(pair.Key, pair.Value.Label, primary);
+                    e.Handled = true;
+                }
+                break;
+            case (Key.Delete, _) when mod == ModifierKeys.Shift && primary is not null:
+                InvokePermanentDelete();
+                e.Handled = true;
+                break;
+            case (Key.Delete, _) when mod == ModifierKeys.None && primary is not null:
+                InvokeBrowserDelete(primary);
+                e.Handled = true;
+                break;
+            case (Key.Enter, _) when mod == ModifierKeys.Alt && primary is not null:
+                InvokeShowProperties(primary);
+                e.Handled = true;
+                break;
+        }
     }
 
     internal void InvokeCompactLayout() => CompactLayout();
