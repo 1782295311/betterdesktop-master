@@ -30,6 +30,18 @@ public sealed record MenuItemDef
     /// <summary>默认动作加粗（如"打开"）。</summary>
     public bool IsDefault { get; init; }
 
+    /// <summary>
+    /// 右侧快捷键文本（如 "Ctrl+C" / "F2" / "Shift+Delete"）。
+    /// 红线：只写**真实响应**的键——写了不响应 = 放假提示（计划 ⑤ 保证键盘处理器同步落地）。
+    /// </summary>
+    public string? GestureText { get; init; }
+
+    /// <summary>
+    /// Shift 扩展项（Win10 语义）：仅 Shift+右键（或设置 context-menu.extended.always=常驻）时显示。
+    /// 低频/危险项的正确归宿是 Shift 扩展，**不是**二级收纳。
+    /// </summary>
+    public bool Extended { get; init; }
+
     /// <summary>点击回调（Kind=Command/Toggle/Radio 时应提供；Submenu 忽略）。</summary>
     public Action? Command { get; init; }
 

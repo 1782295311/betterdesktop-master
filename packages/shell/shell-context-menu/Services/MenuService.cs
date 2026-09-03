@@ -3,6 +3,7 @@ using BetterDesktop.Kernel.Core;
 using BetterDesktop.Shell.ContextMenus.Contracts;
 using BetterDesktop.Shell.Core.Surface;
 using BetterDesktop.Shell.Core.Vibrancy;
+using BetterDesktop.Shell.Settings.Contracts;
 
 namespace BetterDesktop.Shell.ContextMenus.Services;
 
@@ -40,17 +41,35 @@ public sealed class MenuService : IMenuService, IDisposable
     private readonly List<Contribution> _contributions = [];
     private readonly IAppearanceService? _appearance;
     private readonly IVibrancyService? _vibrancy;
+    private readonly ISettingsService? _settings;
     private int _seq;
+
+    /// <summary>面板不透明度设置键（0.3~1.0；用户可在「设置 → 右键菜单」调节）。</summary>
+    public const string OpacityKey = "context-menu.opacity";
+
+    /// <summary>Shift 扩展项是否常驻（true = 普通右键也显示 Extended 项）。</summary>
+    public const string ExtendedAlwaysKey = "context-menu.extended.always";
 
     private MenuHostSession? _active;
 
     public event EventHandler<MenuOpeningArgs>? Opening;
 
-    public MenuService(IAppearanceService? appearance = null, IVibrancyService? vibrancy = null)
+    /// <inheritdoc />
+    public bool IsOpen => _active is not null;
+
+    /// <inheritdoc />
+    public event EventHandler? Closed;
+
+    public MenuService(IAppearanceService? appearance = null, IVibrancyService? vibrancy = null, ISettingsService? settings = null)
     {
         _appearance = appearance;
         _vibrancy = vibrancy;
+        _settings = settings;
     }
+
+    /// <summary>读取用户设置的面板不透明度（每次展示时读，设置页改动即时生效）。</summary>
+    private double PanelOpacity =>
+        Math.Clamp(_settings?.Get(OpacityKey, 0.82) ?? 0.82, 0.3, 1.0);
 
     public IDisposable RegisterContributor(IContextMenuContributor contributor)
     {
@@ -98,13 +117,51 @@ public sealed class MenuService : IMenuService, IDisposable
             return Task.FromResult(new MenuResult(MenuResultKind.None));
 
         // 独立弹层窗口承载（ShellWindow 统一基类；不依赖调用方视觉元素）：Target 仅作业务载荷
-        _active = MenuHost.Show(items, request.ScreenPosition, _appearance, _vibrancy);
+        _active = MenuHost.Show(items, request.ScreenPosition, _appearance, _vibrancy, PanelOpacity);
+        NotifyClosedOnCompletion(_active);
         return _active.Completion;
+    }
+
+    /// <inheritdoc />
+    public Task<MenuResult> ShowAsync(IReadOnlyList<MenuItemDef> items, Point screenPos)
+    {
+        var dispatcher = Application.Current?.Dispatcher ?? System.Windows.Threading.Dispatcher.CurrentDispatcher;
+        if (!dispatcher.CheckAccess())
+        {
+            return dispatcher.InvokeAsync(() => ShowAsync(items, screenPos)).Task.Unwrap();
+        }
+
+        DismissInternal();
+
+        // 低层入口：调用方自带菜单项，跳过模板/贡献项管线；渲染与样式仍由 MenuHost 统一驱动。
+        if (items.Count == 0)
+            return Task.FromResult(new MenuResult(MenuResultKind.None));
+
+        DiagnosticLog.Trace("context-menu", $"Show(items={items.Count})");
+        _active = MenuHost.Show(items, screenPos, _appearance, _vibrancy, PanelOpacity);
+        NotifyClosedOnCompletion(_active);
+        return _active.Completion;
+    }
+
+    /// <summary>
+    /// 菜单关闭（会话完成）时在 UI 线程：清空 _active（否则窗口已关而 IsOpen 恒 true，
+    /// 失焦自毁型宿主的豁免逻辑会被永久卡住）+ 广播 Closed（供宿主补收尾）。
+    /// </summary>
+    private void NotifyClosedOnCompletion(MenuHostSession session)
+    {
+        _ = session.Completion.ContinueWith(
+            _ => Application.Current?.Dispatcher.BeginInvoke(() =>
+            {
+                Interlocked.CompareExchange(ref _active, null, session);
+                Closed?.Invoke(this, EventArgs.Empty);
+            }),
+            TaskScheduler.Default);
     }
 
     public void Dismiss()
     {
-        var session = _active;
+        // 与 DismissInternal 同口径：Interlocked 取走会话（裸读字段与置空者竞态，审查 P3-1）
+        var session = Interlocked.Exchange(ref _active, null);
         if (session is null) return;
         session.Window.Dispatcher.BeginInvoke(session.Dismiss);
     }
@@ -175,6 +232,15 @@ public sealed class MenuService : IMenuService, IDisposable
         // 4) 能力过滤（隐藏优先；子菜单全滤则父项隐藏）
         var filtered = FilterCapabilities(flat, request.File);
 
+        // 4.5) Shift 扩展项过滤（Win10 语义）：非 Shift 右键且未设"常驻" → 隐藏 Extended 项。
+        //      低频/危险项的正确归宿是 Shift 扩展，不是 Win11 式二级收纳。
+        var showExtended = request.ShiftPressed
+            || (_settings?.Get(ExtendedAlwaysKey, false) ?? false);
+        if (!showExtended)
+        {
+            filtered = StripExtended(filtered);
+        }
+
         // 5) 展示前注入点（订阅者异常隔离）
         IList<MenuItemDef> final = filtered;
         try
@@ -193,7 +259,8 @@ public sealed class MenuService : IMenuService, IDisposable
 
     private static List<MenuItemDef> FilterCapabilities(IReadOnlyList<MenuItemDef> items, FileIdentity? identity)
     {
-        if (identity is null) return [.. items];
+        // 无身份也走 TrimEdges：与有身份分支对称，防御未来悬空分隔线（审查 P3-5）
+        if (identity is null) return TrimEdges([.. items]);
         var result = new List<MenuItemDef>(items.Count);
         foreach (var item in items)
         {
@@ -216,6 +283,33 @@ public sealed class MenuService : IMenuService, IDisposable
             {
                 result.Add(item);
             }
+        }
+        return TrimEdges(result);
+    }
+
+    /// <summary>移除 Shift 扩展项（递归；子菜单被清空则父项一并移除）。</summary>
+    private static List<MenuItemDef> StripExtended(List<MenuItemDef> items)
+    {
+        var result = new List<MenuItemDef>(items.Count);
+        foreach (var item in items)
+        {
+            if (item.Extended)
+            {
+                continue;
+            }
+
+            if (item.Kind == MenuItemKind.Submenu && item.Children is { Count: > 0 })
+            {
+                var children = StripExtended(item.Children.ToList());
+                if (children.Count == 0)
+                {
+                    continue;
+                }
+                result.Add(item with { Children = children });
+                continue;
+            }
+
+            result.Add(item);
         }
         return TrimEdges(result);
     }

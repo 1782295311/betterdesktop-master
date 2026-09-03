@@ -1,5 +1,6 @@
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using BetterDesktop.Kernel.Core;
 using BetterDesktop.Shell.ContextMenus.Contracts;
@@ -38,9 +39,9 @@ public sealed class MenuHostSession
 /// </summary>
 public static class MenuHost
 {
-    /// <summary>展示菜单（UI 线程调用；立即打开并返回会话）。screenPos 为屏幕 DIP 坐标。</summary>
+    /// <summary>展示菜单（UI 线程调用；立即打开并返回会话）。screenPos 为屏幕 DIP 坐标；panelOpacity 为面板底色不透明度（用户设置）。</summary>
     public static MenuHostSession Show(IReadOnlyList<MenuItemDef> items, Point screenPos,
-        IAppearanceService? appearance, IVibrancyService? vibrancy)
+        IAppearanceService? appearance, IVibrancyService? vibrancy, double panelOpacity = 0.82)
     {
         string? executedId = null;
         var tcs = new TaskCompletionSource<MenuResult>(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -51,7 +52,7 @@ public static class MenuHost
             {
                 executedId = id;
                 window.Close();
-            }),
+            }, panelOpacity),
             screenPos, appearance, vibrancy);
 
         window.Closed += (_, _) =>
@@ -64,13 +65,20 @@ public static class MenuHost
     }
 
     /// <summary>构建菜单面板（主题令牌 Border + MenuItem 树；MenuItem 在普通视觉树中子菜单照常弹出）。</summary>
-    private static Border BuildPanel(IReadOnlyList<MenuItemDef> items, Action<string> execute)
+    private static Border BuildPanel(IReadOnlyList<MenuItemDef> items, Action<string> execute, double panelOpacity)
     {
         var stack = new StackPanel();
         Fill(stack.Children, items, execute);
+
+        // 面板底色半透明：透出窗口 vibrancy 毛玻璃（对齐 dock/设置窗口观感——"统一窗口基类该有的样子"）。
+        // 不透明度由用户在设置页调节（context-menu.opacity）。
+        // 必须克隆后再改 Opacity：FindToken 返回的是 App 级共享画刷，直接改会污染全局令牌。
+        var bg = FindToken("PopupBackground", System.Windows.Media.Brushes.White).Clone();
+        bg.Opacity = Math.Clamp(panelOpacity, 0.3, 1.0);
+
         var border = new Border
         {
-            Background = FindToken("PopupBackground", System.Windows.Media.Brushes.White),
+            Background = bg,
             BorderBrush = FindToken("PopupBorder", System.Windows.Media.Brushes.Gray),
             BorderThickness = new Thickness(1),
             CornerRadius = new CornerRadius(8),
@@ -91,10 +99,164 @@ public static class MenuHost
     private static System.Windows.Media.Brush FindToken(string key, System.Windows.Media.Brush fallback) =>
         System.Windows.Application.Current?.TryFindResource(key) is System.Windows.Media.Brush brush ? brush : fallback;
 
+    /// <summary>
+    /// 挂接菜单项图标（三协议）：
+    ///   sys:&lt;hex&gt;  → Segoe 字形矢量图标（零 IO；码位不在白名单则留空）
+    ///   file:&lt;path&gt; → 文件关联图标（MenuIconCache / SHGetFileInfo）
+    ///   tool:&lt;exe&gt;  → 程序图标（同上）
+    /// 【防卡顿红线】未命中缓存时**后台提取、菜单先出后补**，绝不在 UI 线程做磁盘 IO
+    /// （Win11 式"右键后转圈"的根因就是同步图标提取）。
+    /// </summary>
+    private static void AttachIcon(MenuItem item, MenuItemDef def)
+    {
+        if (string.IsNullOrEmpty(def.IconKey))
+        {
+            return;
+        }
+
+        var key = def.IconKey!;
+        try
+        {
+            if (key.StartsWith("sys:", StringComparison.Ordinal))
+            {
+                var glyph = SystemGlyphs.Create(key["sys:".Length..]);
+                if (glyph is not null)
+                {
+                    item.Icon = glyph;
+                }
+                return;
+            }
+
+            var colon = key.IndexOf(':');
+            if (colon <= 0)
+            {
+                return;
+            }
+
+            var prefix = key[..colon];
+            if (prefix is not ("file" or "tool"))
+            {
+                return;
+            }
+
+            var path = key[(colon + 1)..];
+            if (MenuIconCache.TryGetCached(path, out var cached))
+            {
+                if (cached is not null)
+                {
+                    item.Icon = MakeIconImage(cached);
+                }
+                return; // 缓存命中（含"提取失败"的负缓存）→ 不再排队
+            }
+
+            // 未命中：后台提取后回填（菜单此刻已可交互）
+            _ = System.Threading.Tasks.Task.Run(() =>
+            {
+                var source = MenuIconCache.Get(path);
+                if (source is null)
+                {
+                    return;
+                }
+
+                _ = item.Dispatcher.BeginInvoke(
+                    System.Windows.Threading.DispatcherPriority.Background,
+                    () =>
+                    {
+                        if (item.IsLoaded)
+                        {
+                            item.Icon = MakeIconImage(source);
+                        }
+                    });
+            });
+        }
+        catch (Exception ex)
+        {
+            DiagnosticLog.Trace("context-menu", $"图标处理失败 {def.IconKey}: {ex.Message}");
+        }
+    }
+
+    private static System.Windows.Controls.Image MakeIconImage(System.Windows.Media.ImageSource source)
+        => new()
+        {
+            Source = source,
+            Width = 16,
+            Height = 16,
+            SnapsToDevicePixels = true,
+        };
+
+    /// <summary>
+    /// 子菜单悬停交互（explorer 同款，用户 2026-09-02 定版）：
+    /// 悬停宿主项 → 自动展开（并收回同级其它子菜单）；移出宿主与弹层 → 延迟 350ms 收回
+    /// （给鼠标从宿主移入弹层留缓冲）。不依赖 MenuItem 角色内建逻辑——我们的项挂在
+    /// StackPanel 而非 Menu/ContextMenu 下，角色内建的悬停展开不可靠（实测点不开）。
+    /// </summary>
+    private static void WireSubmenuHover(MenuItem sub)
+    {
+        // 立即套用模板以取得 PART_Popup（Style 在构造期已赋值，ApplyTemplate 可同步构建）
+        sub.ApplyTemplate();
+        var popup = sub.Template?.FindName("PART_Popup", sub) as Popup;
+
+        sub.MouseEnter += (_, _) =>
+        {
+            // 同级互斥：收回兄弟子菜单（兄弟 = 同一宿主面板里的其它 MenuItem）
+            if (sub.Parent is System.Windows.Controls.Panel panel)
+            {
+                foreach (var child in panel.Children)
+                {
+                    if (child is MenuItem { IsSubmenuOpen: true } other && !ReferenceEquals(other, sub))
+                    {
+                        other.IsSubmenuOpen = false;
+                    }
+                }
+            }
+            sub.IsSubmenuOpen = true;
+        };
+
+        System.Windows.Threading.DispatcherTimer? closeTimer = null;
+        void ScheduleClose()
+        {
+            closeTimer?.Stop();
+            closeTimer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromMilliseconds(350) };
+            closeTimer.Tick += (_, _) =>
+            {
+                closeTimer?.Stop();
+                // 鼠标已回到宿主或弹层内则不收（IsMouseOver 跨 Popup 视觉树成立）
+                if (!sub.IsMouseOver && !(popup?.IsMouseOver ?? false))
+                {
+                    sub.IsSubmenuOpen = false;
+                }
+            };
+            closeTimer.Start();
+        }
+
+        sub.MouseLeave += (_, _) => ScheduleClose();
+        if (popup is not null)
+        {
+            popup.MouseEnter += (_, _) => closeTimer?.Stop(); // 移入弹层：取消收回
+            popup.MouseLeave += (_, _) => ScheduleClose();
+        }
+
+        // 点击兜底：仅当角色未被识别为 header（StackPanel 宿主下可能发生）时手动开合——
+        // header 角色下 MenuItem 内建已开合一次，再 toggle 会互相抵消（"点不开"的机制之一）。
+        sub.Click += (_, _) =>
+        {
+            if (sub.Role is MenuItemRole.TopLevelItem or MenuItemRole.SubmenuItem)
+            {
+                sub.IsSubmenuOpen = !sub.IsSubmenuOpen;
+            }
+        };
+    }
+
     private static void Fill(System.Collections.IList target, IReadOnlyList<MenuItemDef> items, Action<string> execute)
     {
-        foreach (var def in items)
+        // 同层唯一助记（Alt 访问键）：Separator 与无拉丁字符的中文项不分配。
+        var accessKeys = MenuAccessKeys.Assign(
+            items.Select(i => i.Kind == MenuItemKind.Separator ? string.Empty : i.Text).ToList());
+
+        for (var index = 0; index < items.Count; index++)
         {
+            var def = items[index];
+            var header = (object?)accessKeys[index] ?? def.Text;
             switch (def.Kind)
             {
                 case MenuItemKind.Separator:
@@ -108,11 +270,16 @@ public static class MenuHost
                 {
                     var sub = new MenuItem
                     {
-                        Header = def.Text,
+                        Header = header,
                         IsEnabled = def.IsEnabled,
                         FontWeight = def.IsDefault ? FontWeights.SemiBold : FontWeights.Normal,
-                        Style = MenuStyling.CreateItemStyle(),
+                        InputGestureText = def.GestureText,
+                        // 子菜单宿主必须用自建模板（PART_Popup 令牌背板）——默认模板 Popup 是
+                        // 系统 SystemColors 背板（深色系统=黑块，"点击新建没反应"的实况）。
+                        Style = MenuStyling.CreateSubmenuStyle(),
                     };
+                    AttachIcon(sub, def);
+                    WireSubmenuHover(sub);
                     if (def.Children is { Count: > 0 })
                         Fill(sub.Items, def.Children, execute);
                     else
@@ -125,24 +292,34 @@ public static class MenuHost
                 {
                     var item = new MenuItem
                     {
-                        Header = def.Text,
+                        Header = header,
                         IsEnabled = def.IsEnabled,
                         IsChecked = def.IsChecked,
                         FontWeight = def.IsDefault ? FontWeights.SemiBold : FontWeights.Normal,
+                        InputGestureText = def.GestureText,
                         Style = MenuStyling.CreateItemStyle(),
                     };
+                    AttachIcon(item, def);
                     item.Click += (_, _) =>
                     {
-                        try
-                        {
-                            def.Command?.Invoke();
-                        }
-                        catch (Exception ex)
-                        {
-                            // 单项命令失败仅记录，不影响其余项（README §11）
-                            DiagnosticLog.Trace("context-menu", $"[{def.Id}] 执行失败: {ex.Message}");
-                        }
+                        // 先关窗再执行（审查 P2-2）：旧顺序"命令同步执行后才关窗"有两个问题——
+                        // ① 命令里有同步阻塞/模态操作时菜单滞留屏幕；② 内联重命名靠"命令内 Focus 抢激活
+                        //    → 菜单失焦 → Deactivated 关窗"成立，属巧合契约。改为关窗后经 Dispatcher
+                        //    （Input 优先级）执行命令：关窗完成、宿主窗口恢复激活后命令才跑，焦点依赖按
+                        //    常规时序成立。
                         execute(def.Id);
+                        item.Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Input, () =>
+                        {
+                            try
+                            {
+                                def.Command?.Invoke();
+                            }
+                            catch (Exception ex)
+                            {
+                                // 单项命令失败仅记录，不影响其余项（README §11）
+                                DiagnosticLog.Trace("context-menu", $"[{def.Id}] 执行失败: {ex.Message}");
+                            }
+                        });
                     };
                     target.Add(item);
                     break;

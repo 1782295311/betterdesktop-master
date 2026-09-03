@@ -15,7 +15,9 @@ public sealed record MenuRequest(
     Point ScreenPosition,
     Rect? AnchorRect = null,
     FileIdentity? File = null,
-    IReadOnlyList<string>? SelectedPaths = null);
+    IReadOnlyList<string>? SelectedPaths = null,
+    /// <summary>是否按住了 Shift（Shift 扩展项显示的判据；由调用方在右键事件中传入）。</summary>
+    bool ShiftPressed = false);
 
 /// <summary>菜单关闭结果。</summary>
 public enum MenuResultKind

@@ -24,15 +24,16 @@ public sealed class ContextMenuPlugin : IPlugin
 
     public Task LoadAsync(IContext context, CancellationToken cancellationToken = default)
     {
+        var settings = context.Get<ISettingsService>();
         var service = new MenuService(
             context.Get<IAppearanceService>(),
-            context.Get<IVibrancyService>());
+            context.Get<IVibrancyService>(),
+            settings);
         _service = service;
         context.Provide<IMenuService>(service);
         context.Provide<IFileClassifier>(new FileClassifier());
 
-        // 用户自定义项（零代码 DIY 层）：每个 Scope 注册一个贡献者，Build 时读设置热更新。
-        var settings = context.Get<ISettingsService>();
+        // 用户自定义项/快捷工具（零代码 DIY 层）：每个 Scope 注册一个贡献者，Build 时读设置热更新。
         if (settings is not null)
         {
             foreach (MenuScope scope in Enum.GetValues<MenuScope>())
@@ -45,6 +46,9 @@ public sealed class ContextMenuPlugin : IPlugin
         {
             DiagnosticLog.Trace("context-menu", "ISettingsService 缺失：用户自定义菜单项未启用");
         }
+
+        // 设置分区（「右键菜单」：功能状态 roadmap + 控制开关）
+        context.Get<ISettingsSectionRegistry>()?.Register(new Sections.ContextMenuSection());
 
         return Task.CompletedTask;
     }

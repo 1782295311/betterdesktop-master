@@ -110,14 +110,15 @@ record MenuResult(MenuResultKind Kind, string? ExecutedCommandId);
 **三档呈现**（文件/文件夹场景，执行均走 `IContextMenu.InvokeCommand`，仅呈现不同）：
 - **native 档**：直接调用原生 `IContextMenu` 原样显示（注册表第三方扩展项完整），本插件只负责宿主窗口与消息泵转发；用于兼容/回退。
 - **unified + full（完整模式）**：`IShellFolder.GetUIObjectOf` → 枚举 verb（`GetCommandString`）→ 转 `MenuItemDef` 重绘；**第三方工具项直接平铺**在主菜单，功能全覆盖。
-- **unified + grouped（收纳模式，默认）**：verb 枚举重绘后，第三方工具项收进统一 **"第三方工具 ▶" 二级菜单**（按类别分组：压缩/编辑器/图片/剪贴板/搜索/终端/其他，分类关键词可配 `filters.ini`）；主菜单精简美观。
+- ~~**unified + grouped（收纳模式）**~~：**已于 2026-09-03 删除**（Win10 方针：第三方项一律平铺，低频项走 Shift 扩展，不做二级收纳、不设"展开/收起"切换）。配置键 `shell.displayMode` 与相关代码同步移除，**勿复活**。
 - **文件属性精准识别**：`FileClassifier` 用 `IShellFolder.GetAttributesOf`（SFGAO）+ 扩展名 + 回收站/快捷方式目标解析，输出 `FileKind/FileCapabilities`；系统与第三方 verb 均按能力过滤（exe 不出现"编辑"，Archive 才出解压 verb）。
 - 消息泵：宿主窗口在 `WndProc` 中将 `WM_INITMENUPOPUP` / `WM_DRAWITEM` / `WM_MEASUREITEM` / `WM_MENUCHAR` 转发给 `IContextMenu2/3`，这是"不能随便设计"的关键点。
 - 完整菜单结构、分类策略、两模式切换见 [`MENU-SPECS.md §8`](MENU-SPECS.md)。
 
 ## 8. 配置
 
-- `context-menu.ini`：`shell.integration = native | unified`（默认 `unified`）+ `shell.displayMode = full | grouped`（默认 `grouped`）。
+- `context-menu.ini`：`shell.integration = native | unified`（默认 `unified`）。
+  （~~`shell.displayMode = full | grouped`~~ 已于 2026-09-03 删除，见 §模式 说明。）
 - `filters.ini`：第三方 verb 分类关键词表（可覆盖默认类别规则）。
 - 键盘导航、弹出延迟、动画开关；unified 模式外观由主题令牌接管。
 

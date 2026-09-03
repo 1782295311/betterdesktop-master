@@ -163,13 +163,13 @@
 | 档 | 名称 | 说明 | 适用 |
 |----|------|------|------|
 | 1 | **native** | 完整调用系统 `IContextMenu`，原样显示（含全部第三方扩展项），本组件只做宿主与消息泵 | 兼容/备用（不美观、无二级菜单能力） |
-| 2 | **unified + full（完整模式）** | verb 枚举后**重绘**，第三方工具项直接平铺在主菜单 | 功能全覆盖、一次点到（菜单可能长） |
-| 3 | **unified + grouped（收纳模式）** | verb 枚举后**重绘**，第三方工具项收进统一的 **"第三方工具 ▶" 二级菜单**（按类别分组） | **默认**：美观精简、主菜单不臃肿 |
+| 2 | **unified（完整模式，唯一呈现档）** | verb 枚举后**重绘**，第三方工具项**直接平铺**在主菜单 | 功能全覆盖、一次点到 |
 
-- 三档执行均走 `IContextMenu.InvokeCommand`（verb 保真），仅**呈现方式**不同。
-- 设置：`shell.integration = native | unified` + `shell.displayMode = full | grouped`（默认 `unified + grouped`）。
+- 两档执行均走 `IContextMenu.InvokeCommand`（verb 保真），仅**呈现方式**不同。
+- 设置：`shell.integration = native | unified`（默认 `unified`）。
+  ~~`shell.displayMode = full | grouped`~~ —— **已于 2026-09-03 按 Win10 方针删除：第三方项一律平铺，不做二级收纳、不设"展开/收起"切换。请勿复活（旧 §8.2 grouped 设计同删）。**
 
-### 8.1 unified 模式主菜单结构（full 与 grouped 共用基础）
+### 8.1 unified 模式主菜单结构
 
 ```
 ┌ 常用操作组（系统 verbs，始终在主菜单）────────────────┐
@@ -177,39 +177,24 @@
 │ 剪切 / 复制 / 粘贴 / 删除 / 重命名 / 属性             │
 │ 固定到 Dock / 发送到 ▶                               │
 ├ 第三方区 ─────────────────────────────────────────────┤
-│ full 模式：第三方项直接平铺（保持注册顺序或按名排序）  │
-│ grouped 模式：只显示一个 "第三方工具 ▶" 入口          │
-├ 底部固定项 ───────────────────────────────────────────┤
-│ 展开完整菜单 / 收起到"第三方工具"  (两模式互相切换)    │
+│ 第三方项直接平铺（按分类排序聚拢：压缩→编辑器→办公…）  │
+│ 同类相邻、类间一条分隔线；低频项走 Shift 扩展（§8.3）  │
 └────────────────────────────────────────────────────────┘
 ```
+- 例外保留的**集合语义子菜单**（Win10 原生就有，非收纳）：`新建 ▶ / 发送到 ▶ / 查看 ▶ / 排序方式 ▶`。
 
-### 8.2 第三方工具二级菜单（grouped 模式核心）
+### 8.2 【已删除】第三方工具二级菜单（grouped 模式）
 
-```
-第三方工具 ▶
-├─ 压缩工具 ── WinRAR / 7-Zip / Bandizip …
-├─ 编辑器 ──── VS Code / Notepad++ / Sublime …
-├─ 图片 ────── Photoshop / 画图 / 图片查看器 …
-├─ 剪贴板 ──── Ditto / PowerToys 粘贴 …
-├─ 搜索 ────── Everything / Fluent Search …
-├─ 终端 ────── Windows Terminal / Git Bash / CMD …
-└─ 其他 ────── (未命中的 verb)
-```
+> **本节内容已于 2026-09-03 删除**（原设计：第三方项收进"第三方工具 ▶"二级菜单并按类别分组、底部常驻"展开完整菜单/收起"切换）。
+> 删除依据：用户拍板"**以 Win10 为正、以 Win11 为戒**"——单层完整、第三方平铺、低频项用 Shift 扩展而非二级收纳。
+> **勿复活**：相关代码（`UserMenuContributor` 的"快捷工具 ▸ 分类 ▸"）与配置键（`shell.displayMode`）已一并移除；如需历史内容请查 Git 记录，不要重新引入该交互。
 
-**verb 分类策略**（可配置 `filters.ini` 关键词表）：
-- 系统 verb 白名单（始终主菜单）：`open / edit / print / cut / copy / paste / delete / rename / properties / sendto / openwith`。
-- 第三方 verb → 类别：按 `GetCommandString` 返回名/路径关键词匹配（`zip|rar|7z|compress|extract`→压缩；`code|notepad|edit`→编辑器；`photo|picture|paint`→图片；`search`→搜索；`terminal|powershell|cmd|git`→终端）；未命中→"其他"。
-- 每类 ≤8 项，超出该类内滚动；二级菜单总高上限（如 480px）滚动。
+（原分类关键词表 `filters.ini` 方案随之废弃——分类仅用于**排序聚拢**，不再生成二级菜单。）
 
-**美观细节**：
-- 第三方项带图标（`IExtractIcon`/`GetIconLocation`，缓存）。
-- 组标题小字灰色；分隔符分区。
-- 底部固定项常驻："展开完整菜单" ↔ "收起到第三方工具"（临时切换，不持久化；持久化走设置页）。
+### 8.3 默认值与低频项处置
 
-### 8.3 默认值建议（2026-09-02 修订：第一菜单原则）
-
-- 新装默认 `unified + full`（**第一菜单原则：第三方工具项第一层平铺，不收纳**）；`grouped` 收纳模式降级为可选配置；`native` 仅在 unified 出现兼容问题时一键回退。
+- 默认 `unified`（**第一菜单原则：第三方工具项第一层平铺，不收纳**）；`native` 仅在 unified 出现兼容问题时一键回退。
+- 低频/危险项用 **Shift 扩展**（`MenuItemDef.Extended`，按住 Shift 右键显示；`context-menu.extended.always=true` 可常驻），首批：永久删除、以其他用户身份运行、复制到文件夹…
 
 ### 8.4 文件属性精准识别与菜单过滤（隐藏无法操作的项）
 
