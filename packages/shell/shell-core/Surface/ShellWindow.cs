@@ -1,14 +1,17 @@
 using System;
 using System.Collections.Generic;
+using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Data;
 using System.Windows.Documents;
-using System.Runtime.InteropServices;
 using System.Windows.Interop;
 using System.Windows.Media;
 using System.Windows.Threading;
+using BetterDesktop.Kernel.Contracts;
+using BetterDesktop.Shell.Core;
+using BetterDesktop.Shell.Core.Native;
 using BetterDesktop.Shell.Core.Vibrancy;
 using Point = System.Windows.Point;
 
@@ -21,6 +24,10 @@ namespace BetterDesktop.Shell.Core.Surface;
 /// </summary>
 public abstract class ShellWindow : Window
 {
+    /// <summary>内核事件总线（派生类注入；null 时外观变更不自动刷新，降级模式）。</summary>
+    protected IEventBus? Events { get; set; }
+    private IDisposable? _appearanceSub;
+
     /// <summary>
     /// 统一基类构造函数：注入双服务，并在句柄创建前应用窗口基础样式（由虚属性提供配置值）。
     /// 子类通过重写对应虚属性定制行为，无需自己赋值、无需关心生效时机。
@@ -98,19 +105,6 @@ public abstract class ShellWindow : Window
     /// </summary>
     protected virtual double ResizeBorderThickness => 6;
 
-    [StructLayout(LayoutKind.Sequential)]
-    private struct RECT
-    {
-        public int Left;
-        public int Top;
-        public int Right;
-        public int Bottom;
-    }
-
-    [DllImport("user32.dll")]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect);
-
     /// <summary>
     /// HwndSource 消息钩子：仅拦截 WM_NCHITTEST（0x0084）——当窗口可 resize 且未使用 WindowChrome 时，
     /// 自行判定鼠标落在哪条边/角，返回对应 HT* 命中常量，让系统像有 WindowChrome 一样完成 resize，
@@ -155,8 +149,8 @@ public abstract class ShellWindow : Window
         // 直接取 HWND 真实物理矩形（与 lParam 同一屏幕坐标空间），不依赖 WPF 逻辑坐标 Left/Top/ActualWidth
         // 与 DPI 换算——后者在窗口移动/跨监视器 DPI 变化后可能滞后错位，导致边缘命中带整体偏移、拖拽失效。
         var hwnd = new WindowInteropHelper(this).Handle;
-        var rect = new RECT();
-        var hasRect = hwnd != IntPtr.Zero && GetWindowRect(hwnd, out rect);
+        var rect = new NativeMethods.RECT();
+        var hasRect = hwnd != IntPtr.Zero && NativeMethods.GetWindowRect(hwnd, out rect);
         var left = hasRect ? rect.Left : (int)Math.Round(Left * dpi.DpiScaleX);
         var top = hasRect ? rect.Top : (int)Math.Round(Top * dpi.DpiScaleY);
         var right = hasRect ? rect.Right : left + (int)Math.Round(ActualWidth * dpi.DpiScaleX);
@@ -240,10 +234,7 @@ public abstract class ShellWindow : Window
     /// </summary>
     protected virtual void DetachWindow()
     {
-        if (AppearanceService is not null)
-        {
-            AppearanceService.Changed -= OnAppearanceChanged;
-        }
+        _appearanceSub?.Dispose();
     }
 
     /// <summary>子类可重写：窗口材质应用策略。</summary>
@@ -313,7 +304,16 @@ public abstract class ShellWindow : Window
         ApplyWindowMaterial();
         if (AppearanceService is not null)
         {
-            AppearanceService.Changed += OnAppearanceChanged;
+            if (Events is not null)
+            {
+                _appearanceSub = Events.On<AppearanceChangedArgs>(
+                    ShellEvents.AppearanceChanged,
+                    (e, _) =>
+                    {
+                        OnAppearanceChanged(e);
+                        return Task.CompletedTask;
+                    });
+            }
             ApplyAppearance(AppearanceChangedArgs.All);
         }
 
@@ -331,7 +331,7 @@ public abstract class ShellWindow : Window
 #endif
     }
 
-    private void OnAppearanceChanged(object? sender, AppearanceChangedArgs e)
+    private void OnAppearanceChanged(AppearanceChangedArgs e)
     {
         ApplyAppearance(e);
         ApplySurfaceChrome(e);
@@ -613,10 +613,53 @@ public abstract class ShellWindow : Window
         }
 
         // 2) DWM 材质：仅在 MaterialChanged 时重新应用毛玻璃（避免无关事件反复调 DWM）。
-        if (e.MaterialChanged && VibrancyService is not null)
+        //    隐藏态（_materialSuspended）下**不重新应用**：否则主题一变就把已淡出的窗口毛玻璃
+        //    又点亮，原地冒出一块背景（SetMaterialSuspended(false) 时统一按最新材质恢复）。
+        if (e.MaterialChanged && VibrancyService is not null && !_materialSuspended)
         {
             var hwnd = new WindowInteropHelper(this).Handle;
             VibrancyService.Apply(hwnd, AppearanceService.Material, roundCorners: true);
+        }
+    }
+
+    // === 隐藏态材质挂起（2026-09-06）===
+    private bool _materialSuspended;
+
+    /// <summary>材质是否处于挂起态（隐藏态）：主题变更等路径据此跳过材质重建。</summary>
+    protected bool IsMaterialSuspended => _materialSuspended;
+
+    /// <summary>
+    /// 挂起 / 恢复窗口材质（DWM 毛玻璃 · 亚克力 · 背景模糊）。
+    /// 【为什么需要】菜单栏 / dock 的自动隐藏只做 Opacity 淡出——窗口仍然存在于合成器里，
+    /// 而 DWM 材质**不随 WPF Opacity 变化**（它由 DWM 按窗口绘制），于是隐藏后在原地
+    /// 残留一块半透明玻璃条（用户可见"背景残留"）。隐藏时挂起（VibrancyService.Disable 清掉
+    /// DWM 背景），显现时按**当前主题材质**重新应用，背景自动恢复。
+    /// </summary>
+    /// <param name="suspended">true=隐藏态（清掉背景）；false=显现（恢复背景）。</param>
+    protected void SetMaterialSuspended(bool suspended)
+    {
+        if (suspended == _materialSuspended)
+        {
+            return;
+        }
+
+        _materialSuspended = suspended;
+
+        var hwnd = new WindowInteropHelper(this).Handle;
+        if (hwnd == IntPtr.Zero)
+        {
+            // 句柄尚未创建：状态已记录，窗口加载时 ApplyWindowMaterial 由子类/基类按最新状态驱动。
+            return;
+        }
+
+        if (suspended)
+        {
+            VibrancyService?.Disable(hwnd);
+        }
+        else
+        {
+            // 走虚方法：dock 等重写了材质策略的窗口恢复的是"自己那套"材质，不会退化成基类默认。
+            ApplyWindowMaterial();
         }
     }
 

@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using System.Runtime.InteropServices;
+using BetterDesktop.Shell.Core.Native;
 using BetterDesktop.Shell.Taskbar.Contracts;
 
 namespace BetterDesktop.Shell.Taskbar.Native;
@@ -51,7 +52,7 @@ public sealed class ExplorerTapBridge : IDisposable
             _module = LoadLibrary(dllPath);
             if (_module == IntPtr.Zero) return;
 
-            var proc = GetProcAddress(_module, "InjectExplorerTAP");
+            var proc = NativeMethods.GetProcAddress(_module, "InjectExplorerTAP");
             if (proc == IntPtr.Zero) return;
 
             _inject = Marshal.GetDelegateForFunctionPointer<InjectExplorerTapDelegate>(proc);
@@ -112,6 +113,18 @@ public sealed class ExplorerTapBridge : IDisposable
         catch (Exception) { return false; }
     }
 
+    /// <summary>
+    /// 进程死亡还原契约（F1/V1，7436 红线 2）：告诉 explorer「本进程死亡时还原所有任务栏为默认」。
+    /// TTB taskbarattributeworker.cpp:1430 启动必调——声明了就必须调用，否则进程崩溃/强杀后
+    /// 任务栏外观永久残留。传 Environment.ProcessId（对齐 TTB GetCurrentProcessId()）。
+    /// </summary>
+    public bool RestoreAllWhenProcessDies()
+    {
+        if (_service is null) return false;
+        try { return _service.RestoreAllTaskbarsToDefaultWhenProcessDies((uint)Environment.ProcessId) >= 0; }
+        catch (Exception) { return false; }
+    }
+
     private static string? ResolveDllPath(string? dllDirectory)
     {
         if (dllDirectory is not null)
@@ -138,7 +151,13 @@ public sealed class ExplorerTapBridge : IDisposable
     {
         if (_disposed) return;
         _disposed = true;
-        _service = null;
+        // V2（审计 2026-09-04）：COM RCW 必须显式释放——原实现只置 null，RCW 随 GC 延迟终结，
+        // explorer 常驻进程侧的 COM 引用全程泄漏（对照 TsfInputProcessor 双释放纪律）。
+        if (_service is not null)
+        {
+            try { _ = Marshal.FinalReleaseComObject(_service); } catch { /* 已释放 */ }
+            _service = null;
+        }
         if (_module != IntPtr.Zero)
         {
             try { FreeLibrary(_module); } catch { /* ignore */ }
@@ -146,7 +165,8 @@ public sealed class ExplorerTapBridge : IDisposable
         GC.SuppressFinalize(this);
     }
 
-    ~ExplorerTapBridge() => Dispose();
+    // 注意：无终结器——终结器线程不碰 COM（审计建议"终结器不碰 COM"；FreeLibrary/ReleaseComObject
+    // 在终结器线程执行有竞态风险，资源确定性释放由 Dispose 契约承担）。
 
     [UnmanagedFunctionPointer(CallingConvention.StdCall)]
     private delegate int InjectExplorerTapDelegate(
@@ -169,9 +189,6 @@ public sealed class ExplorerTapBridge : IDisposable
 
     [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
     private static extern IntPtr LoadLibrary(string lpFileName);
-
-    [DllImport("kernel32.dll", SetLastError = true)]
-    private static extern IntPtr GetProcAddress(IntPtr hModule, string lpProcName);
 
     [DllImport("kernel32.dll", SetLastError = true)]
     private static extern bool FreeLibrary(IntPtr hModule);

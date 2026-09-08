@@ -16,27 +16,33 @@ using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Media;
+using BetterDesktop.Kernel.Contracts;
 using BetterDesktop.Kernel.Core;
 using BetterDesktop.Shell.ContextMenus.Contracts;
 using BetterDesktop.Shell.ContextMenus.Services;
+using BetterDesktop.Shell.Core;
+using BetterDesktop.Shell.Core.Native;
+using BetterDesktop.Shell.Core.Windows;
 using BetterDesktop.Shell.Desktop.Contracts;
 using BetterDesktop.Shell.Desktop.Services;
-using BetterDesktop.Shell.Desktop.Templates;
 using BetterDesktop.Shell.Settings.Contracts;
 
 namespace BetterDesktop.Shell.Desktop.Controls;
+
+/// <summary>右键路由的图标目标（cell→entry 映射；原 DesktopMenuTemplates 定义，收口后本地化）。</summary>
+public sealed record DesktopIconTarget(BrowserEntry Entry, Border Cell, TextBlock Label);
 
 /// <summary>桌面图标网格（透明背景，铺满桌面窗口工作区）。</summary>
 public sealed class DesktopIconsControl : ScrollViewer, IDisposable
 {
     private readonly IDesktopBrowser _browser;
     private readonly ISettingsService? _settings;
-    private readonly IMenuService? _menus;
-    private readonly IFileClassifier? _classifier;
-    private readonly bool _useMenuService;
-    private readonly List<IDisposable> _menuHandles = [];
+    private readonly BetterDesktop.Shell.Convert.Contracts.IConvertMenuService? _convertMenu;
+    private readonly BetterDesktop.Shell.Convert.Contracts.IArchiveService? _archive;
+    private readonly IEventBus? _events;
+    private IDisposable? _settingsSub;
+
     private readonly Dictionary<Border, (BrowserEntry Entry, TextBlock Label)> _cellMenuTargets = [];
-    private MenuItem? _pasteItem;
     private bool _disposed;
 
     // 拖出状态
@@ -57,6 +63,12 @@ public sealed class DesktopIconsControl : ScrollViewer, IDisposable
 
     // 落点预览指示器（拖动时高亮显示松手后会落在哪个格，便于确认松手效果）
     private Border? _dropIndicator;
+
+    // ===== 回收站拖放（2026-09-07 用户拍板：拖动图标到桌面回收站 / dock 栏回收站松手 = 移入回收站） =====
+    private const string RecycleBinClsid = "::{645FF040-5081-101B-9F08-00AA002F954E}";
+    private Canvas? _canvas;                    // 当前自由布局画布（回收站命中检测用 canvas 坐标）
+    private Border? _recycleBinCell;            // 桌面回收站图标 cell（高亮反馈 + 命中矩形）
+    private bool _overRecycleBin;               // 拖动中鼠标是否悬停在任一回收站上
 
     // ===== 框选（橡皮筋多选） =====
     private bool _rubberActive;
@@ -87,21 +99,23 @@ public sealed class DesktopIconsControl : ScrollViewer, IDisposable
     public DesktopIconsControl(
         IDesktopBrowser browser,
         ISettingsService? settings = null,
-        IMenuService? menus = null,
-        IFileClassifier? classifier = null)
+        BetterDesktop.Shell.Convert.Contracts.IConvertMenuService? convertMenu = null,
+        BetterDesktop.Shell.Convert.Contracts.IArchiveService? archive = null,
+        IEventBus? events = null)
     {
         _browser = browser;
         _settings = settings;
-        _menus = menus;
-        _classifier = classifier;
-        // 回退开关：context-menu.migrated=false 走旧自绘路径；菜单服务缺失同样自动回退。
-        _useMenuService = menus is not null && (settings?.Get("context-menu.migrated", true) ?? true);
-        Background = Brushes.Transparent; // 空白处点击穿透到桌面窗口（右键/框选由窗口层接）
+        _convertMenu = convertMenu;
+        _archive = archive;
+        _events = events;
+        Background = Brushes.Transparent; // Transparent 可 HitTest：整个桌面区域接收鼠标事件
         // 对齐 cairoshell DesktopFolderViewStyle：横向滚动（纵向禁用），先填满一列再横向开新列
         HorizontalScrollBarVisibility = ScrollBarVisibility.Auto;
         VerticalScrollBarVisibility = ScrollBarVisibility.Disabled;
-        HorizontalAlignment = HorizontalAlignment.Left;
-        VerticalAlignment = VerticalAlignment.Top;
+        // 【回归修复 2026-09-07】必须 Stretch 填满父容器：Left/Top 只占图标排列长方形区域，
+        // 导致图标之外的桌面空白处右键事件收不到（OnMenuServiceMouseUp 在此控件内）→ 空白无菜单。
+        HorizontalAlignment = HorizontalAlignment.Stretch;
+        VerticalAlignment = VerticalAlignment.Stretch;
         Margin = new Thickness(7, 13, 0, 0); // cairoshell DesktopIcons.setPosition 同值
 
         // 拖入支持：外部文件/文件夹拖到桌面 → 复制/移动进当前浏览目录（始终启用）
@@ -109,46 +123,47 @@ public sealed class DesktopIconsControl : ScrollViewer, IDisposable
         DragOver += OnDragOver;
         Drop += OnDrop;
 
-        if (_useMenuService)
-        {
-            // 新路径：统一菜单服务（模板 + 贡献项 + 能力过滤）。旧自绘菜单不预赋，右键经路由弹出。
-            _menuHandles.Add(_menus!.RegisterTemplate(new DesktopBlankTemplate(this)));
-            _menuHandles.Add(_menus.RegisterTemplate(new DesktopIconTemplate(this)));
-            MouseRightButtonUp += OnMenuServiceMouseUp;
-        }
-        else
-        {
-            ContextMenu = BuildBlankMenu();
-        }
+        // 2026-09-05 收口：桌面自绘菜单退役——空白/图标条目右键统一走系统原生菜单（ShowMenu）。
+        MouseRightButtonUp += OnMenuServiceMouseUp;
 
         // 计划 G1 全键盘：F2/Del/Shift+Del/Ctrl+C·X·V·A/Ctrl+Shift+C/Alt+Enter 真实响应——
         // 模板快捷键列写出的键全部在此兑现（反假提示红线，计划 §5-3）。
         PreviewKeyDown += OnControlPreviewKeyDown;
 
-        _browser.ItemsChanged += (_, _) => Dispatcher.BeginInvoke(Rebuild);
+        // F10/O2（7438 纪律）：订阅必须可退订——匿名 lambda 无法 -=，改命名方法；Dispose 中配对退订。
+        _browser.ItemsChanged += OnBrowserItemsChanged;
 
         // 恢复持久化排序（desktop.sortKey；菜单改排序时同步写此键；空串=默认）
         if (settings is not null)
         {
-            _browser.SetSort(settings.Get("desktop.sortKey", string.Empty));
+            _browser.SetSort(settings.Get("desktop.sortKey", string.Empty), settings.Get("desktop.sortDesc", false));
         }
 
-        // 图标大小/间距变化 → 网格格子变了，旧坐标会出现空洞 → 自动紧凑重排补位。
-        // BeginInvoke 到 Background 优先级：等 Rebuild/布局完成后再整理，避免对旧 canvas 操作。
-        if (settings is not null)
+        // 图标大小/间距变化 → 网格格子变了 → 自动紧凑重排（违规1修复：裸 event → IEventBus）
+        if (settings is not null && _events is not null)
         {
-            settings.Changed += (_, e) =>
-            {
-                if (e.Key is "desktop.iconSize" or "desktop.itemSpacingX" or "desktop.itemSpacingY")
+            _settingsSub = _events.On<SettingsChangedEventArgs>(
+                ShellEvents.SettingsChanged,
+                (e, _) =>
                 {
-                    Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Background, CompactLayout);
-                }
-            };
+                    OnSettingsChanged(e);
+                    return Task.CompletedTask;
+                });
         }
 
         // 首次加载必须显式触发：DesktopBrowser 构造只设 Location 不枚举，
         // 不调 Refresh 则 Items 永远为空（此前"桌面无图标"的根因）。
         _browser.Refresh();
+
+        // 右键菜单候选预热（2026-09-07）：ToolCatalog 首次注册表枚举约几百 ms，
+        // Background 优先级后台预热避免首次右键卡 UI 无响应。
+        Dispatcher.BeginInvoke(
+            System.Windows.Threading.DispatcherPriority.Background,
+            new Action(() =>
+            {
+                try { _ = ToolCatalog.Detect(); }
+                catch { /* 预热失败静默（M10） */ }
+            }));
     }
 
     /// <summary>
@@ -181,6 +196,8 @@ public sealed class DesktopIconsControl : ScrollViewer, IDisposable
 
     /// <summary>对齐网格：自由布局下拖动松手后吸附到网格（默认 true）。</summary>
     private bool SnapToGrid => _settings?.Get("desktop.snapToGrid", true) ?? true;
+    /// <summary>自动排列下拖动图标 → 自动退出自动排列并保持布局（explorer 同款；desktop.autoExitArrangeOnDrag）。</summary>
+    private bool AutoExitArrangeOnDrag => _settings?.Get("desktop.autoExitArrangeOnDrag", true) ?? true;
 
     // ======== 图标位置持久化（自由布局） ========
     // 存 desktop.iconPositions：{ 完整路径: [x, y] }。SettingsService 走 System.Text.Json，支持该结构。
@@ -203,9 +220,23 @@ public sealed class DesktopIconsControl : ScrollViewer, IDisposable
     {
         if (_disposed) return;
 
+        // 【2026-09-07 诊断】图标加载链路落点：items 数 / 布局模式 / 隐藏态
+        DiagnosticLog.Trace("shell.desktop",
+            $"Rebuild: items={_browser.Items.Count} autoArrange={AutoArrange} iconsHidden={_settings?.Get("desktop.iconsHidden", false) ?? false}");
+
+        // 【回归修复 2026-09-06 / P2-9】隐藏图标态：清空网格但保留控件交互
+        //（空白右键=背景菜单、双击=恢复通道）——Collapsed 会吞整棵子树事件，
+        // 隐藏图标后右键完全失效（用户实测：仅剩窗口层诊断日志、无任何菜单）。
+        if (_settings?.Get("desktop.iconsHidden", false) ?? false)
+        {
+            Content = null;
+            return;
+        }
+
         // 竖向滚动条：自动排列是"填满一列再换列"（无需竖向滚动）；
         // 自由布局图标可摆到任意 Y（含视口下方），故需要竖向滚动。
         VerticalScrollBarVisibility = AutoArrange ? ScrollBarVisibility.Disabled : ScrollBarVisibility.Auto;
+        DiagnosticLog.Trace("shell.desktop", "Rebuild: VSB=" + VerticalScrollBarVisibility);
 
         if (AutoArrange)
         {
@@ -233,6 +264,7 @@ public sealed class DesktopIconsControl : ScrollViewer, IDisposable
         }
 
         Content = panel;
+        DiagnosticLog.Trace("shell.desktop", $"RebuildAutoArrange: cells={panel.Children.Count}");
     }
 
     /// <summary>
@@ -242,7 +274,19 @@ public sealed class DesktopIconsControl : ScrollViewer, IDisposable
     /// </summary>
     private void RebuildFreeLayout()
     {
-        var canvas = new Canvas { Background = Brushes.Transparent };
+        // 【2026-09-07 根因修复】Canvas 默认 HorizontalAlignment/VerticalAlignment=Stretch：
+        // 显式 Width/Height(420x1064) 与 Stretch 并存 → 布局槽拉伸、内容按固定尺寸居中
+        // → 整个画布（含全部图标）渲染到屏幕中央（LayoutCheck 实测 screen=(1022,78)）。
+        // 自动排列 WrapPanel 无显式尺寸、Stretch 填满 → 从左上角排布 → 正常。
+        // 修：显式 Left/Top，画布回到桌面左上角（Margin 7,13 由控件本身承载）。
+        var canvas = new Canvas
+        {
+            Background = Brushes.Transparent,
+            HorizontalAlignment = HorizontalAlignment.Left,
+            VerticalAlignment = VerticalAlignment.Top
+        };
+        _canvas = canvas;
+        _recycleBinCell = null; // 重建后回收站 cell 重新定位
 
         // ⚠️ 重建会丢弃旧 cell 并新建一批：拖动期间若发生重建（如文件变化触发刷新），
         //    临时状态里持有的旧 FrameworkElement 会全部失效，再拿它判定/让位就会错乱
@@ -380,17 +424,51 @@ public sealed class DesktopIconsControl : ScrollViewer, IDisposable
             {
                 _browser.SetSelection(Array.Empty<string>());
             }
+            DiagnosticLog.Trace("shell.desktop",
+                $"框选诊断: 结束后 selCnt={_browser.SelectedPaths.Count}");
         };
 
-        // 每列容量：按可用高度（ScrollViewer 实际高度；首帧未布局时回退主屏工作区高度）
-        var available = ActualHeight > 0
-            ? ActualHeight
+        // 每列容量：按 ScrollViewer 内容区高度 ViewportHeight（与自动排列 WrapPanel 同基准，
+        // 扣除水平滚动条；首帧未布局时回退主屏工作区高度）。用 ActualHeight 会在水平滚动条
+        // 出现时偏大 → 自由布局每列行数偏多 → 列数偏少（开关切换行列不一致，用户实测）。
+        var available = ViewportHeight > CellHeight * 2
+            ? ViewportHeight
             : SystemParameters.WorkArea.Height - 80;
         var rowsPerColumn = Math.Max(1, (int)Math.Floor(available / CellHeight));
+
+        // 【回归修复 2026-09-06】旧错误布局迁移：旧版本 ActualHeight 瞬态值导致 ExitArrange
+        // 固化出"所有图标 row=0"的烂布局并持久化到 desktop.iconPositions，用户一进自由布局
+        // 就全重叠（用户实测"一进去就是重叠的样子"）。检测：存量坐标全部挤在第一行（y<CellHeight）
+        // 且图标数 > 每列容量 → 视为旧错误布局，清除坐标并恢复默认自动排列（用户期望默认开着）。
+        if (positions.Count > 0 && _settings is not null)
+        {
+            var allRowZero = positions.Values.All(p => p is { Length: >= 2 } && p[1] < CellHeight);
+            if (allRowZero && _browser.Items.Count > rowsPerColumn)
+            {
+                _settings.Set("desktop.iconPositions",
+                    new Dictionary<string, double[]>(StringComparer.OrdinalIgnoreCase));
+                _settings.Set("desktop.autoArrange", true);
+                return; // 设置变更触发 Rebuild，走自动排列分支
+            }
+        }
+
+        // 【2026-09-07 重叠根因修复】新条目（无保存坐标）不得用列表序号直接映射列/行：
+        // 序号对应的格位几乎必然已被「有保存坐标的图标」占用（转换生成新文件时尤其如此），
+        // 直接落位 = 叠在已有图标上。改为扫描「首个空闲格」（列优先，跳过已占用格位）。
+        var occupied = new HashSet<(int Col, int Row)>();
+        foreach (var pos in positions.Values)
+        {
+            if (pos is { Length: >= 2 } && pos[0] >= 0 && pos[1] >= 0)
+            {
+                occupied.Add(((int)Math.Round(pos[0] / CellWidth), (int)Math.Round(pos[1] / CellHeight)));
+            }
+        }
 
         var index = 0;
         var maxRight = CellWidth;
         var maxBottom = CellHeight;
+        var freeCol = 0;
+        var freeRow = 0;
         foreach (var entry in _browser.Items)
         {
             var cell = CreateItem(entry);
@@ -415,8 +493,28 @@ public sealed class DesktopIconsControl : ScrollViewer, IDisposable
             }
             else
             {
-                var col = index / rowsPerColumn;
-                var row = index % rowsPerColumn;
+                // 新条目：列优先扫描第一个未被已存坐标占用的格位；用完即标记，
+                // 后续新条目顺延到下一个空闲格（不回头，避免 O(n²)）。
+                while (occupied.Contains((freeCol, freeRow)))
+                {
+                    freeRow++;
+                    if (freeRow >= rowsPerColumn)
+                    {
+                        freeRow = 0;
+                        freeCol++;
+                    }
+                }
+
+                var col = freeCol;
+                var row = freeRow;
+                occupied.Add((col, row));
+                freeRow++;
+                if (freeRow >= rowsPerColumn)
+                {
+                    freeRow = 0;
+                    freeCol++;
+                }
+
                 x = col * CellWidth;
                 y = row * CellHeight;
             }
@@ -426,6 +524,11 @@ public sealed class DesktopIconsControl : ScrollViewer, IDisposable
             Canvas.SetLeft(cell, x);
             Canvas.SetTop(cell, y);
             canvas.Children.Add(cell);
+            if (entry.IsShellNamespace &&
+                string.Equals(entry.Path, RecycleBinClsid, StringComparison.OrdinalIgnoreCase))
+            {
+                _recycleBinCell = cell as Border; // 桌面回收站：拖动到它上面松手 = 移入回收站
+            }
             index++;
 
             maxRight = Math.Max(maxRight, x + CellWidth);
@@ -438,6 +541,8 @@ public sealed class DesktopIconsControl : ScrollViewer, IDisposable
         canvas.Height = maxBottom;
 
         Content = canvas;
+        DiagnosticLog.Trace("shell.desktop",
+            $"RebuildFreeLayout: cells={canvas.Children.Count} canvas=({canvas.Width:F0}x{canvas.Height:F0})");
     }
 
     private FrameworkElement CreateItem(BrowserEntry entry)
@@ -456,8 +561,10 @@ public sealed class DesktopIconsControl : ScrollViewer, IDisposable
             FontSize = LabelFontSize,
             Foreground = Brushes.White,
             TextAlignment = TextAlignment.Center,
-            TextWrapping = TextWrapping.Wrap,
-            MaxHeight = 30,
+            TextWrapping = TextWrapping.NoWrap,
+            // 【回归修复 2026-09-06】单行截断：旧 Wrap+MaxHeight(30)+CharacterEllipsis 组合下，
+            // Wrap 使 Trimming 失效，长文本换行后被 MaxHeight 裁成半行 → 标签两行重叠/乱码
+            // （用户截图实锤）。改为 NoWrap+CharacterEllipsis：长名单行末尾省略号，绝不换行。
             TextTrimming = TextTrimming.CharacterEllipsis,
             HorizontalAlignment = HorizontalAlignment.Center,
             // 图标文字加投影保证亮暗壁纸上都可读
@@ -509,7 +616,23 @@ public sealed class DesktopIconsControl : ScrollViewer, IDisposable
         // CaptureMouse 保证鼠标移出图标单元格仍能收到 MouseMove/Up（拖出判定不丢）。
         cell.MouseLeftButtonDown += (_, e) =>
         {
-            SelectForClick(entry.Path, extend: Keyboard.Modifiers.HasFlag(ModifierKeys.Control));
+            // 【2026-09-07 修复】批量选中被破坏：无条件 SelectForClick 会把框选/Ctrl 点选
+            // 得到的多选集合单选化（SetSelection(new[]{path})），随后 _dragCells 的批量收集
+            // 条件 SelectedPaths.Count>1 立即失效 → "视觉是批量，实际还是单选"、只拖一个。
+            // 改为：仅当「不在选中集」或「按 Ctrl」时才走 SelectForClick（explorer 惯例：
+            // 无 Ctrl 点击已选中项保持多选，用于整组拖动；Ctrl 点击切换该项）。
+            var _ctrl = Keyboard.Modifiers.HasFlag(ModifierKeys.Control);
+            var _inSel = _browser.SelectedPaths.Contains(entry.Path);
+            DiagnosticLog.Trace("shell.desktop",
+                $"点击诊断: selCnt={_browser.SelectedPaths.Count} inSel={_inSel} ctrl={_ctrl} parent={cell.Parent?.GetType().Name}");
+            // 【2026-09-07 加固】点击已在选中集内的图标：无论是否按 Ctrl 都不改动选中集。
+            // 原因：Ctrl 点击已选中项 = toggle 移除 → 拖动集收集条件 Contains(entry.Path) 失效 →
+            // "视觉多选、点住一个拖动" 立即塌缩成单选（用户实测失败）。桌面场景下点住已选中项
+            // 的心智就是"整组拖动"（macOS 桌面同款），Ctrl 取消单项让位于拖动稳定性。
+            if (!_inSel)
+            {
+                SelectForClick(entry.Path, extend: _ctrl);
+            }
             _dragStart = e.GetPosition(this);
             _dragPath = entry.Path;
             _itemOriginX = Canvas.GetLeft(cell);
@@ -541,6 +664,7 @@ public sealed class DesktopIconsControl : ScrollViewer, IDisposable
                 _dragCells.Add(cell);
                 _dragOrigins.Add((_itemOriginX, _itemOriginY));
             }
+            DiagnosticLog.Trace("shell.desktop", $"点击诊断: 收集后 dragCells={_dragCells.Count}");
 
             cell.CaptureMouse();
             e.Handled = true;
@@ -567,6 +691,40 @@ public sealed class DesktopIconsControl : ScrollViewer, IDisposable
         {
             if (_dragMoving && ReferenceEquals(_draggingCell, cell))
             {
+                // 回收站拖放（2026-09-07）：松手时鼠标悬停在回收站上 → 整个被拖集合移入回收站，
+                // 不落位不提交布局（文件从桌面消失）。
+                if (_overRecycleBin)
+                {
+                    DiagnosticLog.Trace("shell.desktop",
+                        $"拖动到回收站: cells={_dragCells.Count} -> DeleteToRecycleBin");
+                    var dropPaths = _dragCells
+                        .Select(fe => fe.Tag as string)
+                        .Where(p => !string.IsNullOrWhiteSpace(p))
+                        .Cast<string>()
+                        .ToList();
+                    if (dropPaths.Count > 0)
+                    {
+                        _ = Task.Run(() =>
+                        {
+                            FileClipboard.DeleteToRecycleBin(dropPaths);
+                            _ = Dispatcher.BeginInvoke(() => _browser.Refresh());
+                        });
+                    }
+                    HideDropIndicator();
+                    foreach (var fe in _dragCells)
+                    {
+                        EndDragVisual(fe);
+                    }
+                    _overRecycleBin = false;
+                    ClearDragState();
+                    _dragMoving = false;
+                    _dragPossible = false;
+                    _dragPath = null;
+                    _draggingCell = null;
+                    cell.ReleaseMouseCapture();
+                    return;
+                }
+
                 // 主 cell 吸附落位；把吸附偏移量应用到整个被拖集合，保持相对位置不变
                 var cur = _livePositions.TryGetValue(cell, out var cp)
                     ? cp
@@ -627,6 +785,14 @@ public sealed class DesktopIconsControl : ScrollViewer, IDisposable
                 if (Math.Abs(pos.X - _dragStart.X) <= SystemParameters.MinimumHorizontalDragDistance &&
                     Math.Abs(pos.Y - _dragStart.Y) <= SystemParameters.MinimumVerticalDragDistance)
                 {
+                    return;
+                }
+
+                if (AutoExitArrangeOnDrag)
+                {
+                    // 【2026-09-06】explorer 同款：自动排列下拖动 → 固化布局并退出自动排列，续接自由拖动
+                    _dragPossible = false;
+                    ExitArrangeAndContinueDrag(cell, _dragPath, pos);
                     return;
                 }
 
@@ -703,22 +869,17 @@ public sealed class DesktopIconsControl : ScrollViewer, IDisposable
                 // 临时让位：目标格上的图标往下推（未松手，不落盘）
                 ApplyAvoidance();
 
+                // 回收站拖放（2026-09-07）：拖动中检测鼠标是否悬停在桌面回收站 / dock 栏回收站上
+                UpdateRecycleDropState(pos);
+
                 // ⚠️ 拖动会扩大内容范围：必须同步更新 Canvas 尺寸，
                 //    否则 ScrollViewer 仍按旧内容范围裁剪，拖到右侧/下方的图标会被截断不显示。
                 UpdateCanvasExtent();
             };
         }
 
-        // 图标右键菜单（MENU-SPECS §2 实用子集，自绘主题呈现）：
-        // 新路径记录 cell→entry 映射，右键统一走 MouseRightButtonUp → IMenuService。
-        if (_useMenuService)
-        {
-            _cellMenuTargets[cell] = (entry, label);
-        }
-        else
-        {
-            cell.ContextMenu = BuildIconMenu(entry, cell, label);
-        }
+        // 图标 cell→entry 映射：右键路由（ShowMenu）与重命名定位共用。
+        _cellMenuTargets[cell] = (entry, label);
 
         return cell;
     }
@@ -781,19 +942,34 @@ public sealed class DesktopIconsControl : ScrollViewer, IDisposable
 
         foreach (var child in canvas.Children)
         {
-            if (child is not FrameworkElement fe || ReferenceEquals(fe, _dropIndicator))
+            // 【2026-09-07 修复】必须同时排除 _rubberBand（框选橡皮筋）：
+            // 它平时从未 SetLeft/SetTop → GetLeft=UnsetValue(转 double=NaN)。
+            // 若混入快照，RestoreBasePositions → AnimateTo(fe, NaN, NaN) 抛
+            // ArgumentException(""NaN"不是属性"From"的有效值")，连续 Dispatcher
+            // 异常把自绘层打挂（实测框选后拖动 → 桌面图标消失、explorer 透出）。
+            if (child is not FrameworkElement fe ||
+                ReferenceEquals(fe, _dropIndicator) ||
+                ReferenceEquals(fe, _rubberBand))
             {
                 continue;
             }
 
-            var pos = (Canvas.GetLeft(fe), Canvas.GetTop(fe));
+            var pos = (X: Canvas.GetLeft(fe), Y: Canvas.GetTop(fe));
+            if (double.IsNaN(pos.X) || double.IsNaN(pos.Y))
+            {
+                DiagnosticLog.Trace("shell.desktop",
+                    $"CaptureLayoutSnapshot 跳过 NaN: el={fe.Tag ?? "(null)"}");
+                continue;
+            }
             _basePositions[fe] = pos;
             _livePositions[fe] = pos;
         }
     }
 
     /// <summary>把所有被让位的图标回滚到基准位置（被拖集合不回滚，它们跟随鼠标）。</summary>
-    private void RestoreBasePositions(ISet<FrameworkElement> draggedSet)
+    /// <param name="animate">true=平滑回滚（松手场景）；false=瞬移（拖动中每跨一格回滚，
+    /// 动画会让 76 个图标高频重起 DoubleAnimation → 卡顿）。</param>
+    private void RestoreBasePositions(ISet<FrameworkElement> draggedSet, bool animate = true)
     {
         if (_basePositions is null)
         {
@@ -813,13 +989,30 @@ public sealed class DesktopIconsControl : ScrollViewer, IDisposable
                 : (X: Canvas.GetLeft(fe), Y: Canvas.GetTop(fe));
             _livePositions[fe] = kv.Value;
 
+            // 【2026-09-07 保险】快照目标为 NaN（理论已被 CaptureLayoutSnapshot 拦截）：
+            // 跳过，避免 AnimateTo(NaN) 抛异常
+            if (double.IsNaN(kv.Value.X) || double.IsNaN(kv.Value.Y))
+            {
+                DiagnosticLog.Trace("shell.desktop",
+                    $"RestoreBasePositions 跳过 NaN 目标: el={fe.Tag ?? "(null)"}");
+                continue;
+            }
+
             // 位置没变就不必重起动画：否则每次目标格变化都给全部图标刷新动画，既浪费又抖
             if (Math.Abs(cur.X - kv.Value.X) < 1 && Math.Abs(cur.Y - kv.Value.Y) < 1)
             {
                 continue;
             }
 
-            AnimateTo(fe, kv.Value.X, kv.Value.Y);
+            if (animate)
+            {
+                AnimateTo(fe, kv.Value.X, kv.Value.Y, _dragMoving ? 80 : 160);
+            }
+            else
+            {
+                Canvas.SetLeft(fe, kv.Value.X);
+                Canvas.SetTop(fe, kv.Value.Y);
+            }
         }
     }
 
@@ -934,8 +1127,9 @@ public sealed class DesktopIconsControl : ScrollViewer, IDisposable
 
         _lastAvoidTargets = targets;
 
-        // 1) 先撤销上一次让位（回到拖动开始时的排布）
-        RestoreBasePositions(draggedSet);
+        // 1) 先撤销上一次让位（回到拖动开始时的排布）。
+        //    拖动中瞬移：每跨一格就回滚重推，动画会让位视觉上是"整排重排"，卡且跳。
+        RestoreBasePositions(draggedSet, animate: !_dragMoving);
 
         // 2) 按格索引重建占位表（互斥判定的依据；被拖集合全部排除）
         RebuildOccupancy(draggedSet);
@@ -948,6 +1142,15 @@ public sealed class DesktopIconsControl : ScrollViewer, IDisposable
         {
             // 目标格空 → 无需让位
             if (!_occupancy.ContainsKey(t))
+            {
+                continue;
+            }
+
+            // 【2026-09-07 修复】回收站让位豁免：目标格坐着回收站时不做任何下推，
+            // 让拖动悬停直接落到回收站上（高亮 + 松手移入回收站），否则避让会把回收站推走。
+            if (_recycleBinCell is not null &&
+                _occupancy.TryGetValue(t, out var tfe) &&
+                ReferenceEquals(tfe, _recycleBinCell))
             {
                 continue;
             }
@@ -980,7 +1183,7 @@ public sealed class DesktopIconsControl : ScrollViewer, IDisposable
 
                 var (nx, ny) = FromCell(target.Col, target.Row);
                 _livePositions[fe] = (nx, ny);
-                AnimateTo(fe, nx, ny);
+                AnimateTo(fe, nx, ny, _dragMoving ? 80 : 160);
             }
         }
     }
@@ -1130,6 +1333,135 @@ public sealed class DesktopIconsControl : ScrollViewer, IDisposable
         _settings.Set("desktop.iconPositions", all);
     }
 
+    /// <summary>
+    /// 【2026-09-06 功能】自动排列模式下拖动图标 → 固化当前瀑布布局到 desktop.iconPositions、
+    /// 持久化退出自动排列（desktop.autoArrange=false）、重建为自由布局（位置不变 → 视觉不变），
+    /// 并续接本次拖动（explorer 同款：拖一个图标即切到手动排布，布局保持不变）。
+    /// </summary>
+    private void ExitArrangeAndContinueDrag(Border cell, string dragPath, System.Windows.Point pos)
+    {
+        if (_settings is null || _disposed)
+        {
+            return;
+        }
+
+        // 1. 固化当前自动排列布局（与 RebuildFreeLayout 同基准的列优先分配）→ desktop.iconPositions
+        // 【回归修复 2026-09-06】用 ViewportHeight 而非 ActualHeight：自动排列 WrapPanel 的
+        // 实际可用高度是 ScrollViewer 内容区（扣除水平滚动条），ActualHeight 在水平滚动条
+        // 出现时偏大 → 固化坐标时每列行数偏多 → 列数偏少（用户实测关闭自动排列后列数跳变）。
+        // 低于两行高度视为不可信，回退到屏幕工作区高度。
+        var available = ViewportHeight > CellHeight * 2 ? ViewportHeight : SystemParameters.WorkArea.Height - 80;
+        var rowsPerColumn = Math.Max(1, (int)Math.Floor(available / CellHeight));
+        var all = new Dictionary<string, double[]>();
+        var i = 0;
+        foreach (var entry in _browser.Items)
+        {
+            var col = i / rowsPerColumn;
+            var row = i % rowsPerColumn;
+            i++;
+            all[entry.Path] = new[] { col * CellWidth, row * CellHeight };
+        }
+        _settings.Set("desktop.iconPositions", all);
+
+        // 2. 退出自动排列（持久化）→ DesktopWindow.OnSettingsChanged 对 desktop.* 键
+        //    Dispatcher.BeginInvoke(Rebuild) 排队重建为自由布局。
+        //    ⚠️【2026-09-07 竞态修复】不得再同步 Rebuild()：若此处同步重建并续接拖动，
+        //    随后排队的异步 Rebuild 的 ClearDragState 会把续接状态清掉 → 拖动中断/状态错乱
+        //    （"拖动图标时桌面崩溃/闪回"的关联因素）。续接同样 BeginInvoke 排队：
+        //    顺序保证 Rebuild 先执行、ResumeDragAfterRebuild 后执行。
+        _settings.Set("desktop.autoArrange", false);
+        Dispatcher.BeginInvoke(new Action(() =>
+        {
+            if (_disposed)
+            {
+                return;
+            }
+            ResumeDragAfterRebuild(dragPath, pos);
+        }));
+    }
+
+    /// <summary>自动排列 → 自由布局重建完成后续接本次拖动（Rebuild 的 ClearDragState 已清旧态，
+    /// 此处在重建后的新网格上恢复拖动上下文；与 MouseLeftButtonUp 的清理互斥由 Dispatcher 队列保证）。</summary>
+    private void ResumeDragAfterRebuild(string dragPath, System.Windows.Point pos)
+    {
+        // 续接本次拖动：定位被拖图标的新 cell，恢复拖动上下文（自由布局 MouseMove 续接）
+        var newCell = FindCellByPath(dragPath);
+        if (newCell is null)
+        {
+            return;
+        }
+
+        _dragStart = pos;
+        _dragPath = dragPath;
+        _itemOriginX = Canvas.GetLeft(newCell);
+        _itemOriginY = Canvas.GetTop(newCell);
+        _dragPossible = true;
+        _dragMoving = false;
+        _draggingCell = newCell;
+
+        _dragCells.Clear();
+        _dragOrigins.Clear();
+        if (_browser.SelectedPaths.Count > 1 && _browser.SelectedPaths.Contains(dragPath))
+        {
+            foreach (var fe in EnumerateCells())
+            {
+                if (fe.Tag is string p && _browser.SelectedPaths.Contains(p))
+                {
+                    _dragCells.Add(fe);
+                    _dragOrigins.Add((Canvas.GetLeft(fe), Canvas.GetTop(fe)));
+                }
+            }
+        }
+        if (_dragCells.Count == 0)
+        {
+            _dragCells.Add(newCell);
+            _dragOrigins.Add((_itemOriginX, _itemOriginY));
+        }
+
+        // 重建后旧 cell 已销毁，鼠标捕获需在新 cell 上重建（保持后续 Move/Up 到达）
+        newCell.CaptureMouse();
+    }
+
+    /// <summary>在自由布局 Canvas 中按完整路径查找图标 cell。</summary>
+    private Border? FindCellByPath(string path)
+    {
+        if (Content is not Canvas canvas)
+        {
+            return null;
+        }
+
+        foreach (var child in canvas.Children)
+        {
+            if (child is Border fe && fe.Tag is string p &&
+                string.Equals(p, path, StringComparison.OrdinalIgnoreCase))
+            {
+                return fe;
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>枚举自由布局 Canvas 中的图标 cell（不含指示器/橡皮筋）。</summary>
+    private IEnumerable<Border> EnumerateCells()
+    {
+        if (Content is not Canvas canvas)
+        {
+            yield break;
+        }
+
+        foreach (var child in canvas.Children)
+        {
+            if (child is Border fe &&
+                !ReferenceEquals(fe, _dropIndicator) &&
+                !ReferenceEquals(fe, _rubberBand) &&
+                fe.Tag is string)
+            {
+                yield return fe;
+            }
+        }
+    }
+
     /// <summary>清理拖动临时状态。</summary>
     private void ClearDragState()
     {
@@ -1139,19 +1471,103 @@ public sealed class DesktopIconsControl : ScrollViewer, IDisposable
         _lastAvoidTargets = null;
         _dragCells.Clear();
         _dragOrigins.Clear();
+        _overRecycleBin = false;
+        BetterDesktop.Kernel.Core.DockDropTargets.IsRecycleBinHovered = false; // dock 回收站高亮熄灭
+        if (_recycleBinCell is not null && _recycleBinCell.Tag is string rbPath)
+        {
+            SyncSelectionVisual(_recycleBinCell, rbPath); // 拖动结束：恢复回收站正常选中样式
+        }
     }
 
+    /// <summary>
+    /// 拖动中检测鼠标是否悬停在回收站上（桌面回收站 cell + dock 栏回收站）。
+    /// 命中：高亮桌面回收站、标记 _overRecycleBin（松手 = 移入回收站）；未命中恢复。
+    /// </summary>
+    private void UpdateRecycleDropState(Point mouseInControl)
+    {
+        var over = false;
+        var dockHit = false;
+
+        // ① 桌面回收站：cell 矩形按 canvas 坐标判定（与 e.GetPosition(canvas) 同域，免屏幕换算）
+        if (_recycleBinCell is not null && _canvas is not null &&
+            _recycleBinCell.Visibility == Visibility.Visible)
+        {
+            var rect = new Rect(
+                Canvas.GetLeft(_recycleBinCell),
+                Canvas.GetTop(_recycleBinCell),
+                _recycleBinCell.ActualWidth > 0 ? _recycleBinCell.ActualWidth : CellWidth - 6,
+                _recycleBinCell.ActualHeight > 0 ? _recycleBinCell.ActualHeight : CellHeight - 8);
+            var canvasPt = _canvas.PointFromScreen(
+                PointToScreen(mouseInControl));
+            over = rect.Contains(canvasPt);
+        }
+
+        // ② dock 栏回收站：kernel 共享矩形（物理像素，与 GetCursorPos 同域）
+        if (!over)
+        {
+            var dockRect = BetterDesktop.Kernel.Core.DockDropTargets.DockRecycleBinScreenRect;
+            if (dockRect is not null && NativeMethods.GetCursorPos(out var pt))
+            {
+                dockHit = pt.X >= dockRect.Value.Left && pt.X <= dockRect.Value.Right &&
+                          pt.Y >= dockRect.Value.Top && pt.Y <= dockRect.Value.Bottom;
+                over = dockHit;
+            }
+        }
+
+        // dock 回收站高亮同步：dock 窗口层级在自绘桌面之上，拖动图标被它盖住，
+        // 通过 kernel 共享标志让 dock 侧把回收站图标点亮（红框），松手即移入回收站。
+        BetterDesktop.Kernel.Core.DockDropTargets.IsRecycleBinHovered = dockHit;
+
+        if (over == _overRecycleBin)
+        {
+            return;
+        }
+
+        _overRecycleBin = over;
+        if (_recycleBinCell is not null)
+        {
+            if (over)
+            {
+                // 悬停在回收站：醒目高亮（蓝色边框+半透明蓝底），松手即移入回收站
+                _recycleBinCell.Background = new SolidColorBrush(Color.FromArgb(90, 0xE8, 0x4C, 0x3D));
+                _recycleBinCell.BorderThickness = new Thickness(2);
+                _recycleBinCell.BorderBrush = new SolidColorBrush(Color.FromArgb(200, 0xE8, 0x4C, 0x3D));
+                HideDropIndicator(); // 落点预览与回收站高亮二选一
+            }
+            else if (_recycleBinCell.Tag is string rbPath)
+            {
+                SyncSelectionVisual(_recycleBinCell, rbPath);
+            }
+        }
+        DiagnosticLog.Trace("shell.desktop", $"回收站拖放: over={over}");
+    }
+
+
     /// <summary>平滑位移动画（用于避让）：动画 Canvas.Left/Top 两个附加属性。</summary>
-    private static void AnimateTo(FrameworkElement element, double x, double y)
+    /// <param name="durationMs">动画时长。拖动中让位用短时长（80ms）保持跟手，
+    /// 松手后落位/消解用 160ms 平滑。</param>
+    private static void AnimateTo(FrameworkElement element, double x, double y, int durationMs = 160)
     {
         var curX = (double)element.GetValue(Canvas.LeftProperty);
         var curY = (double)element.GetValue(Canvas.TopProperty);
+
+        // 【2026-09-07 修复】cell 基值可能为 UnsetValue(转 double = NaN)：
+        // DoubleAnimation(NaN, x) 抛 ArgumentException(""NaN"不是属性"From"的有效值")，
+        // DispatcherUnhandledException 连续触发会把自绘层打挂（实测拖动/框选后桌面图标消失）。
+        // 防御：NaN → 直接用目标值（跳过动画），并记录来源便于排查。
+        if (double.IsNaN(curX) || double.IsNaN(curY))
+        {
+            DiagnosticLog.Trace("shell.desktop",
+                $"AnimateTo NaN 防御: el={element.Tag} cur=({curX},{curY}) dst=({x},{y})");
+            if (double.IsNaN(curX)) curX = x;
+            if (double.IsNaN(curY)) curY = y;
+        }
 
         // 基值立即指向目标值：让 Canvas.GetLeft/GetTop 与逻辑位置始终一致
         element.SetValue(Canvas.LeftProperty, x);
         element.SetValue(Canvas.TopProperty, y);
 
-        var duration = TimeSpan.FromMilliseconds(160);
+        var duration = TimeSpan.FromMilliseconds(durationMs);
         var ease = new System.Windows.Media.Animation.QuadraticEase { EasingMode = System.Windows.Media.Animation.EasingMode.EaseOut };
 
         // ⚠️ 必须用 FillBehavior.Stop：
@@ -1268,13 +1684,33 @@ public sealed class DesktopIconsControl : ScrollViewer, IDisposable
 
     private void Open(BrowserEntry entry)
     {
-        // shell 虚拟项（此电脑/回收站等）：explorer.exe ::{CLSID} 打开（与 dock 系统区同款）。
+        // 【2026-09-07 用户拍板】自绘桌面本质是类文件管理器 → "打开"统一定位为
+        // 系统文件管理器（explorer.exe）：文件夹与 shell 虚拟项（此电脑/回收站等）
+        // 都用 explorer 打开（与 dock 系统区同款）；文件用默认关联程序打开。
         if (entry.IsShellNamespace)
         {
             StartFileShellNamespace(entry.Path);
         }
-        else if (entry.IsDirectory) _browser.Navigate(entry.Path);
+        else if (entry.IsDirectory) StartExplorerFolder(entry.Path);
         else StartFile(entry.Path);
+    }
+
+    /// <summary>经系统文件管理器（explorer.exe）打开文件夹。</summary>
+    private static void StartExplorerFolder(string path)
+    {
+        try
+        {
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+            {
+                FileName = "explorer.exe",
+                Arguments = $"\"{path}\"",
+                UseShellExecute = true
+            });
+        }
+        catch
+        {
+            // 启动失败静默（M10）
+        }
     }
 
     /// <summary>经 explorer 打开 shell 命名空间项（"::{CLSID}"）。</summary>
@@ -1336,55 +1772,8 @@ public sealed class DesktopIconsControl : ScrollViewer, IDisposable
         }
     }
 
-    // ======== 右键菜单（自绘主题风格，DesktopMenuStyling 工厂） ========
-
-    /// <summary>图标右键菜单（MENU-SPECS §2 实用子集，自绘主题呈现）。</summary>
-    private ContextMenu BuildIconMenu(BrowserEntry entry, Border cell, TextBlock label)
-    {
-        var menu = DesktopMenuStyling.CreateMenu();
-        DesktopMenuStyling.AddItem(menu, "打开", () => Open(entry), isDefault: true);
-
-        // shell 虚拟项不是文件系统对象：剪切/复制/重命名/删除一律不适用（对回收站做删除会静默失败甚至误操作）。
-        if (entry.IsShellNamespace)
-        {
-            return menu;
-        }
-
-        DesktopMenuStyling.AddSeparator(menu);
-        DesktopMenuStyling.AddItem(menu, "剪切", () => { _browser.SetSelection(new[] { entry.Path }); _browser.Cut(); });
-        DesktopMenuStyling.AddItem(menu, "复制", () => { _browser.SetSelection(new[] { entry.Path }); _browser.Copy(); });
-        DesktopMenuStyling.AddItem(menu, "重命名", () => StartRename(cell, label, entry.Path));
-        DesktopMenuStyling.AddItem(menu, "删除", () => { _browser.SetSelection(new[] { entry.Path }); _browser.Delete(); });
-        DesktopMenuStyling.AddSeparator(menu);
-        DesktopMenuStyling.AddItem(menu, "属性", () => ShowProperties(entry.Path));
-        return menu;
-    }
-
-    /// <summary>空白处右键菜单（MENU-SPECS §1 实用子集，自绘主题呈现）。粘贴项在菜单打开时按 CanPaste 刷新可用态。</summary>
-    private ContextMenu BuildBlankMenu()
-    {
-        var menu = DesktopMenuStyling.CreateMenu();
-        DesktopMenuStyling.AddItem(menu, "新建文件夹", () => _browser.NewFolder());
-        _pasteItem = new MenuItem { Header = "粘贴" };
-        _pasteItem.Click += (_, _) =>
-        {
-            try { _browser.Paste(); }
-            catch { /* 粘贴失败静默（M10） */ }
-        };
-        menu.Items.Add(_pasteItem);
-        DesktopMenuStyling.AddSeparator(menu);
-        DesktopMenuStyling.AddItem(menu, "整理图标", CompactLayout);
-        DesktopMenuStyling.AddItem(menu, "刷新", () => _browser.Refresh());
-        DesktopMenuStyling.AddSeparator(menu);
-        DesktopMenuStyling.AddItem(menu, "显示设置", () => OpenSettings("ms-settings:display"));
-        DesktopMenuStyling.AddItem(menu, "个性化", () => OpenSettings("ms-settings:personalization"));
-        // ContextMenuOpening 触发在放置目标（本 ScrollViewer）上，而非菜单自身。
-        ContextMenuOpening += (_, _) =>
-        {
-            if (_pasteItem is not null) _pasteItem.IsEnabled = _browser.CanPaste;
-        };
-        return menu;
-    }
+    // 2026-09-05 收口：旧自绘右键菜单（BuildIconMenu/BuildBlankMenu，DesktopMenuStyling 工厂）随
+    // 中央菜单管线一并退役——桌面右键统一走系统原生菜单（ShowMenu → NativeMenuPopup）。
 
     // ======== 内联重命名 ========
 
@@ -1575,15 +1964,26 @@ public sealed class DesktopIconsControl : ScrollViewer, IDisposable
         return new Viewbox { Child = canvas, Width = 36, Height = 30, Stretch = Stretch.Uniform };
     }
 
+    /// <summary>F10/O2：命名方法订阅（可退订），ItemsChanged → 重建图标网格。</summary>
+    private void OnBrowserItemsChanged(object? sender, EventArgs e)
+        => Dispatcher.BeginInvoke(Rebuild);
+
+    /// <summary>F10/O2：命名方法订阅（可退订），图标大小/间距变化 → 自动紧凑重排补位。</summary>
+    private void OnSettingsChanged(SettingsChangedEventArgs e)
+    {
+        if (e.Key is "desktop.iconSize" or "desktop.itemSpacingX" or "desktop.itemSpacingY")
+        {
+            Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Background, CompactLayout);
+        }
+    }
+
     public void Dispose()
     {
+        // 7438 纪律 4：Dispose 幂等守卫 + 订阅退订配对（长生命周期服务持住控件 → 旧实例无法 GC）。
+        if (_disposed) return;
         _disposed = true;
-        foreach (var handle in _menuHandles)
-        {
-            try { handle.Dispose(); }
-            catch { /* 注销失败不阻断（M10） */ }
-        }
-        _menuHandles.Clear();
+        _browser.ItemsChanged -= OnBrowserItemsChanged;
+        _settingsSub?.Dispose();
         _cellMenuTargets.Clear();
         Content = null;
     }
@@ -1592,7 +1992,7 @@ public sealed class DesktopIconsControl : ScrollViewer, IDisposable
 
     private void OnMenuServiceMouseUp(object sender, MouseButtonEventArgs e)
     {
-        if (_menus is null || _disposed)
+        if (_disposed)
         {
             return;
         }
@@ -1605,11 +2005,11 @@ public sealed class DesktopIconsControl : ScrollViewer, IDisposable
                 // explorer 同款：右键未选中项 → 先单选再弹菜单
                 _browser.SetSelection([entry.Path]);
             }
-            _ = ShowMenuAsync(new DesktopIconTarget(entry, cell, label), e);
+            ShowMenu(new DesktopIconTarget(entry, cell, label), e);
         }
         else
         {
-            _ = ShowMenuAsync(null, e);
+            ShowMenu(null, e);
         }
         e.Handled = true;
     }
@@ -1627,45 +2027,374 @@ public sealed class DesktopIconsControl : ScrollViewer, IDisposable
         return (null, null, null);
     }
 
-    private async Task ShowMenuAsync(DesktopIconTarget? target, MouseButtonEventArgs e)
+    private void ShowMenu(DesktopIconTarget? target, MouseButtonEventArgs e)
     {
-        if (_menus is null)
-        {
-            return;
-        }
-
         try
         {
-            FileIdentity? identity = null;
-            if (target is not null && !target.Entry.IsShellNamespace)
-            {
-                // 多选（右键项在选中集内）→ 交集能力过滤（ClassifyMany，单文件专属项自动隐藏）；
-                // 单选 → 单项分类（审查 P1-1：MenuRequest.SelectedPaths 语义兑现）
-                var selected = _browser.SelectedPaths;
-                identity = _classifier is null ? null
-                    : selected.Count > 1 && selected.Contains(target.Entry.Path)
-                        ? _classifier.ClassifyMany([.. selected])
-                        : _classifier.Classify(target.Entry.Path);
-            }
-
-            // PointToScreen 返回物理像素 → 换算 DIP（弹层窗口 Left/Top 使用逻辑坐标）
+            // 【2026-09-07 用户拍板】回归自绘右键菜单：桌面空白与图标条目一律自绘菜单
+            //（WPF ContextMenu，零 IContextMenu 依赖）。系统原生菜单接入（跨进程委托 explorer /
+            // DefView 转发）退役——类型虽正确但稳定性不达标（拖动关联崩溃、菜单类型错乱等），
+            // 且本机任何非 explorer 进程 GetUIObjectOf 聚合第三方扩展必然崩溃（0xC0000005 实锤）。
+            // 自绘菜单仅基础操作（打开/剪切/复制/删除/重命名/属性/新建/刷新/排序），
+            // 不含第三方 shell 扩展项——这是回归自绘的明确代价（用户已确认接受）。
             var physical = PointToScreen(e.GetPosition(this));
-            var dpi = VisualTreeHelper.GetDpi(this).PixelsPerDip;
-            var screenPos = new Point(physical.X / dpi, physical.Y / dpi);
-
-            var request = new MenuRequest(
-                target is null ? MenuScope.Desktop : MenuScope.DesktopIcon,
-                target,
-                screenPos,
-                File: identity,
-                SelectedPaths: [.. _browser.SelectedPaths],
-                ShiftPressed: (Keyboard.Modifiers & ModifierKeys.Shift) != 0);
-            await _menus.ShowAsync(request);
+            var entries = target is null ? BuildBackgroundMenuEntries() : BuildIconMenuEntries(target);
+            if (entries.Count == 0)
+            {
+                DiagnosticLog.Trace("shell.desktop", "右键菜单：无可用项");
+                return;
+            }
+            DiagnosticLog.Trace("shell.desktop",
+                $"右键菜单：{(target is null ? "空白" : target.Entry.Path)} 项数={entries.Count} pos=({physical.X:F0},{physical.Y:F0}) 自绘");
+            DesktopMenuPopup.Show(entries, PopupPositioningService.ToScreenDipFromPhysical(physical, this));
         }
         catch (Exception ex)
         {
             DiagnosticLog.Trace("shell.desktop", $"右键菜单展示失败: {ex.Message}");
         }
+    }
+
+    // ===== 自绘右键菜单内容（2026-09-07 回归） =====
+
+    /// <summary>该文件是否适用「打开方式」：普通文件且非可执行/快捷方式/系统文件。</summary>
+    private static bool CanOpenWith(string path)
+    {
+        if (!File.Exists(path))
+        {
+            return false;
+        }
+        var ext = Path.GetExtension(path).ToLowerInvariant();
+        return ext is not (".exe" or ".bat" or ".cmd" or ".com" or ".msc"
+            or ".lnk" or ".url" or ".dll" or ".sys" or ".msi");
+    }
+
+    /// <summary>用指定应用打开文件（args 模板 %file%/%dir% 替换；失败静默 M10）。</summary>
+    private static void LaunchWithApp(string appPath, string argsTemplate, string filePath)
+    {
+        try
+        {
+            var args = argsTemplate
+                .Replace("%file%", "\"" + filePath + "\"")
+                .Replace("%dir%", "\"" + (Path.GetDirectoryName(filePath) ?? string.Empty) + "\"");
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+            {
+                FileName = appPath,
+                Arguments = args,
+                UseShellExecute = true
+            });
+        }
+        catch
+        {
+            // 启动失败静默（M10）
+        }
+    }
+
+    /// <summary>图标右键菜单（多选感知：右键项在选中集内 → 整集操作；explorer 同款）。</summary>
+    private IReadOnlyList<MenuItemDef> BuildIconMenuEntries(DesktopIconTarget target)
+    {
+        var primary = target.Entry.Path;
+        var multi = _browser.SelectedPaths.Contains(primary) && _browser.SelectedPaths.Count > 1;
+        var items = new List<MenuItemDef>
+        {
+            new MenuItemDef { Id = "open", Text = "打开", Kind = MenuItemKind.Command, IsDefault = true, Command = () => Open(target.Entry) },
+        };
+
+        // 打开方式（2026-09-07：自绘「用 xx 打开」，候选 = 本机常用软件按类别匹配，零第三方扩展依赖）
+        if (!multi && CanOpenWith(primary))
+        {
+            var candidates = ToolCatalog.MatchOpenWith(primary);
+            if (candidates.Count > 0)
+            {
+                var openWithChildren = new List<MenuItemDef>();
+                foreach (var (name, path, args) in candidates)
+                {
+                    openWithChildren.Add(new MenuItemDef
+                    {
+                        Id = "ow-" + path,
+                        Text = name,
+                        Kind = MenuItemKind.Command,
+                        Command = () => LaunchWithApp(path, args, primary)
+                    });
+                }
+                items.Add(new MenuItemDef { Id = "openWith", Text = "打开方式", Kind = MenuItemKind.Submenu, Children = openWithChildren });
+            }
+        }
+        items.Add(new MenuItemDef { Id = "sep1", Text = "", Kind = MenuItemKind.Separator });
+        items.Add(new MenuItemDef { Id = "cut", Text = "剪切", Kind = MenuItemKind.Command, GestureText = "Ctrl+X", Command = () => InvokeBrowserCut(primary) });
+        items.Add(new MenuItemDef { Id = "copy", Text = "复制", Kind = MenuItemKind.Command, GestureText = "Ctrl+C", Command = () => InvokeBrowserCopy(primary) });
+        if (_browser.CanPaste)
+        {
+            items.Add(new MenuItemDef { Id = "paste", Text = "粘贴", Kind = MenuItemKind.Command, GestureText = "Ctrl+V", Command = () => InvokeBrowserPaste() });
+        }
+        items.Add(new MenuItemDef { Id = "copyPath", Text = "复制路径", Kind = MenuItemKind.Command, GestureText = "Ctrl+Shift+C", Command = () => InvokeCopyPaths() });
+        items.Add(new MenuItemDef { Id = "sep2", Text = "", Kind = MenuItemKind.Separator });
+        items.Add(new MenuItemDef { Id = "delete", Text = "删除", Kind = MenuItemKind.Command, GestureText = "Delete", Command = () => InvokeBrowserDelete(primary) });
+        // 【2026-09-07 用户拍板】永久删除 → 卸载：对应用快捷方式（能解析到卸载注册表入口）显示"卸载"，
+        // 唤起应用本体卸载器；非应用 / 无卸载入口仍保留"永久删除"（Shift 扩展）。
+        if (!multi && UninstallResolver.TryResolve(primary, out var uninstallCmd))
+        {
+            items.Add(new MenuItemDef { Id = "uninstall", Text = "卸载", Kind = MenuItemKind.Command, Command = () => UninstallResolver.RunUninstaller(uninstallCmd ?? string.Empty) });
+        }
+        else
+        {
+            items.Add(new MenuItemDef { Id = "deletePermanent", Text = "永久删除", Kind = MenuItemKind.Command, GestureText = "Shift+Delete", Extended = true, Command = () => InvokePermanentDelete() });
+        }
+        if (!multi)
+        {
+            var mapped = _cellMenuTargets.FirstOrDefault(kv =>
+                string.Equals(kv.Value.Entry.Path, primary, StringComparison.OrdinalIgnoreCase));
+            if (mapped.Value.Entry is not null)
+            {
+                items.Add(new MenuItemDef { Id = "rename", Text = "重命名", Kind = MenuItemKind.Command, GestureText = "F2", Command = () => InvokeStartRename(mapped.Key, mapped.Value.Label, primary) });
+            }
+        }
+        // 【2026-09-07 恢复转换挂点】格式转换：矩阵全部目标（引擎缺失置灰），
+        // 单文件/同格式批量共用 shell-convert 的 ConvertMenuService 构建。
+        if (_convertMenu is not null)
+        {
+            var paths = multi
+                ? _browser.SelectedPaths.ToList()
+                : new List<string> { primary };
+            var convertItems = _convertMenu.BuildMenuItems(paths);
+            if (convertItems.Count > 0)
+            {
+                items.Add(new MenuItemDef { Id = "sepConvert", Text = "", Kind = MenuItemKind.Separator });
+                items.AddRange(convertItems);
+            }
+        }
+        // 【2026-09-07 压缩/解压】zip 内置永远可用；rar/7z 解压需 WinRAR 引擎（置灰不隐藏，与转换区同原则）。
+        if (_archive is not null)
+        {
+            var archivePaths = multi ? _browser.SelectedPaths.ToList() : new List<string> { primary };
+            // 「压缩到 ▸」：zip 内置永远可用；7z/rar 按引擎探测置灰（不隐藏）。
+            var compressChildren = new List<MenuItemDef>
+            {
+                new MenuItemDef
+                {
+                    Id = "compressZip", Text = "压缩为 .zip", Kind = MenuItemKind.Command,
+                    Command = () => RunArchiveNotify(() => _archive.CompressZipAsync(archivePaths)),
+                },
+                new MenuItemDef
+                {
+                    Id = "compress7z", Text = "压缩为 .7z", Kind = MenuItemKind.Command,
+                    IsEnabled = _archive.SevenZipAvailable,
+                    Command = () => RunArchiveNotify(() => _archive.Compress7zAsync(archivePaths)),
+                },
+                new MenuItemDef
+                {
+                    Id = "compressRar", Text = "压缩为 .rar", Kind = MenuItemKind.Command,
+                    IsEnabled = _archive.RarAvailable,
+                    Command = () => RunArchiveNotify(() => _archive.CompressRarAsync(archivePaths)),
+                },
+            };
+            items.Add(new MenuItemDef { Id = "compress", Text = "压缩到", Kind = MenuItemKind.Submenu, Children = compressChildren });
+            if (!multi && IsArchiveFile(primary))
+            {
+                var isZip = string.Equals(System.IO.Path.GetExtension(primary), ".zip", StringComparison.OrdinalIgnoreCase);
+                var named = System.IO.Path.GetFileNameWithoutExtension(primary);
+                var children = new List<MenuItemDef>
+                {
+                    new MenuItemDef
+                    {
+                        Id = "unzipHere", Text = "解压到当前文件夹", Kind = MenuItemKind.Command,
+                        IsEnabled = isZip || _archive.WinRarAvailable,
+                        Command = () => RunArchiveNotify(() => _archive.ExtractAsync(primary, false)),
+                    },
+                    new MenuItemDef
+                    {
+                        Id = "unzipTo", Text = "解压到 " + named + "\\", Kind = MenuItemKind.Command,
+                        IsEnabled = isZip || _archive.WinRarAvailable,
+                        Command = () => RunArchiveNotify(() => _archive.ExtractAsync(primary, true)),
+                    },
+                };
+                items.Add(new MenuItemDef { Id = "unzip", Text = "解压到", Kind = MenuItemKind.Submenu, Children = children });
+            }
+        }
+
+        items.Add(new MenuItemDef { Id = "sep3", Text = "", Kind = MenuItemKind.Separator });
+        items.Add(new MenuItemDef { Id = "properties", Text = "属性", Kind = MenuItemKind.Command, GestureText = "Alt+Enter", Command = () => InvokeShowProperties(primary) });
+        return items;
+    }
+
+    /// <summary>压缩/解压异步执行 + UI 线程 MessageBox 反馈（与转换区 RunAndNotify 同模式，标题独立）。</summary>
+    private void RunArchiveNotify(Func<System.Threading.Tasks.Task<BetterDesktop.Shell.Convert.Contracts.ArchiveResult>> op)
+    {
+        _ = System.Threading.Tasks.Task.Run(async () =>
+        {
+            string message;
+            try
+            {
+                var r = await op();
+                message = r.Success ? r.Message : r.Message;
+            }
+            catch (Exception ex)
+            {
+                message = $"操作异常：{ex.Message}";
+            }
+
+            var dispatcher = Application.Current?.Dispatcher;
+            if (dispatcher is null || dispatcher.CheckAccess())
+            {
+                MessageBox.Show(message, "压缩与解压");
+                return;
+            }
+
+            _ = dispatcher.BeginInvoke(() => MessageBox.Show(message, "压缩与解压"));
+        });
+    }
+
+    /// <summary>归档扩展名判定（.zip/.7z/.rar）。</summary>
+    private static bool IsArchiveFile(string path)
+    {
+        var ext = System.IO.Path.GetExtension(path);
+        return string.Equals(ext, ".zip", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(ext, ".7z", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(ext, ".rar", StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>桌面空白右键菜单。</summary>
+    private IReadOnlyList<MenuItemDef> BuildBackgroundMenuEntries()
+    {
+        var sort = InvokeSortKey();
+        var iconsHidden = _settings?.Get("desktop.iconsHidden", false) ?? false;
+        var items = new List<MenuItemDef>
+        {
+            new MenuItemDef { Id = "refresh", Text = "刷新", Kind = MenuItemKind.Command, Command = () => InvokeBrowserRefresh() },
+            new MenuItemDef { Id = "sep1", Text = "", Kind = MenuItemKind.Separator },
+            new MenuItemDef
+            {
+                Id = "sortBy", Text = "排序方式", Kind = MenuItemKind.Submenu,
+                Children =
+                [
+                    new MenuItemDef { Id = "sortSmart", Text = "智能", Kind = MenuItemKind.Radio, IsChecked = string.IsNullOrEmpty(sort), Command = () => InvokeSetSort(string.Empty) },
+                    new MenuItemDef { Id = "sortName", Text = "名称", Kind = MenuItemKind.Radio, IsChecked = sort == "name", Command = () => InvokeSetSort("name") },
+                    new MenuItemDef { Id = "sortModified", Text = "修改日期", Kind = MenuItemKind.Radio, IsChecked = sort == "modified", Command = () => InvokeSetSort("modified") },
+                    new MenuItemDef { Id = "sortType", Text = "类型", Kind = MenuItemKind.Radio, IsChecked = sort == "type", Command = () => InvokeSetSort("type") },
+                    new MenuItemDef { Id = "sortSize", Text = "大小", Kind = MenuItemKind.Radio, IsChecked = sort == "size", Command = () => InvokeSetSort("size") },
+                ]
+            },
+            new MenuItemDef { Id = "autoArrange", Text = "自动排列图标", Kind = MenuItemKind.Toggle, IsChecked = AutoArrange, Command = () => _settings?.Set("desktop.autoArrange", !AutoArrange) },
+            new MenuItemDef { Id = "snapGrid", Text = "将图标与网格对齐", Kind = MenuItemKind.Toggle, IsChecked = SnapToGrid, Command = () => _settings?.Set("desktop.snapToGrid", !SnapToGrid) },
+            new MenuItemDef { Id = "sep2", Text = "", Kind = MenuItemKind.Separator },
+            new MenuItemDef
+            {
+                Id = "new", Text = "新建", Kind = MenuItemKind.Submenu,
+                Children =
+                [
+                    new MenuItemDef { Id = "newFolder", Text = "文件夹", Kind = MenuItemKind.Command, Command = () => InvokeBrowserNewFolder() },
+                    new MenuItemDef { Id = "newSep1", Text = "", Kind = MenuItemKind.Separator },
+                    new MenuItemDef { Id = "newText", Text = "文本文档", Kind = MenuItemKind.Command, Command = () => InvokeCreateTextFile() },
+                    new MenuItemDef { Id = "newWord", Text = "Word 文档", Kind = MenuItemKind.Command, Command = () => _browser.CreateFile("新建 Microsoft Word 文档", "docx", NewFileTemplates.Docx) },
+                    new MenuItemDef { Id = "newExcel", Text = "Excel 工作表", Kind = MenuItemKind.Command, Command = () => _browser.CreateFile("新建 Microsoft Excel 工作表", "xlsx", NewFileTemplates.Xlsx) },
+                    new MenuItemDef { Id = "newPowerPoint", Text = "PowerPoint 演示文稿", Kind = MenuItemKind.Command, Command = () => _browser.CreateFile("新建 Microsoft PowerPoint 演示文稿", "pptx", NewFileTemplates.Pptx) },
+                    new MenuItemDef { Id = "newZip", Text = "压缩(zipped)文件夹", Kind = MenuItemKind.Command, Command = () => _browser.CreateFile("新建压缩(zipped)文件夹", "zip", NewFileTemplates.Zip) },
+                    new MenuItemDef { Id = "newBmp", Text = "位图图像", Kind = MenuItemKind.Command, Command = () => _browser.CreateFile("新建位图图像", "bmp", NewFileTemplates.Bmp) },
+                    new MenuItemDef { Id = "newSep2", Text = "", Kind = MenuItemKind.Separator },
+                    new MenuItemDef { Id = "newMarkdown", Text = "Markdown 文档", Kind = MenuItemKind.Command, Command = () => _browser.CreateFile("新建 Markdown 文档", "md", NewFileTemplates.Markdown) },
+                    new MenuItemDef { Id = "newJson", Text = "JSON 文件", Kind = MenuItemKind.Command, Command = () => _browser.CreateFile("新建 JSON 文件", "json", NewFileTemplates.Json) },
+                    new MenuItemDef { Id = "newXml", Text = "XML 文档", Kind = MenuItemKind.Command, Command = () => _browser.CreateFile("新建 XML 文档", "xml", NewFileTemplates.Xml) },
+                    new MenuItemDef { Id = "newHtml", Text = "HTML 文档", Kind = MenuItemKind.Command, Command = () => _browser.CreateFile("新建 HTML 文档", "html", NewFileTemplates.Html) },
+                    new MenuItemDef { Id = "newCsv", Text = "CSV 文件", Kind = MenuItemKind.Command, Command = () => _browser.CreateFile("新建 CSV 文件", "csv", NewFileTemplates.Csv) },
+                    new MenuItemDef { Id = "newBat", Text = "批处理文件", Kind = MenuItemKind.Command, Command = () => _browser.CreateFile("新建批处理文件", "bat", NewFileTemplates.Bat) },
+                    new MenuItemDef { Id = "newPs1", Text = "PowerShell 脚本", Kind = MenuItemKind.Command, Command = () => _browser.CreateFile("新建 PowerShell 脚本", "ps1", NewFileTemplates.Ps1) },
+                    new MenuItemDef { Id = "newPy", Text = "Python 脚本", Kind = MenuItemKind.Command, Command = () => _browser.CreateFile("新建 Python 脚本", "py", NewFileTemplates.Py) },
+                ]
+            },
+        };
+        if (_browser.CanPaste)
+        {
+            items.Add(new MenuItemDef { Id = "paste", Text = "粘贴", Kind = MenuItemKind.Command, GestureText = "Ctrl+V", Command = () => InvokeBrowserPaste() });
+        }
+        items.Add(new MenuItemDef { Id = "sep3", Text = "", Kind = MenuItemKind.Separator });
+        items.Add(new MenuItemDef
+        {
+            Id = "showIcons",
+            Text = "显示桌面图标",
+            Kind = MenuItemKind.Toggle,
+            IsChecked = !iconsHidden,
+            Command = () => _settings?.Set("desktop.iconsHidden", !iconsHidden)
+        });
+        items.Add(new MenuItemDef { Id = "displaySettings", Text = "显示设置", Kind = MenuItemKind.Command, Command = () => OpenSettings("ms-settings:display") });
+        items.Add(new MenuItemDef { Id = "personalize", Text = "个性化", Kind = MenuItemKind.Command, Command = () => OpenSettings("ms-settings:personalization") });
+        // 【2026-09-07 用户拍板】功能管理：BetterDesktop 功能总开关（自绘桌面 / 系统右键·格式转换），
+        // 开关状态持久化 = 注册表/设置真实状态（IsChecked 每次构建菜单时读，无缓存漂移）。
+        items.Add(new MenuItemDef { Id = "sepFeatures", Text = "", Kind = MenuItemKind.Separator });
+        items.Add(new MenuItemDef
+        {
+            Id = "features",
+            Text = "功能管理",
+            Kind = MenuItemKind.Submenu,
+            Children =
+            [
+                new MenuItemDef
+                {
+                    Id = "featDesktop", Text = "自绘桌面", Kind = MenuItemKind.Toggle,
+                    IsChecked = _settings?.Get("components.desktop", true) ?? true,
+                    Command = () => _settings?.Set("components.desktop",
+                        !(_settings?.Get("components.desktop", true) ?? true)),
+                },
+                new MenuItemDef
+                {
+                    Id = "featConvert", Text = "系统右键 · 格式转换", Kind = MenuItemKind.Toggle,
+                    IsChecked = DesktopSystemMenuRegistrar.IsConvertRegistered(),
+                    Command = () =>
+                    {
+                        if (DesktopSystemMenuRegistrar.IsConvertRegistered())
+                        {
+                            DesktopSystemMenuRegistrar.UnregisterConvert();
+                        }
+                        else
+                        {
+                            DesktopSystemMenuRegistrar.EnsureConvertRegistered();
+                        }
+                    },
+                },
+                new MenuItemDef
+                {
+                    Id = "featArchive", Text = "系统右键 · 压缩解压", Kind = MenuItemKind.Toggle,
+                    IsChecked = DesktopSystemMenuRegistrar.IsArchiveRegistered(),
+                    Command = () =>
+                    {
+                        if (DesktopSystemMenuRegistrar.IsArchiveRegistered())
+                        {
+                            DesktopSystemMenuRegistrar.UnregisterArchive();
+                        }
+                        else
+                        {
+                            DesktopSystemMenuRegistrar.EnsureArchiveRegistered();
+                        }
+                    },
+                },
+                new MenuItemDef
+                {
+                    Id = "featMenubar", Text = "隐藏菜单栏", Kind = MenuItemKind.Toggle,
+                    IsChecked = !(_settings?.Get("components.menubar", true) ?? true),
+                    Command = () => _settings?.Set("components.menubar",
+                        !(_settings?.Get("components.menubar", true) ?? true)),
+                },
+                new MenuItemDef
+                {
+                    Id = "featDock", Text = "隐藏 Dock", Kind = MenuItemKind.Toggle,
+                    IsChecked = !(_settings?.Get("components.dock", true) ?? true),
+                    Command = () => _settings?.Set("components.dock",
+                        !(_settings?.Get("components.dock", true) ?? true)),
+                },
+                new MenuItemDef
+                {
+                    Id = "featTaskbar", Text = "隐藏任务栏", Kind = MenuItemKind.Toggle,
+                    IsChecked = !(_settings?.Get("components.wintaskbar", true) ?? true),
+                    Command = () => _settings?.Set("components.wintaskbar",
+                        !(_settings?.Get("components.wintaskbar", true) ?? true)),
+                },
+                new MenuItemDef { Id = "featHint", Text = "格式转换/压缩解压开关影响系统文件右键入口；自绘菜单内相应功能始终可用", Kind = MenuItemKind.Command, IsEnabled = false },
+            ],
+        });
+        // 【2026-09-07 用户拍板】关闭自绘桌面：切回 explorer 原生桌面。
+        // 反向"开启"入口在系统桌面右键菜单「切换自绘桌面」（DesktopSystemMenuRegistrar 注册）——
+        // 关闭后自绘菜单本身消失，只能从系统菜单/设置中心重新开启。
+        items.Add(new MenuItemDef { Id = "sepToggleDesktop", Text = "", Kind = MenuItemKind.Separator });
+        items.Add(new MenuItemDef { Id = "toggleDesktop", Text = "关闭自绘桌面", Kind = MenuItemKind.Command, Command = () => _settings?.Set("components.desktop", false) });
+        return items;
     }
 
     // ===== 模板回调包装（DesktopMenuTemplates 经此访问控件能力；保持原 private 方法不动） =====
@@ -1743,10 +2472,7 @@ public sealed class DesktopIconsControl : ScrollViewer, IDisposable
     /// </summary>
     private void OnControlPreviewKeyDown(object sender, KeyEventArgs e)
     {
-        if (_menus is { IsOpen: true })
-        {
-            return; // 弹层打开：按键由 MenuHost 自身处理，避免重复触发
-        }
+        // 2026-09-05 收口：MenuHost 自绘弹层退役，不再需要按键豁免判断。
 
         var primary = _browser.SelectedPaths.FirstOrDefault();
         var mod = Keyboard.Modifiers;
@@ -1826,8 +2552,9 @@ public sealed class DesktopIconsControl : ScrollViewer, IDisposable
     /// <summary>设置排序键：Browser 即时重载 + desktop.sortKey 持久化（下次启动经构造恢复）。</summary>
     internal void InvokeSetSort(string? key)
     {
+        var desc = _settings?.Get("desktop.sortDesc", false) ?? false;
         _settings?.Set("desktop.sortKey", key ?? string.Empty);
-        _browser.SetSort(key);
+        _browser.SetSort(key, desc);
     }
 
     internal void InvokeCreateTextFile() => _browser.CreateTextFile();
