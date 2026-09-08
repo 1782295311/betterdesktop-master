@@ -2,7 +2,9 @@ using System;
 using System.Collections.Generic;
 using System.Runtime.InteropServices;
 using System.Windows;
+using BetterDesktop.Shell.Core.Native;
 using BetterDesktop.Shell.Dock.Models;
+using BetterDesktop.Shell.Dock.Native;
 using BetterDesktop.Shell.Settings.Contracts;
 
 namespace BetterDesktop.Shell.Dock.Services;
@@ -76,7 +78,7 @@ public sealed class DockLayoutService : IDockLayoutService
     {
         try
         {
-            var hwnd = GetForegroundWindow();
+            var hwnd = NativeMethods.GetForegroundWindow();
             if (hwnd == IntPtr.Zero)
             {
                 return false;
@@ -85,7 +87,7 @@ public sealed class DockLayoutService : IDockLayoutService
             // ⚠️ 前台是"桌面宿主"（Progman/WorkerW）或本进程窗口（自绘桌面/菜单栏/dock）时
             //    绝不算全屏——它们是无边框全屏窗口，会被下方覆盖判定误判，
             //    导致"一点桌面 dock 就消失、且永远不再出现"（实测回归）。
-            _ = GetWindowThreadProcessId(hwnd, out var pid);
+            _ = NativeMethods.GetWindowThreadProcessId(hwnd, out var pid);
             if (pid == (uint)Environment.ProcessId)
             {
                 return false;
@@ -96,7 +98,15 @@ public sealed class DockLayoutService : IDockLayoutService
                 return false;
             }
 
-            if (!GetWindowRect(hwnd, out var rect))
+            // P2c（7404）：多任务视图（AltTab/任务视图/SnapAssist）可见时隐藏 dock——
+            // 此类瞬态覆盖层不满足"前台窗口覆盖整屏且无标题栏"的常规全屏判定。
+            // 只轮询查询不注册回调；服务不可用（低版本/QueryService 失败）降级 false 不误隐藏。
+            if (MultitaskingViewVisibilityService.IsAnyViewVisible())
+            {
+                return true;
+            }
+
+            if (!NativeMethods.GetWindowRect(hwnd, out var rect))
             {
                 return false;
             }
@@ -115,7 +125,7 @@ public sealed class DockLayoutService : IDockLayoutService
                 return false;
             }
 
-            var style = (uint)GetWindowLong(hwnd, GWL_STYLE);
+            var style = (uint)NativeMethods.GetWindowLong(hwnd, GWL_STYLE);
             var hasCaption = (style & WS_CAPTION) != 0;
 
             return !hasCaption;
@@ -215,51 +225,30 @@ public sealed class DockLayoutService : IDockLayoutService
     private const int GWL_STYLE = -16;
     private const uint WS_CAPTION = 0x00C00000;
 
-    [DllImport("user32.dll")]
-    private static extern IntPtr GetForegroundWindow();
-
-    [DllImport("user32.dll")]
-    private static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
-
-    [DllImport("user32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
-    private static extern int GetClassName(IntPtr hWnd, System.Text.StringBuilder lpClassName, int nMaxCount);
-
     /// <summary>取窗口类名（失败返回空串，M10）。</summary>
     private static string GetClassName(IntPtr hWnd)
     {
         var sb = new System.Text.StringBuilder(256);
-        _ = GetClassName(hWnd, sb, sb.Capacity);
+        _ = NativeMethods.GetClassName(hWnd, sb, sb.Capacity);
         return sb.ToString();
     }
 
     [DllImport("user32.dll")]
-    private static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect);
-
-    [DllImport("user32.dll", EntryPoint = "GetWindowLong")]
-    private static extern int GetWindowLong(IntPtr hWnd, int nIndex);
-
-    [DllImport("user32.dll")]
     private static extern bool EnumDisplayMonitors(IntPtr hdc, IntPtr lprcClip, MonitorEnumProc lpfnEnum, IntPtr dwData);
-
-    [DllImport("user32.dll")]
-    private static extern IntPtr MonitorFromWindow(IntPtr hwnd, uint dwFlags);
-
-    [DllImport("user32.dll")]
-    private static extern bool GetMonitorInfo(IntPtr hMonitor, ref MONITORINFO lpmi);
 
     private const uint MONITOR_DEFAULTTONEAREST = 2;
 
     /// <summary>
     /// 返回给定窗口矩形所在显示器的工作区矩形（用于全屏判定对齐到正确屏幕）。
     /// </summary>
-    private Rect MonitorFromWindowRect(RECT windowRect)
+    private Rect MonitorFromWindowRect(NativeMethods.RECT windowRect)
     {
         // 以窗口中心定位所在显示器
         var cx = (windowRect.Left + windowRect.Right) / 2;
         var cy = (windowRect.Top + windowRect.Bottom) / 2;
-        var hMonitor = MonitorFromPoint(cx, cy, MONITOR_DEFAULTTONEAREST);
-        var info = new MONITORINFO { cbSize = Marshal.SizeOf<MONITORINFO>() };
-        if (hMonitor != IntPtr.Zero && GetMonitorInfo(hMonitor, ref info))
+        var hMonitor = NativeMethods.MonitorFromPoint(new NativeMethods.POINT { X = cx, Y = cy }, MONITOR_DEFAULTTONEAREST);
+        var info = new NativeMethods.MONITORINFO { cbSize = Marshal.SizeOf<NativeMethods.MONITORINFO>() };
+        if (hMonitor != IntPtr.Zero && NativeMethods.GetMonitorInfo(hMonitor, ref info))
         {
             var w = info.rcWork;
             return new Rect(w.Left, w.Top, w.Right - w.Left, w.Bottom - w.Top);
@@ -268,6 +257,4 @@ public sealed class DockLayoutService : IDockLayoutService
         return new Rect(0, 0, SystemParameters.PrimaryScreenWidth, SystemParameters.PrimaryScreenHeight);
     }
 
-    [DllImport("user32.dll")]
-    private static extern IntPtr MonitorFromPoint(int x, int y, uint dwFlags);
 }

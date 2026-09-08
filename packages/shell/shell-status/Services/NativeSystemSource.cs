@@ -3,13 +3,14 @@
 
 namespace BetterDesktop.Shell.Status.Services;
 
+using BetterDesktop.Shell.Core.Native;
 using Contracts;
 using Native;
 
 /// <summary>生产环境使用的系统原始值读取源（直接走 P/Invoke Interop）。</summary>
 public sealed class NativeSystemSource : ISystemSource
 {
-    public MemoryStatusEx? ReadMemory() => MemoryInterop.Read();
+    public NativeMethods.MemoryStatusEx? ReadMemory() => MemoryInterop.Read();
 
     public SystemPowerStatus? ReadPower() => BatteryInterop.Read();
 

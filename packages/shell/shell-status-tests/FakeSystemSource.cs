@@ -1,6 +1,7 @@
 // BetterDesktop.Shell.Status.Tests — 可编写 FakeSystemSource
 // 复用公共源接口 ISystemSource，测试可控注入每路原始值，稳定验证语义层输出。
 
+using BetterDesktop.Shell.Core.Native;
 using BetterDesktop.Shell.Status.Contracts;
 using BetterDesktop.Shell.Status.Native;
 
@@ -11,7 +12,7 @@ namespace BetterDesktop.Shell.Status.Tests;
 /// </summary>
 internal sealed class FakeSystemSource : ISystemSource
 {
-    public MemoryStatusEx? Memory { get; set; }
+    public NativeMethods.MemoryStatusEx? Memory { get; set; }
     public SystemPowerStatus? Power { get; set; }
     public AudioEndpointStatus Volume { get; set; }
     public AudioEndpointStatus Microphone { get; set; }
@@ -21,7 +22,7 @@ internal sealed class FakeSystemSource : ISystemSource
     public IReadOnlyList<KeyboardLayoutItem> KeyboardLayouts { get; set; } = Array.Empty<KeyboardLayoutItem>();
     public IReadOnlyList<KeyboardLayoutItem> RegisteredLayouts { get; set; } = Array.Empty<KeyboardLayoutItem>();
 
-    public MemoryStatusEx? ReadMemory() => Memory;
+    public NativeMethods.MemoryStatusEx? ReadMemory() => Memory;
     public SystemPowerStatus? ReadPower() => Power;
     public AudioEndpointStatus ReadVolumeEndpoint() => Volume;
     public AudioEndpointStatus ReadMicrophoneEndpoint() => Microphone;
@@ -32,8 +33,8 @@ internal sealed class FakeSystemSource : ISystemSource
     public IReadOnlyList<KeyboardLayoutItem>? ReadRegisteredKeyboardLayouts() => RegisteredLayouts;
 
     /// <summary>便捷：构造一条原始内存记录。</summary>
-    public static MemoryStatusEx MakeMemory(uint loadPercent, ulong total = 32ul * 1024 * 1024 * 1024)
-        => new() { dwLength = (uint)System.Runtime.InteropServices.Marshal.SizeOf<MemoryStatusEx>(), dwMemoryLoad = loadPercent, ullTotalPhys = total, ullAvailPhys = total * (100 - loadPercent) / 100 };
+    public static NativeMethods.MemoryStatusEx MakeMemory(uint loadPercent, ulong total = 32ul * 1024 * 1024 * 1024)
+        => new() { dwLength = (uint)System.Runtime.InteropServices.Marshal.SizeOf<NativeMethods.MemoryStatusEx>(), dwMemoryLoad = loadPercent, ullTotalPhys = total, ullAvailPhys = total * (100 - loadPercent) / 100 };
 
     /// <summary>便捷：构造一条原始电源记录。</summary>
     public static SystemPowerStatus MakePower(byte acLine, byte flag, byte percent, uint lifeTimeSeconds = 3600)

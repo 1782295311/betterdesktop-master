@@ -1,16 +1,24 @@
 // BetterDesktop.Shell.Desktop — 桌面/文件夹浏览器实现
 // 职责：Location 导航（历史栈）+ 条目枚举（后台）+ 选中集 + 文件操作（剪贴板剪切/复制/粘贴、
-//       回收站删除 SHFileOperation、重命名）。
+//       回收站删除 SHFileOperation、重命名）+ 文件系统监听（自绘网格同步）。
 // 线程：枚举在后台 Task；所有事件经 SynchronizationContext（UI）回抛——订阅方安全改 WPF 控件。
+// 【回归修复 2026-09-06 / P1-3】桌面右键委托 explorer 后，explorer 侧删除/重命名/新建不会
+// 自动反映到自绘网格（数据源分叉：自绘 DesktopBrowser vs explorer 隐藏 SysListView32）——
+// 挂 FileSystemWatcher（用户桌面+公共桌面，500ms 防抖，滤 desktop.ini）兜底同步。
 
 using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
+using System.Threading;
 using System.Threading.Tasks;
+using BetterDesktop.Kernel.Core;
 using BetterDesktop.Shell.ContextMenus.Services;
+using BetterDesktop.Shell.Core.Native;
 using BetterDesktop.Shell.Desktop.Contracts;
+using BetterDesktop.Shell.Settings.Contracts;
+using Microsoft.Win32;
 
 namespace BetterDesktop.Shell.Desktop.Services;
 
@@ -25,6 +33,14 @@ public sealed class DesktopBrowser : IDesktopBrowser
     private readonly List<BrowserEntry> _items = new();
     private readonly HashSet<string> _selection = new(StringComparer.OrdinalIgnoreCase);
     private readonly SynchronizationContext? _sync;
+    private readonly List<FileSystemWatcher> _fsWatchers = [];
+    private readonly object _fsGate = new();
+    private System.Threading.Timer? _fsDebounce;
+    private const int FsDebounceMs = 500;
+
+    private ISettingsService? _settings;
+    private Thread? _sortThread;
+    private const int SortBridgeIntervalMs = 1500;
 
     private string _location;
     // 剪贴板已迁至 FileClipboard（CF_HDROP 系统剪贴板，与资源管理器双向互通）：
@@ -32,10 +48,13 @@ public sealed class DesktopBrowser : IDesktopBrowser
     private int _generation;               // 丢弃过期枚举结果
     private bool _busy;
 
-    public DesktopBrowser()
+    public DesktopBrowser(ISettingsService? settings = null)
     {
         _sync = SynchronizationContext.Current;
+        _settings = settings;
         _location = DesktopPath;
+        EnsureFileSystemWatch();
+        EnsureSortBridge();
     }
 
     public string DesktopPath => Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory);
@@ -103,6 +122,79 @@ public sealed class DesktopBrowser : IDesktopBrowser
 
     public void Refresh() => LoadLocation(_location);
 
+    // ======== 文件系统监听（P1-3 网格同步） ========
+
+    /// <summary>监听用户桌面与公共桌面——explorer 菜单操作与外部程序变化都落在文件系统层，
+    /// watcher 兜底让自绘网格自动同步。不可监听（权限/网络桌面）时静默退化为手动/委托后刷新。</summary>
+    private void EnsureFileSystemWatch()
+    {
+        if (_fsWatchers.Count > 0)
+        {
+            return;
+        }
+        var dirs = new List<string>();
+        var user = Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory);
+        var common = Environment.GetFolderPath(Environment.SpecialFolder.CommonDesktopDirectory);
+        if (!string.IsNullOrWhiteSpace(user))
+        {
+            dirs.Add(user);
+        }
+        if (!string.IsNullOrWhiteSpace(common) && !dirs.Contains(common, StringComparer.OrdinalIgnoreCase))
+        {
+            dirs.Add(common);
+        }
+
+        foreach (var dir in dirs)
+        {
+            try
+            {
+                var watcher = new FileSystemWatcher(dir)
+                {
+                    IncludeSubdirectories = false,
+                    NotifyFilter = NotifyFilters.FileName | NotifyFilters.DirectoryName | NotifyFilters.LastWrite,
+                };
+                watcher.Created += OnFsChange;
+                watcher.Deleted += OnFsChange;
+                watcher.Renamed += OnFsRename;
+                watcher.Changed += OnFsChange;
+                watcher.EnableRaisingEvents = true;
+                _fsWatchers.Add(watcher);
+            }
+            catch
+            {
+                // 桌面目录不可监听（权限/网络）→ 退化为手动刷新（M10 静默）
+            }
+        }
+    }
+
+    private void OnFsChange(object sender, FileSystemEventArgs e)
+    {
+        if (e.Name is not null && e.Name.Equals("desktop.ini", StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+        ScheduleRefresh();
+    }
+
+    private void OnFsRename(object sender, RenamedEventArgs e)
+    {
+        if (e.Name is not null && e.Name.Equals("desktop.ini", StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+        ScheduleRefresh();
+    }
+
+    /// <summary>500ms 防抖合并高频事件（复制大文件/批量操作时只刷一次）。</summary>
+    private void ScheduleRefresh()
+    {
+        lock (_fsGate)
+        {
+            _fsDebounce ??= new System.Threading.Timer(_ => Post(Refresh), null, Timeout.Infinite, Timeout.Infinite);
+            _fsDebounce.Change(FsDebounceMs, Timeout.Infinite);
+        }
+    }
+
     // ======== shell 命名空间虚拟项（桌面图标） ========
 
     // explorer 桌面同款虚拟项 CLSID（"::{CLSID}" 解析路径）
@@ -126,23 +218,18 @@ public sealed class DesktopBrowser : IDesktopBrowser
         public string szTypeName;
     }
 
-    [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
-    private static extern int SHParseDisplayName(string pszName, IntPtr pbc, out IntPtr ppidl, uint sfgaoIn, out uint psfgaoOut);
-
-    [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
-    private static extern IntPtr SHGetFileInfo(IntPtr pidl, uint dwFileAttributes, ref SHFILEINFO psfi, uint cbFileInfo, uint uFlags);
 
     /// <summary>解析 shell 项的本地化显示名（随系统语言，如"此电脑"）；失败用回落名。</summary>
     private static string ResolveShellName(string clsidPath, string fallback)
     {
         try
         {
-            if (SHParseDisplayName(clsidPath, IntPtr.Zero, out var pidl, 0, out _) == 0 && pidl != IntPtr.Zero)
+            if (NativeMethods.SHParseDisplayName(clsidPath, IntPtr.Zero, out var pidl, 0, out _) == 0 && pidl != IntPtr.Zero)
             {
                 try
                 {
-                    var info = new SHFILEINFO();
-                    if (SHGetFileInfo(pidl, 0, ref info, (uint)Marshal.SizeOf<SHFILEINFO>(), ShgfiDisplayname | ShgfiPidl) != IntPtr.Zero
+                    var info = new NativeMethods.SHFILEINFO();
+                    if (NativeMethods.SHGetFileInfo(pidl, 0, ref info, (uint)Marshal.SizeOf<SHFILEINFO>(), ShgfiDisplayname | ShgfiPidl) != IntPtr.Zero
                         && !string.IsNullOrWhiteSpace(info.szDisplayName))
                     {
                         return info.szDisplayName;
@@ -174,38 +261,39 @@ public sealed class DesktopBrowser : IDesktopBrowser
         Task.Run(() =>
         {
             var entries = new List<BrowserEntry>();
-            try
+            // 同名去重（用户桌面优先于公共桌面，与 explorer 桌面合并语义一致）。
+            // 【2026-09-07】seen/Collect 定义在 try 外：catch 重试（瞬态枚举失败 800ms 后）复用。
+            var seen = new HashSet<string>(StringComparer.CurrentCultureIgnoreCase);
+
+            void Collect(string dir)
             {
-                // 同名去重（用户桌面优先于公共桌面，与 explorer 桌面合并语义一致）
-                var seen = new HashSet<string>(StringComparer.CurrentCultureIgnoreCase);
-
-                void Collect(string dir)
+                foreach (var d in Directory.EnumerateDirectories(dir))
                 {
-                    foreach (var d in Directory.EnumerateDirectories(dir))
+                    if (seen.Add(Path.GetFileName(d)))
                     {
-                        if (seen.Add(Path.GetFileName(d)))
-                        {
-                            var info = new FileInfo(d);
-                            entries.Add(new BrowserEntry(Path.GetFileName(d), d, true,
-                                0, info.LastWriteTime, "文件夹"));
-                        }
-                    }
-
-                    foreach (var f in Directory.EnumerateFiles(dir))
-                    {
-                        var name = Path.GetFileName(f);
-                        if (name.Equals("desktop.ini", StringComparison.OrdinalIgnoreCase)) continue;
-                        if (seen.Add(name))
-                        {
-                            var info = new FileInfo(f);
-                            var ext = Path.GetExtension(f);
-                            var kind = ext.Length > 0 ? ext[1..].ToUpperInvariant() + " 文件" : "文件";
-                            entries.Add(new BrowserEntry(name, f, false,
-                                info.Length, info.LastWriteTime, kind));
-                        }
+                        var info = new FileInfo(d);
+                        entries.Add(new BrowserEntry(Path.GetFileName(d), d, true,
+                            0, info.LastWriteTime, "文件夹"));
                     }
                 }
 
+                foreach (var f in Directory.EnumerateFiles(dir))
+                {
+                    var name = Path.GetFileName(f);
+                    if (name.Equals("desktop.ini", StringComparison.OrdinalIgnoreCase)) continue;
+                    if (seen.Add(name))
+                    {
+                        var info = new FileInfo(f);
+                        var ext = Path.GetExtension(f);
+                        var kind = ext.Length > 0 ? ext[1..].ToUpperInvariant() + " 文件" : "文件";
+                        entries.Add(new BrowserEntry(name, f, false,
+                            info.Length, info.LastWriteTime, kind));
+                    }
+                }
+            }
+
+            try
+            {
                 Collect(path);
 
                 // 桌面语义对齐 explorer：桌面 = 用户桌面 ∪ 公共桌面
@@ -229,18 +317,64 @@ public sealed class DesktopBrowser : IDesktopBrowser
 
                 entries = ApplySort(entries);
             }
-            catch
+            catch (Exception ex)
             {
                 // 目录不可读（权限/已删除）：返回空列表（M10）
+                // 【2026-09-07 诊断】瞬态枚举失败曾致桌面图标不加载且无任何日志（用户实测）：
+                // 显式记录 + 800ms 后整体重试一次（含公共桌面合并与虚拟项注入）。
+                DiagnosticLog.Trace("shell.desktop", $"桌面枚举失败: {ex.Message}");
+                try
+                {
+                    Thread.Sleep(800);
+                    entries.Clear();
+                    Collect(path);
+                    if (string.Equals(path, DesktopPath, StringComparison.OrdinalIgnoreCase))
+                    {
+                        var common = Environment.GetFolderPath(Environment.SpecialFolder.CommonDesktopDirectory);
+                        if (!string.IsNullOrEmpty(common) && !string.Equals(common, path, StringComparison.OrdinalIgnoreCase))
+                        {
+                            Collect(common);
+                        }
+                        entries.Add(new BrowserEntry(ResolveShellName(ThisPcClsid, "此电脑"), ThisPcClsid, true));
+                        entries.Add(new BrowserEntry(ResolveShellName(RecycleBinClsid, "回收站"), RecycleBinClsid, true));
+                        entries.Add(new BrowserEntry(ResolveShellName(ControlPanelClsid, "控制面板"), ControlPanelClsid, true));
+                        entries.Add(new BrowserEntry(ResolveShellName(NetworkClsid, "网络"), NetworkClsid, true));
+                    }
+                    entries = ApplySort(entries);
+                    DiagnosticLog.Trace("shell.desktop", $"桌面枚举重试成功: {entries.Count} 项");
+                }
+                catch (Exception ex2)
+                {
+                    DiagnosticLog.Trace("shell.desktop", $"桌面枚举重试失败: {ex2.Message}");
+                }
             }
 
             Post(() =>
             {
                 if (gen != _generation) return; // 过期结果丢弃
+                // 【回归修复 2026-09-06】路径集合（含顺序）不变则不触发 ItemsChanged：
+                // FileSystemWatcher 的 Changed 事件（文件属性/时间戳变化）会走 Refresh，
+                // 旧逻辑无条件 ItemsChanged → Rebuild → 桌面图标持续闪烁（用户实测）。
+                // 仅当文件增删/排序导致路径序列变化时才重建。
+                var same = _items.Count == entries.Count;
+                if (same)
+                {
+                    for (var i = 0; i < entries.Count; i++)
+                    {
+                        if (!string.Equals(_items[i].Path, entries[i].Path, StringComparison.Ordinal))
+                        {
+                            same = false;
+                            break;
+                        }
+                    }
+                }
                 _items.Clear();
                 _items.AddRange(entries);
                 _busy = false;
-                ItemsChanged?.Invoke(this, EventArgs.Empty);
+                if (!same)
+                {
+                    ItemsChanged?.Invoke(this, EventArgs.Empty);
+                }
             });
         });
     }
@@ -352,41 +486,105 @@ public sealed class DesktopBrowser : IDesktopBrowser
     /// <summary>当前排序键（持久化由设置层负责，Browser 只执行）。</summary>
     public string? SortKey { get; private set; }
 
-    /// <summary>设置排序键并重载（null 恢复智能默认：虚拟项→文件夹→文件按名）。</summary>
-    public void SetSort(string? key)
+    /// <summary>当前排序方向（true=降序；explorer 桥接 / desktop.sortDesc 驱动）。</summary>
+    public bool SortDescending { get; private set; }
+
+    /// <summary>设置排序键与方向并重载（null 恢复智能默认：虚拟项→文件夹→文件按名）。</summary>
+    public void SetSort(string? key, bool descending = false)
     {
         var normalized = key?.ToLowerInvariant() switch
         {
             "name" or "size" or "type" or "modified" => key.ToLowerInvariant(),
             _ => null,
         };
-        if (string.Equals(SortKey, normalized, StringComparison.Ordinal)) return;
+        if (string.Equals(SortKey, normalized, StringComparison.Ordinal) && SortDescending == descending) return;
         SortKey = normalized;
+        SortDescending = descending;
         Refresh();
     }
 
     private List<BrowserEntry> ApplySort(List<BrowserEntry> entries)
     {
-        // 虚拟项恒排最前（explorer 桌面惯例，任何排序键下不变）
+        // 虚拟项恒排最前（explorer 桌面惯例，任何排序键下不变）；
+        // 方向由 SortDescending 控制（explorer 桥接：size/modified 默认降序，name/type 默认升序）。
+        var nameCmp = StringComparer.CurrentCultureIgnoreCase;
+        var typeCmp = StringComparer.CurrentCulture;
         IOrderedEnumerable<BrowserEntry> ordered = SortKey switch
         {
-            "size" => entries.OrderBy(e => !e.IsDirectory) // 文件夹在前，再按大小降序
-                             .ThenByDescending(e => e.Size)
-                             .ThenBy(e => e.Name, StringComparer.CurrentCultureIgnoreCase),
-            "type" => entries.OrderBy(e => !e.IsDirectory)
-                             .ThenBy(e => e.Kind, StringComparer.CurrentCulture)
-                             .ThenBy(e => e.Name, StringComparer.CurrentCultureIgnoreCase),
-            "modified" => entries.OrderBy(e => !e.IsDirectory)
-                                 .ThenByDescending(e => e.Modified)
-                                 .ThenBy(e => e.Name, StringComparer.CurrentCultureIgnoreCase),
+            "size" => SortDescending
+                ? entries.OrderBy(e => !e.IsDirectory).ThenByDescending(e => e.Size).ThenBy(e => e.Name, nameCmp)
+                : entries.OrderBy(e => !e.IsDirectory).ThenBy(e => e.Size).ThenBy(e => e.Name, nameCmp),
+            "type" => SortDescending
+                ? entries.OrderBy(e => !e.IsDirectory).ThenByDescending(e => e.Kind, typeCmp).ThenBy(e => e.Name, nameCmp)
+                : entries.OrderBy(e => !e.IsDirectory).ThenBy(e => e.Kind, typeCmp).ThenBy(e => e.Name, nameCmp),
+            "modified" => SortDescending
+                ? entries.OrderBy(e => !e.IsDirectory).ThenByDescending(e => e.Modified).ThenBy(e => e.Name, nameCmp)
+                : entries.OrderBy(e => !e.IsDirectory).ThenBy(e => e.Modified).ThenBy(e => e.Name, nameCmp),
             _ => entries.OrderBy(e => !e.IsShellNamespace)  // 默认：虚拟项→文件夹→文件按名
                         .ThenBy(e => !e.IsDirectory)
-                        .ThenBy(e => e.Name, StringComparer.CurrentCultureIgnoreCase),
+                        .ThenBy(e => e.Name, nameCmp),
         };
         return ordered
             .ThenBy(e => !e.IsShellNamespace) // 非默认排序时虚拟项仍置顶
             .Take(MaxEntries)
             .ToList();
+    }
+
+    // ======== explorer 桌面排序桥接（desktop.sortBridge） ========
+    // 用户经 explorer 原生菜单改「排序方式」（写入 Bags\1\Desktop 的 Sort/SortDir），
+    // 自绘网格 ≤1.5s 自动跟随——explorer 菜单是自绘桌面排序的唯一入口（自绘菜单已退役）。
+
+    private void EnsureSortBridge()
+    {
+        if (_settings is null || _sortThread is not null) return;
+        _sortThread = new Thread(SortBridgeLoop) { IsBackground = true, Name = "ExplorerSortBridge" };
+        _sortThread.Start();
+    }
+
+    private void SortBridgeLoop()
+    {
+        var last = ReadExplorerSort();
+        ApplyExplorerSort(last);
+        while (true)
+        {
+            Thread.Sleep(SortBridgeIntervalMs);
+            var cur = ReadExplorerSort();
+            if (cur != last)
+            {
+                last = cur;
+                ApplyExplorerSort(cur);
+            }
+        }
+    }
+
+    /// <summary>读 explorer 桌面排序（Bags\1\Desktop）：Sort=0名称/1大小/2类型/3修改日期；SortDir=0升/1降。</summary>
+    private static (string? Key, bool Desc, bool Valid) ReadExplorerSort()
+    {
+        try
+        {
+            using var key = Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\Shell\Bags\1\Desktop");
+            if (key is null) return (null, false, false);
+            if (key.GetValue("Sort") is not int sort) return (null, false, false); // W11 个别版本为二进制 → 忽略
+            var desc = key.GetValue("SortDir") is int dir && dir != 0;
+            var k = sort switch { 0 => "name", 1 => "size", 2 => "type", 3 => "modified", _ => null };
+            return (k, desc, k is not null);
+        }
+        catch
+        {
+            return (null, false, false);
+        }
+    }
+
+    private void ApplyExplorerSort((string? Key, bool Desc, bool Valid) sort)
+    {
+        if (!sort.Valid) return;
+        if (!(_settings?.Get("desktop.sortBridge", true) ?? true)) return;
+        if (_sync is null)
+        {
+            SetSort(sort.Key, sort.Desc);
+            return;
+        }
+        _sync.Post(_ => SetSort(sort.Key, sort.Desc), null);
     }
 
     public void NewFolder()
@@ -429,6 +627,40 @@ public sealed class DesktopBrowser : IDesktopBrowser
                 }
 
                 File.WriteAllText(file, string.Empty);
+            }
+            catch
+            {
+                // 新建失败静默（M10）
+            }
+
+            Post(Refresh);
+        });
+    }
+
+    /// <summary>新建任意格式文件（explorer 同款重名自增："新建X.扩展名"、"新建X (2).扩展名"）。
+    /// content 为空 → 创建 0 字节空文件；非空 → 写模板内容（文本/二进制/OOXML 均可）。</summary>
+    public void CreateFile(string templateName, string extension, byte[]? content)
+    {
+        var ext = extension.TrimStart('.');
+        Task.Run(() =>
+        {
+            try
+            {
+                var file = Path.Combine(_location, $"{templateName}.{ext}");
+                var stem = templateName;
+                for (var i = 2; File.Exists(file); i++)
+                {
+                    file = Path.Combine(_location, $"{stem} ({i}).{ext}");
+                }
+
+                if (content is { Length: > 0 })
+                {
+                    File.WriteAllBytes(file, content);
+                }
+                else
+                {
+                    File.WriteAllText(file, string.Empty);
+                }
             }
             catch
             {
@@ -534,21 +766,19 @@ internal static class FileOps
         public string? lpszProgressTitle;
     }
 
-    [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
-    private static extern int SHFileOperation(ref ShFileOpStruct lpFileOp);
 
     /// <summary>删除文件/目录到回收站（带系统确认对话框；失败静默 M10）。</summary>
     public static void DeleteToRecycleBin(string path)
     {
         try
         {
-            var op = new ShFileOpStruct
+            var op = new NativeMethods.ShFileOpStruct
             {
                 wFunc = FO_DELETE,
                 pFrom = path + "\0", // 双 NUL 结尾（多路径分隔）
                 fFlags = FOF_ALLOWUNDO | FOF_SILENT
             };
-            _ = SHFileOperation(ref op);
+            _ = NativeMethods.SHFileOperation(ref op);
         }
         catch
         {

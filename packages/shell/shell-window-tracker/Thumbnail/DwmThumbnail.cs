@@ -4,132 +4,133 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Interop;
 using System.Windows.Media;
+using BetterDesktop.Shell.Core.Native;
 using BetterDesktop.Shell.WindowTracker;
 
 namespace BetterDesktop.Shell.WindowTracker.Thumbnail;
 
-    /// <summary>
-    /// DWM 实时缩略图控件。
-    /// 本实现严格对齐 cairoshell 的 DwmThumbnail.xaml.cs（原版可运行路径），
-    /// 不自行添加注册闸门 / 重注册时序 / DPI 取值分支：
-    /// - SourceWindowHandle setter 内联完成 DwmRegisterThumbnail + 首帧 Refresh；
-    /// - DPI 实时取自 PresentationSource.CompositionTarget.TransformToDevice.M11
-    ///   （对齐 cairoshell WindowPreviewService.RefreshElementPreviews），不依赖 Loaded
-    ///   时机，也不使用 VisualTreeHelper.GetDpi——后者在 SizeToContent 分层窗下取值
-    ///   时机不可靠，会把矩形算出控件框外→缩略图空白/全黑。DpiScale 字段仅作兜底。
-    /// - SizeChanged + LayoutUpdated 触发刷新；Unloaded 注销。
-    /// - 缩略图质量（system.thumbnailQuality）由构造时传入：low 降级缩放+降透明度省资源，
-    ///   high 满透明度+高质缩放更清晰，medium 取当前默认。
-    /// 自 shell-dock 下沉（步骤5），供 Dock 预览、未来任务栏/开始菜单共用。
-    /// </summary>
-    internal sealed class DwmThumbnail : UserControl
+/// <summary>
+/// DWM 实时缩略图控件。
+/// 本实现严格对齐 cairoshell 的 DwmThumbnail.xaml.cs（原版可运行路径），
+/// 不自行添加注册闸门 / 重注册时序 / DPI 取值分支：
+/// - SourceWindowHandle setter 内联完成 DwmRegisterThumbnail + 首帧 Refresh；
+/// - DPI 实时取自 PresentationSource.CompositionTarget.TransformToDevice.M11
+///   （对齐 cairoshell WindowPreviewService.RefreshElementPreviews），不依赖 Loaded
+///   时机，也不使用 VisualTreeHelper.GetDpi——后者在 SizeToContent 分层窗下取值
+///   时机不可靠，会把矩形算出控件框外→缩略图空白/全黑。DpiScale 字段仅作兜底。
+/// - SizeChanged + LayoutUpdated 触发刷新；Unloaded 注销。
+/// - 缩略图质量（system.thumbnailQuality）由构造时传入：low 降级缩放+降透明度省资源，
+///   high 满透明度+高质缩放更清晰，medium 取当前默认。
+/// 自 shell-dock 下沉（步骤5），供 Dock 预览、未来任务栏/开始菜单共用。
+/// </summary>
+internal sealed class DwmThumbnail : UserControl
+{
+    public byte ThumbnailOpacity = 255;
+    public double DpiScale = 1.0;
+
+    // 缩略图质量策略：影响渲染缩放模式与默认透明度。
+    // low  → LowQuality 缩放 + 降透明度（省 GPU/内存）；
+    // high → HighQuality 缩放 + 满透明度（清晰）；
+    // medium → HighQuality 缩放 + 略降透明度（平衡，当前默认）。
+    private readonly ThumbnailQuality _quality = ThumbnailQuality.Medium;
+
+    private IntPtr _sourceWindowHandle = IntPtr.Zero;
+    private IntPtr _thumbHandle;
+
+    // 脏标记：布局/尺寸变化只置位，真实 DWM 刷新统一在渲染帧前执行（每帧至多一次）。
+    // 避免 SizeToContent 打开瞬间 LayoutUpdated 连环触发多次 DwmUpdateThumbnailProperties 导致卡顿。
+    private bool _dirty;
+    private bool _frameSubscribed;
+    private readonly object _frameLock = new();
+
+    public DwmThumbnail(ThumbnailQuality quality = ThumbnailQuality.Medium)
     {
-        public byte ThumbnailOpacity = 255;
-        public double DpiScale = 1.0;
+        _quality = quality;
+        SnapsToDevicePixels = true;
 
-        // 缩略图质量策略：影响渲染缩放模式与默认透明度。
-        // low  → LowQuality 缩放 + 降透明度（省 GPU/内存）；
-        // high → HighQuality 缩放 + 满透明度（清晰）；
-        // medium → HighQuality 缩放 + 略降透明度（平衡，当前默认）。
-        private readonly ThumbnailQuality _quality = ThumbnailQuality.Medium;
+        // 质量策略决定缩放模式：low 用 LowQuality（省资源），其余用 HighQuality（清晰）。
+        RenderOptions.SetBitmapScalingMode(this,
+            _quality == ThumbnailQuality.Low
+                ? BitmapScalingMode.LowQuality
+                : BitmapScalingMode.HighQuality);
 
-        private IntPtr _sourceWindowHandle = IntPtr.Zero;
-        private IntPtr _thumbHandle;
-
-        // 脏标记：布局/尺寸变化只置位，真实 DWM 刷新统一在渲染帧前执行（每帧至多一次）。
-        // 避免 SizeToContent 打开瞬间 LayoutUpdated 连环触发多次 DwmUpdateThumbnailProperties 导致卡顿。
-        private bool _dirty;
-        private bool _frameSubscribed;
-        private readonly object _frameLock = new();
-
-        public DwmThumbnail(ThumbnailQuality quality = ThumbnailQuality.Medium)
+        // 质量策略决定默认透明度：low 降到 200（半透更省合成开销），high 满 255，medium 238。
+        ThumbnailOpacity = _quality switch
         {
-            _quality = quality;
-            SnapsToDevicePixels = true;
+            ThumbnailQuality.Low => 200,
+            ThumbnailQuality.High => 255,
+            _ => 238
+        };
 
-            // 质量策略决定缩放模式：low 用 LowQuality（省资源），其余用 HighQuality（清晰）。
-            RenderOptions.SetBitmapScalingMode(this,
-                _quality == ThumbnailQuality.Low
-                    ? BitmapScalingMode.LowQuality
-                    : BitmapScalingMode.HighQuality);
-
-            // 质量策略决定默认透明度：low 降到 200（半透更省合成开销），high 满 255，medium 238。
-            ThumbnailOpacity = _quality switch
+        // 布局变化只标记脏；首帧有真实变化才在渲染帧前统一刷新。
+        SizeChanged += (_, _) => MarkDirty();
+        LayoutUpdated += (_, _) => MarkDirty();
+        Unloaded += (_, _) =>
+        {
+            UnsubscribeFrame();
+            if (_thumbHandle != IntPtr.Zero)
             {
-                ThumbnailQuality.Low => 200,
-                ThumbnailQuality.High => 255,
-                _ => 238
-            };
+                DwmThumbnailInterop.DwmUnregisterThumbnail(_thumbHandle);
+                _thumbHandle = IntPtr.Zero;
+            }
+        };
+    }
 
-            // 布局变化只标记脏；首帧有真实变化才在渲染帧前统一刷新。
-            SizeChanged += (_, _) => MarkDirty();
-            LayoutUpdated += (_, _) => MarkDirty();
-            Unloaded += (_, _) =>
-            {
-                UnsubscribeFrame();
-                if (_thumbHandle != IntPtr.Zero)
-                {
-                    DwmThumbnailInterop.DwmUnregisterThumbnail(_thumbHandle);
-                    _thumbHandle = IntPtr.Zero;
-                }
-            };
+    /// <summary>
+    /// 标记需要刷新；同一渲染帧内的多次标记合并为一次真实 DWM 刷新。
+    /// </summary>
+    private void MarkDirty()
+    {
+        if (_thumbHandle == IntPtr.Zero)
+        {
+            return;
         }
 
-        /// <summary>
-        /// 标记需要刷新；同一渲染帧内的多次标记合并为一次真实 DWM 刷新。
-        /// </summary>
-        private void MarkDirty()
+        _dirty = true;
+        if (_frameSubscribed)
         {
-            if (_thumbHandle == IntPtr.Zero)
-            {
-                return;
-            }
+            return;
+        }
 
-            _dirty = true;
+        lock (_frameLock)
+        {
             if (_frameSubscribed)
             {
                 return;
             }
 
-            lock (_frameLock)
-            {
-                if (_frameSubscribed)
-                {
-                    return;
-                }
-
-                _frameSubscribed = true;
-                CompositionTarget.Rendering += OnRendering;
-            }
+            _frameSubscribed = true;
+            CompositionTarget.Rendering += OnRendering;
         }
+    }
 
-        private void UnsubscribeFrame()
+    private void UnsubscribeFrame()
+    {
+        if (!_frameSubscribed)
         {
-            if (!_frameSubscribed)
-            {
-                return;
-            }
-
-            CompositionTarget.Rendering -= OnRendering;
-            _frameSubscribed = false;
+            return;
         }
 
-        private void OnRendering(object? sender, EventArgs e)
+        CompositionTarget.Rendering -= OnRendering;
+        _frameSubscribed = false;
+    }
+
+    private void OnRendering(object? sender, EventArgs e)
+    {
+        if (!_dirty)
         {
-            if (!_dirty)
-            {
-                return;
-            }
-
-            _dirty = false;
-
-            // 渲染帧前执行一次真实刷新；若布局尚未稳定（如 SizeToContent 首帧），
-            // 刷新后仍会因后续布局事件再次置脏，最终以稳定尺寸收尾，不会漏刷。
-            Refresh();
-
-            // 本帧处理完即退订，下一轮布局变化再订阅。避免永久每帧订阅（无变化时空转）。
-            UnsubscribeFrame();
+            return;
         }
+
+        _dirty = false;
+
+        // 渲染帧前执行一次真实刷新；若布局尚未稳定（如 SizeToContent 首帧），
+        // 刷新后仍会因后续布局事件再次置脏，最终以稳定尺寸收尾，不会漏刷。
+        Refresh();
+
+        // 本帧处理完即退订，下一轮布局变化再订阅。避免永久每帧订阅（无变化时空转）。
+        UnsubscribeFrame();
+    }
 
     /// <summary>
     /// 当前控件自身的 WPF 宿主窗口句柄（Destination）。
@@ -270,14 +271,14 @@ namespace BetterDesktop.Shell.WindowTracker.Thumbnail;
             double sourceAspect = (double)size.x / size.y;
             double controlAspect = (double)rect.Width / rect.Height;
 
-            var props = new DwmThumbnailProperties
+            var props = new NativeMethods.DwmThumbnailProperties
             {
                 fVisible = true,
                 dwFlags = DwmThumbnailInterop.DwmTnpVisible |
                           DwmThumbnailInterop.DwmTnpRectDestination |
                           DwmThumbnailInterop.DwmTnpOpacity,
                 opacity = ThumbnailOpacity,
-                rcDestination = rect
+                rcDestination = new NativeMethods.RECT { Left = rect.Left, Top = rect.Top, Right = rect.Right, Bottom = rect.Bottom }
             };
 
             if (sourceAspect > controlAspect)

@@ -13,6 +13,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Runtime.InteropServices;
+using BetterDesktop.Shell.Core.Native;
 using Microsoft.Win32;
 
 namespace BetterDesktop.Shell.Status.Native;
@@ -50,12 +51,6 @@ public static partial class KeyboardLayoutInterop
 
     [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     private static extern IntPtr LoadKeyboardLayout(string pwszKLID, uint Flags);
-
-    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
-    private static extern IntPtr GetForegroundWindow();
-
-    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
-    private static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
 
     [DllImport("imm32.dll", CharSet = CharSet.Unicode)]
     private static extern bool ImmGetOpenStatus(IntPtr hKL);
@@ -148,15 +143,9 @@ public static partial class KeyboardLayoutInterop
     }
 
     // ===== shlwapi.dll：解析 @input.dll,-5021 这类间接字符串 =====
-    [DllImport("shlwapi.dll", CharSet = CharSet.Unicode)]
-    private static extern int SHLoadIndirectString(string pszSource, System.Text.StringBuilder pszOutBuf, int cchOutBuf, IntPtr ppvReserved);
-
     // ===== user32.dll：向前台窗口发切换请求（切的是前台应用的布局，不是本进程的） =====
     private const uint WM_INPUTLANGCHANGEREQUEST = 0x0050;
     private const uint INPUTLANGCHANGE_SYSCHARSET = 0x0001;
-
-    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
-    private static extern IntPtr PostMessage(IntPtr hWnd, uint Msg, IntPtr wParam, IntPtr lParam);
 
     // ===== 输入模拟：keybd_event 模拟 Win+Space（Windows 官方输入法循环切换方式） =====
     // 272e4a6 历史版本的关键实现："完美运行过"的输入法切换——用 keybd_event 模拟一次完整
@@ -172,19 +161,11 @@ public static partial class KeyboardLayoutInterop
     private const ushort VK_LSHIFT = 0xA0;
     private const uint KEYEVENTF_KEYUP = 0x0002;
 
-    [DllImport("user32.dll")]
-    private static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, UIntPtr dwExtraInfo);
-
     // ===== 图标提取：从 DLL/EXE/IME 中提取图标（ExtractIconEx） =====
-    [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
-    private static extern int ExtractIconEx(string lpszFile, int nIconIndex, IntPtr[]? phiconLarge, IntPtr[]? phiconSmall, uint nIcons);
-    [DllImport("user32.dll")]
-    private static extern bool DestroyIcon(IntPtr hIcon);
-
     /// <summary>释放通过 GetLayoutIconHandle 获取的图标句柄。</summary>
     public static void ReleaseIcon(IntPtr hIcon)
     {
-        if (hIcon != IntPtr.Zero) DestroyIcon(hIcon);
+        if (hIcon != IntPtr.Zero) NativeMethods.DestroyIcon(hIcon);
     }
 
     /// <summary>获取键盘布局的语言代码（如 "ENG"、"CHS"、"JPN"），用于无图标时的文本显示。
@@ -208,12 +189,6 @@ public static partial class KeyboardLayoutInterop
     }
 
     // ===== 线程附加：AttachThreadInput 让我们能在目标窗口线程上下文中激活 TSF 输入法 =====
-    [DllImport("kernel32.dll")]
-    private static extern uint GetCurrentThreadId();
-    [DllImport("user32.dll")]
-    private static extern bool AttachThreadInput(uint idAttach, uint idAttachTo, bool fAttach);
-    [DllImport("user32.dll")]
-    private static extern IntPtr GetWindow(IntPtr hWnd, uint uCmd);
     private const uint GW_HWNDNEXT = 2;
 
     // 注册表缓存：已注册布局 + 用户启用顺序几乎不变，避免频繁的全量注册表遍历。
@@ -229,11 +204,11 @@ public static partial class KeyboardLayoutInterop
     {
         try
         {
-            var foreground = GetForegroundWindow();
+            var foreground = NativeMethods.GetForegroundWindow();
             uint threadId = 0;
             if (foreground != IntPtr.Zero)
             {
-                threadId = GetWindowThreadProcessId(foreground, out _);
+                threadId = NativeMethods.GetWindowThreadProcessId(foreground, out _);
             }
             return GetKeyboardLayout(threadId);
         }
@@ -262,7 +237,7 @@ public static partial class KeyboardLayoutInterop
     }
 
     /// <summary>
-    /// 经输入法窗口读取中 / 英文模式：ImmGetDefaultIMEWnd(前台窗口) + WM_IME_CONTROL/IMC_GETCONVERSIONMODE。
+    /// 经输入法窗口读取中 / 英文模式：NativeMethods.ImmGetDefaultIMEWnd(前台窗口) + WM_IME_CONTROL/IMC_GETCONVERSIONMODE。
     /// 这是设计稿指定的路径，对 TSF 输入法（搜狗 / 微软拼音）同样有效；
     /// 而 ImmGetConversionStatus 对 TSF 输入法经常返回失败，正是"模式未知"的来源。
     /// 返回 null 表示读不到（当前是纯键盘布局、或输入法窗口不响应）。
@@ -271,19 +246,19 @@ public static partial class KeyboardLayoutInterop
     {
         try
         {
-            var foreground = GetForegroundWindow();
+            var foreground = NativeMethods.GetForegroundWindow();
             if (foreground == IntPtr.Zero) return null;
 
-            var imeWnd = ImmGetDefaultIMEWnd(foreground);
+            var imeWnd = NativeMethods.ImmGetDefaultIMEWnd(foreground);
             if (imeWnd == IntPtr.Zero) return null;
 
             // 只有 IME 处于打开状态（前台确实在文本输入）时，转换模式才有意义。
             // 前台是菜单栏/桌面这类非输入窗口时 IME 是关闭的，conversion 为 0 会被误读成"英文模式"——
             // 此处返回 null，让调用方按"当前输入语言"推断（中文输入法即显示"中"）。
-            var open = (long)SendMessage(imeWnd, WM_IME_CONTROL, (IntPtr)IMC_GETOPENSTATUS, IntPtr.Zero);
+            var open = (long)NativeMethods.SendMessage(imeWnd, WM_IME_CONTROL, (IntPtr)IMC_GETOPENSTATUS, IntPtr.Zero);
             if (open == 0) return null;
 
-            var conversion = (long)SendMessage(imeWnd, WM_IME_CONTROL, (IntPtr)IMC_GETCONVERSIONMODE, IntPtr.Zero);
+            var conversion = (long)NativeMethods.SendMessage(imeWnd, WM_IME_CONTROL, (IntPtr)IMC_GETCONVERSIONMODE, IntPtr.Zero);
             return (conversion & IME_CMODE_NATIVE) != 0;
         }
         catch
@@ -292,11 +267,6 @@ public static partial class KeyboardLayoutInterop
         }
     }
 
-    [DllImport("imm32.dll")]
-    private static extern IntPtr ImmGetDefaultIMEWnd(IntPtr hWnd);
-
-    [DllImport("user32.dll", CharSet = CharSet.Auto)]
-    private static extern IntPtr SendMessage(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
 
     private const uint WM_IME_CONTROL = 0x0283;
     private const int IMC_GETOPENSTATUS = 0x0001;
@@ -331,14 +301,14 @@ public static partial class KeyboardLayoutInterop
         // 降级：向前台窗口发 Shift 按下+抬起（TSF 输入法如微软拼音默认 Shift 切中/英）
         try
         {
-            var foreground = GetForegroundWindow();
+            var foreground = NativeMethods.GetForegroundWindow();
             if (foreground != IntPtr.Zero)
             {
                 const uint VK_SHIFT = 0x10;
                 const uint WM_KEYDOWN = 0x0100;
                 const uint WM_KEYUP = 0x0101;
-                PostMessage(foreground, WM_KEYDOWN, (IntPtr)VK_SHIFT, IntPtr.Zero);
-                PostMessage(foreground, WM_KEYUP, (IntPtr)VK_SHIFT, IntPtr.Zero);
+                NativeMethods.PostMessage(foreground, WM_KEYDOWN, (IntPtr)VK_SHIFT, IntPtr.Zero);
+                NativeMethods.PostMessage(foreground, WM_KEYUP, (IntPtr)VK_SHIFT, IntPtr.Zero);
             }
         }
         catch
@@ -447,7 +417,7 @@ public static partial class KeyboardLayoutInterop
         try
         {
             var sb = new System.Text.StringBuilder(512);
-            var hr = SHLoadIndirectString(source, sb, sb.Capacity, IntPtr.Zero);
+            var hr = NativeMethods.SHLoadIndirectString(source, sb, sb.Capacity, IntPtr.Zero);
             if (hr >= 0 && sb.Length > 0) return sb.ToString();
         }
         catch
@@ -799,20 +769,20 @@ public static partial class KeyboardLayoutInterop
     {
         try
         {
-            keybd_event((byte)VK_LCONTROL, 0, 0, UIntPtr.Zero);
+            NativeMethods.keybd_event((byte)VK_LCONTROL, 0, 0, UIntPtr.Zero);
             System.Threading.Thread.Sleep(50);
-            keybd_event((byte)VK_LSHIFT, 0, 0, UIntPtr.Zero);
+            NativeMethods.keybd_event((byte)VK_LSHIFT, 0, 0, UIntPtr.Zero);
             System.Threading.Thread.Sleep(50);
-            keybd_event((byte)VK_LSHIFT, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
+            NativeMethods.keybd_event((byte)VK_LSHIFT, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
             System.Threading.Thread.Sleep(50);
-            keybd_event((byte)VK_LCONTROL, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
+            NativeMethods.keybd_event((byte)VK_LCONTROL, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
             return true;
         }
         catch
         {
             // 异常时释放可能处于按下状态的修饰键，避免卡键
-            try { keybd_event((byte)VK_LCONTROL, 0, KEYEVENTF_KEYUP, UIntPtr.Zero); } catch { }
-            try { keybd_event((byte)VK_LSHIFT, 0, KEYEVENTF_KEYUP, UIntPtr.Zero); } catch { }
+            try { NativeMethods.keybd_event((byte)VK_LCONTROL, 0, KEYEVENTF_KEYUP, UIntPtr.Zero); } catch { }
+            try { NativeMethods.keybd_event((byte)VK_LSHIFT, 0, KEYEVENTF_KEYUP, UIntPtr.Zero); } catch { }
             return false;
         }
     }
@@ -825,21 +795,21 @@ public static partial class KeyboardLayoutInterop
         {
             byte vkLWin = (byte)VK_LWIN;
             byte vkSpace = (byte)VK_SPACE;
-            keybd_event(vkLWin, 0, 0, UIntPtr.Zero);
+            NativeMethods.keybd_event(vkLWin, 0, 0, UIntPtr.Zero);
             System.Threading.Thread.Sleep(80);
-            keybd_event(vkSpace, 0, 0, UIntPtr.Zero);
+            NativeMethods.keybd_event(vkSpace, 0, 0, UIntPtr.Zero);
             System.Threading.Thread.Sleep(60);
-            keybd_event(vkSpace, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
+            NativeMethods.keybd_event(vkSpace, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
             System.Threading.Thread.Sleep(60);
-            keybd_event(vkLWin, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
+            NativeMethods.keybd_event(vkLWin, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
             System.Threading.Thread.Sleep(150);
             return true;
         }
         catch
         {
             // 异常时尽量释放可能处于按下状态的修饰键，避免卡键
-            try { keybd_event((byte)VK_LWIN, 0, KEYEVENTF_KEYUP, UIntPtr.Zero); } catch { }
-            try { keybd_event((byte)VK_SPACE, 0, KEYEVENTF_KEYUP, UIntPtr.Zero); } catch { }
+            try { NativeMethods.keybd_event((byte)VK_LWIN, 0, KEYEVENTF_KEYUP, UIntPtr.Zero); } catch { }
+            try { NativeMethods.keybd_event((byte)VK_SPACE, 0, KEYEVENTF_KEYUP, UIntPtr.Zero); } catch { }
             return false;
         }
     }
@@ -914,7 +884,7 @@ public static partial class KeyboardLayoutInterop
         if (iconFile.StartsWith("@"))
         {
             var sb = new System.Text.StringBuilder(512);
-            if (SHLoadIndirectString(iconFile, sb, sb.Capacity, IntPtr.Zero) == 0)
+            if (NativeMethods.SHLoadIndirectString(iconFile, sb, sb.Capacity, IntPtr.Zero) == 0)
             {
                 iconFile = sb.ToString();
             }
@@ -935,7 +905,7 @@ public static partial class KeyboardLayoutInterop
     {
         if (string.IsNullOrEmpty(filePath) || !System.IO.File.Exists(filePath)) return IntPtr.Zero;
         var smallIcons = new IntPtr[1];
-        int count = ExtractIconEx(filePath, iconIndex, null, smallIcons, 1);
+        uint count = NativeMethods.ExtractIconEx(filePath, (int)iconIndex, null, smallIcons, 1);
         if (count > 0 && smallIcons[0] != IntPtr.Zero) return smallIcons[0];
         return IntPtr.Zero;
     }
@@ -953,7 +923,7 @@ public static partial class KeyboardLayoutInterop
     /// **不等于**真实 HKL（微软拼音 HKL=0xE0200804），KlidToHkl 对 TSF 解析出的 HKL 无效，
     /// 这正是此前"点输入法没反应"的根因之一。因此 isTs=true 必须**优先**走
     /// TSF COM ITfInputProcessorProfiles::ActivateProfile（官方立即激活接口，无 UI），
-    /// 仅 COM 失败才降级 PostMessage。IMM / 纯键盘布局走 PostMessage(WM_INPUTLANGCHANGEREQUEST)。</summary>
+    /// 仅 COM 失败才降级 PostMessage。IMM / 纯键盘布局走 NativeMethods.PostMessage(WM_INPUTLANGCHANGEREQUEST)。</summary>
     public static bool Activate(string klidHex, bool isTs)
     {
         if (isTs)
@@ -990,7 +960,7 @@ public static partial class KeyboardLayoutInterop
             if (foreground != IntPtr.Zero)
             {
                 // wParam = INPUTLANGCHANGE_SYSCHARSET，lParam = HKL
-                PostMessage(foreground, WM_INPUTLANGCHANGEREQUEST, (IntPtr)INPUTLANGCHANGE_SYSCHARSET, hkl);
+                NativeMethods.PostMessage(foreground, WM_INPUTLANGCHANGEREQUEST, (IntPtr)INPUTLANGCHANGE_SYSCHARSET, hkl);
                 return true;
             }
             // 取不到前台窗口时，降级到 ActivateKeyboardLayout（切本进程）
@@ -1009,33 +979,30 @@ public static partial class KeyboardLayoutInterop
     /// <summary>获取真正的前台窗口。如果当前前台窗口是我们自己的弹窗，取 Z-order 下一个可见窗口。</summary>
     private static IntPtr GetRealForegroundWindow()
     {
-        var fg = GetForegroundWindow();
+        var fg = NativeMethods.GetForegroundWindow();
         if (fg == IntPtr.Zero) return IntPtr.Zero;
 
         // 检查前台窗口是否属于本进程（我们的弹窗）
         uint fgProcId;
-        GetWindowThreadProcessId(fg, out fgProcId);
+        NativeMethods.GetWindowThreadProcessId(fg, out fgProcId);
         uint ourProcId = (uint)System.Diagnostics.Process.GetCurrentProcess().Id;
 
         if (fgProcId != ourProcId) return fg; // 前台窗口不是我们的，直接用
 
         // 前台窗口是我们的弹窗，沿 Z-order 找下一个可见窗口
-        var hwnd = GetWindow(fg, GW_HWNDNEXT);
+        var hwnd = NativeMethods.GetWindow(fg, GW_HWNDNEXT);
         while (hwnd != IntPtr.Zero)
         {
-            if (IsWindowVisible(hwnd))
+            if (NativeMethods.IsWindowVisible(hwnd))
             {
                 uint procId;
-                GetWindowThreadProcessId(hwnd, out procId);
+                NativeMethods.GetWindowThreadProcessId(hwnd, out procId);
                 if (procId != ourProcId) return hwnd;
             }
-            hwnd = GetWindow(hwnd, GW_HWNDNEXT);
+            hwnd = NativeMethods.GetWindow(hwnd, GW_HWNDNEXT);
         }
         return fg; // 找不到就用前台窗口
     }
-
-    [DllImport("user32.dll")]
-    private static extern bool IsWindowVisible(IntPtr hWnd);
 
     /// <summary>从 SortOrder 注册表中找到 klidHex 匹配的 TSF IME，返回 (CLSID, LangId, ProfileGUID)。</summary>
     private static (Guid clsid, int langId, Guid profile)? FindTsProfileByKlid(string klidHex)
@@ -1409,12 +1376,12 @@ public static partial class KeyboardLayoutInterop
         {
             // 用"前台应用"的线程读键盘布局，而不是本进程的线程——
             // 否则弹窗打开/抢焦点后读到的是弹窗自己的布局，造成"当前输入法识别不准"。
-            var foreground = GetForegroundWindow();
+            var foreground = NativeMethods.GetForegroundWindow();
             uint threadId = 0;
             if (foreground != IntPtr.Zero)
             {
                 // 返回值 = 前台窗口所在线程 ID；out 参数 = 进程 ID（不用，忽略）
-                threadId = GetWindowThreadProcessId(foreground, out _);
+                threadId = NativeMethods.GetWindowThreadProcessId(foreground, out _);
             }
             var hkl = GetKeyboardLayout(threadId); // 0 = 当前线程（无可判断前台时）
             uint id = unchecked((uint)hkl.ToInt64());

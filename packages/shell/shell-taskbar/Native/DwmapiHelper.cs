@@ -1,5 +1,7 @@
 using System;
 using System.Runtime.InteropServices;
+using BetterDesktop.Kernel.Core;
+using BetterDesktop.Shell.Core.Native;
 using BetterDesktop.Shell.Taskbar.Contracts;
 
 namespace BetterDesktop.Shell.Taskbar.Native;
@@ -38,8 +40,12 @@ public static class DwmapiHelper
         public int SizeOfData;
     }
 
-    [DllImport("user32.dll", EntryPoint = "SetWindowCompositionAttribute", SetLastError = true)]
-    private static extern bool SetWindowCompositionAttribute(IntPtr hWnd, ref WINCOMPATTRDATA pAttrData);
+
+    // WM_DWMCOMPOSITIONCHANGED = 0x031A：还原到 NORMAL 后必须通知 explorer/DWM 刷新任务栏外观，
+    // 否则残留策略（TTB taskbarattributeworker.cpp:611：send_message(WM_DWMCOMPOSITIONCHANGED, 1, 0)，
+    // 拆析-TranslucentTB L50 生死线 2"恢复默认 = ACCENT_NORMAL + 发该消息"）。
+    private const uint WmDwmCompositionChanged = 0x031A;
+
 
     /// <summary>
     /// ARGB → ABGR（R/B 通道互换）。
@@ -102,21 +108,28 @@ public static class DwmapiHelper
             AnimationId = 0
         };
 
-        var data = new WINCOMPATTRDATA
+        var data = new NativeMethods.WINCOMPATTRDATA
         {
-            Attribute = WCA_ACCENT_POLICY,
-            Data = Marshal.AllocHGlobal(Marshal.SizeOf<ACCENT_POLICY>()),
-            SizeOfData = Marshal.SizeOf<ACCENT_POLICY>()
+            nAttribute = WCA_ACCENT_POLICY,
+            pData = Marshal.AllocHGlobal(Marshal.SizeOf<ACCENT_POLICY>()),
+            ulSize = Marshal.SizeOf<ACCENT_POLICY>()
         };
 
         try
         {
-            Marshal.StructureToPtr(policy, data.Data, false);
-            return SetWindowCompositionAttribute(hWnd, ref data);
+            Marshal.StructureToPtr(policy, data.pData, false);
+            int hr = NativeMethods.SetWindowCompositionAttribute(hWnd, ref data); bool ok = hr == 0;
+            // F4/V5：SetLastError 已开但从不读等于没诊断（7437 纪律 2）——失败必须带错误码。
+            if (!ok)
+            {
+                DiagnosticLog.Trace("TaskbarAccent",
+                    $"SetWindowCompositionAttribute 失败 hwnd={hWnd:X} state={state} err={Marshal.GetLastWin32Error()}");
+            }
+            return ok;
         }
         finally
         {
-            Marshal.FreeHGlobal(data.Data);
+            Marshal.FreeHGlobal(data.pData);
         }
     }
 
@@ -125,20 +138,32 @@ public static class DwmapiHelper
     {
         if (hWnd == IntPtr.Zero) return false;
         var policy = new ACCENT_POLICY { AccentState = ACCENT_NORMAL, AccentFlags = 0, GradientColor = 0, AnimationId = 0 };
-        var data = new WINCOMPATTRDATA
+        var data = new NativeMethods.WINCOMPATTRDATA
         {
-            Attribute = WCA_ACCENT_POLICY,
-            Data = Marshal.AllocHGlobal(Marshal.SizeOf<ACCENT_POLICY>()),
-            SizeOfData = Marshal.SizeOf<ACCENT_POLICY>()
+            nAttribute = WCA_ACCENT_POLICY,
+            pData = Marshal.AllocHGlobal(Marshal.SizeOf<ACCENT_POLICY>()),
+            ulSize = Marshal.SizeOf<ACCENT_POLICY>()
         };
         try
         {
-            Marshal.StructureToPtr(policy, data.Data, false);
-            return SetWindowCompositionAttribute(hWnd, ref data);
+            Marshal.StructureToPtr(policy, data.pData, false);
+            int hr = NativeMethods.SetWindowCompositionAttribute(hWnd, ref data); bool ok = hr == 0;
+            // F4/V5：同 SetAccent——失败带错误码，还原失败也要可诊断。
+            if (!ok)
+            {
+                DiagnosticLog.Trace("TaskbarAccent",
+                    $"SetWindowCompositionAttribute(还原) 失败 hwnd={hWnd:X} err={Marshal.GetLastWin32Error()}");
+            }
+            // 还原链补全（审计 §4.5 / TTB cpp:611）：还原成功后通知 explorer 刷新任务栏外观状态。
+            if (ok)
+            {
+                _ = NativeMethods.SendMessage(hWnd, WmDwmCompositionChanged, (IntPtr)1, IntPtr.Zero);
+            }
+            return ok;
         }
         finally
         {
-            Marshal.FreeHGlobal(data.Data);
+            Marshal.FreeHGlobal(data.pData);
         }
     }
 }

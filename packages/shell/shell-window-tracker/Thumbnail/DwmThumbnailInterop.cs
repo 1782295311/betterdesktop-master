@@ -1,4 +1,5 @@
-using System.Runtime.InteropServices;
+﻿using System.Runtime.InteropServices;
+using BetterDesktop.Shell.Core.Native;
 
 namespace BetterDesktop.Shell.WindowTracker.Thumbnail;
 
@@ -28,31 +29,9 @@ internal struct NativeRect
 /// <summary>
 /// 尺寸结构（与 Win32 SIZE 内存布局一致）。
 /// </summary>
-[StructLayout(LayoutKind.Sequential)]
-internal struct NativeSize
-{
-    public int x;
-    public int y;
-}
-
 /// <summary>
 /// DWM 缩略图属性结构（与 DWM_THUMBNAIL_PROPERTIES 内存布局一致）。
 /// </summary>
-[StructLayout(LayoutKind.Sequential)]
-internal struct DwmThumbnailProperties
-{
-    public uint dwFlags;
-    public NativeRect rcDestination;
-    public NativeRect rcSource;
-    public byte opacity;
-
-    [MarshalAs(UnmanagedType.Bool)]
-    public bool fVisible;
-
-    [MarshalAs(UnmanagedType.Bool)]
-    public bool fSourceClientAreaOnly;
-}
-
 /// <summary>
 /// DWM 缩略图最小声明。
 /// 参考 cairoshell 的 DwmInterop（ManagedShell-free 自包含实现），
@@ -74,7 +53,7 @@ internal static class DwmThumbnailInterop
     internal static bool DwmRegisterThumbnail(IntPtr hwndDestination, IntPtr hwndSource, out IntPtr phThumbnailId, out int hr)
     {
         phThumbnailId = IntPtr.Zero;
-        hr = NativeDwmRegisterThumbnail(hwndDestination, hwndSource, out phThumbnailId);
+        hr = NativeMethods.DwmRegisterThumbnail(hwndDestination, hwndSource, out phThumbnailId);
         return hr == 0;
     }
 
@@ -89,18 +68,18 @@ internal static class DwmThumbnailInterop
     /// <summary>
     /// 更新缩略图的显示属性（可见性、位置、不透明度）。
     /// </summary>
-    internal static bool DwmUpdateThumbnailProperties(IntPtr hThumbnailId, ref DwmThumbnailProperties ptnProperties)
+    internal static bool DwmUpdateThumbnailProperties(IntPtr hThumbnailId, ref NativeMethods.DwmThumbnailProperties ptnProperties)
     {
-        return NativeDwmUpdateThumbnailProperties(hThumbnailId, ref ptnProperties) == 0;
+        return NativeMethods.DwmUpdateThumbnailProperties(hThumbnailId, ref ptnProperties) == 0;
     }
 
     /// <summary>
     /// 取得源窗口的原始尺寸（逻辑像素）。
     /// </summary>
-    internal static bool DwmQueryThumbnailSourceSize(IntPtr hThumbnailId, out NativeSize size)
+    internal static bool DwmQueryThumbnailSourceSize(IntPtr hThumbnailId, out NativeMethods.DwmSize size)
     {
         size = default;
-        return NativeDwmQueryThumbnailSourceSize(hThumbnailId, out size) == 0;
+        return NativeMethods.DwmQueryThumbnailSourceSize(hThumbnailId, out size) == 0;
     }
 
     /// <summary>
@@ -110,33 +89,26 @@ internal static class DwmThumbnailInterop
     {
         if (hThumbnailId != IntPtr.Zero)
         {
-            _ = NativeDwmUnregisterThumbnail(hThumbnailId);
+            _ = NativeMethods.DwmUnregisterThumbnail(hThumbnailId);
         }
     }
 
-    [DllImport("dwmapi.dll", EntryPoint = "DwmRegisterThumbnail")]
-    private static extern int NativeDwmRegisterThumbnail(IntPtr hwndDestination, IntPtr hwndSource, out IntPtr phThumbnailId);
 
-    [DllImport("dwmapi.dll", EntryPoint = "DwmUnregisterThumbnail")]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool NativeDwmUnregisterThumbnail(IntPtr hThumbnailId);
 
-    [DllImport("dwmapi.dll", EntryPoint = "DwmUpdateThumbnailProperties")]
-    private static extern int NativeDwmUpdateThumbnailProperties(IntPtr hThumbnailId, ref DwmThumbnailProperties ptnProperties);
 
-    [DllImport("dwmapi.dll", EntryPoint = "DwmQueryThumbnailSourceSize")]
-    private static extern int NativeDwmQueryThumbnailSourceSize(IntPtr hThumbnailId, out NativeSize psize);
 
     /// <summary>
     /// DWM 合成是否启用。未启用（如基础主题/某些远程会话）时不能注册实时缩略图，
     /// 调用方应优雅降级为窗口列表，而非尝试注册导致失败。
-    /// 声明对齐真源 DwmApi.DwmIsCompositionEnabled：PreserveSig=false 直接返回 BOOL（无 out 参数）。
+    /// 【F8/V9 修复（7434 声明纪律）】真源签名是 HRESULT DwmIsCompositionEnabled(BOOL* pfEnabled)——
+    /// 唯一输出在 out 参数；此前 PreserveSig=false + 无 out 声明把 HRESULT 当返回值，
+    /// S_OK(0)→false 恒成立 → 缩略图永久失效。正确写法：out bool 拿状态，int 返回值判调用失败。
     /// </summary>
     internal static bool DwmIsCompositionEnabled()
     {
         try
         {
-            return NativeDwmIsCompositionEnabled();
+            return NativeMethods.DwmIsCompositionEnabled(out var enabled) == 0 && enabled;
         }
         catch
         {
@@ -144,7 +116,4 @@ internal static class DwmThumbnailInterop
         }
     }
 
-    [DllImport("dwmapi.dll", EntryPoint = "DwmIsCompositionEnabled", PreserveSig = false)]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool NativeDwmIsCompositionEnabled();
 }

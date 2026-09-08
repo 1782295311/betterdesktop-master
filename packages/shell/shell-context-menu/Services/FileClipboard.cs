@@ -11,6 +11,7 @@ using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
 using System.Windows;
+using BetterDesktop.Shell.Core.Native;
 
 namespace BetterDesktop.Shell.ContextMenus.Services;
 
@@ -141,15 +142,15 @@ public static class FileClipboard
         {
             var from = string.Join("\0", sources) + "\0\0"; // 双 NUL 结尾
             var to = string.IsNullOrEmpty(destination) ? null : destination + "\0\0";
-            var op = new ShFileOpStruct
+            var op = new NativeMethods.ShFileOpStruct
             {
                 wFunc = func,
                 pFrom = from,
                 pTo = to,
                 fFlags = (ushort)((allowUndo ? FofAllowUndo : 0) | FofNoConfirmMkDir),
             };
-            var result = SHFileOperation(ref op);
-            return result == 0 && !op.fAnyOperationsAborted;
+            var result = NativeMethods.SHFileOperation(ref op);
+            return result == 0 && op.fAnyOperationsAborted == 0;
         }
         catch
         {
@@ -170,6 +171,4 @@ public static class FileClipboard
         public string? lpszProgressTitle;
     }
 
-    [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
-    private static extern int SHFileOperation(ref ShFileOpStruct lpFileOp);
 }

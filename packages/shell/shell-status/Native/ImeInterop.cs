@@ -1,9 +1,10 @@
-// BetterDesktop.Shell.Status — 输入法状态 P/Invoke 收口：
+﻿// BetterDesktop.Shell.Status — 输入法状态 P/Invoke 收口：
 //   - GetKeyboardLayoutNameW 读取当前键盘布局名（如 "00000804"=中文）
 //   - ImmGetDefaultIMEWnd 取默认 IME 窗口（验证是否有激活的 IME 能力）
 
 using System.Runtime.InteropServices;
 using System.Text;
+using BetterDesktop.Shell.Core.Native;
 
 namespace BetterDesktop.Shell.Status.Native;
 
@@ -21,8 +22,6 @@ internal static class ImeInterop
     /// <summary>布局名取不到时显示的文本。</summary>
     public const string UnknownText = "未知输入法";
 
-    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
-    private static extern int GetKeyboardLayoutNameW(StringBuilder pwszKLID);
 
     /// <summary>读取当前键盘布局 KLID，返回形如 "00000804" 的八位字符串；失败返回 UnknownLayout。</summary>
     public static string GetKeyboardLayoutId()
@@ -30,7 +29,7 @@ internal static class ImeInterop
         try
         {
             var sb = new StringBuilder(KlNameMaxLength);
-            if (GetKeyboardLayoutNameW(sb) > 0 && sb.Length > 0)
+            if (NativeMethods.GetKeyboardLayoutNameW(sb) > 0 && sb.Length > 0)
             {
                 return sb.ToString();
             }

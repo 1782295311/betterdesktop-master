@@ -7,6 +7,7 @@ using System;
 using System.Runtime.InteropServices;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
+using BetterDesktop.Shell.Core.Native;
 
 namespace BetterDesktop.Shell.Desktop.Services;
 
@@ -29,14 +30,6 @@ internal static class ShellNamespaceHelper
         public string szTypeName;
     }
 
-    [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
-    private static extern int SHParseDisplayName(string pszName, IntPtr pbc, out IntPtr ppidl, uint sfgaoIn, out uint psfgaoOut);
-
-    [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
-    private static extern IntPtr SHGetFileInfo(IntPtr pidl, uint dwFileAttributes, ref SHFILEINFO psfi, uint cbFileInfo, uint uFlags);
-
-    [DllImport("user32.dll")]
-    private static extern bool DestroyIcon(IntPtr hIcon);
 
     /// <summary>取虚拟项主题图标；失败返回 null（UI 留空白，不阻断渲染）。</summary>
     public static ImageSource? GetIcon(string clsidPath)
@@ -44,13 +37,13 @@ internal static class ShellNamespaceHelper
         IntPtr pidl = IntPtr.Zero;
         try
         {
-            if (SHParseDisplayName(clsidPath, IntPtr.Zero, out pidl, 0, out _) != 0 || pidl == IntPtr.Zero)
+            if (NativeMethods.SHParseDisplayName(clsidPath, IntPtr.Zero, out pidl, 0, out _) != 0 || pidl == IntPtr.Zero)
             {
                 return null;
             }
 
-            var info = new SHFILEINFO();
-            if (SHGetFileInfo(pidl, 0, ref info, (uint)Marshal.SizeOf<SHFILEINFO>(), ShgfiIcon | ShgfiLargeIcon | ShgfiPidl) == IntPtr.Zero
+            var info = new NativeMethods.SHFILEINFO();
+            if (NativeMethods.SHGetFileInfo(pidl, 0, ref info, (uint)Marshal.SizeOf<SHFILEINFO>(), ShgfiIcon | ShgfiLargeIcon | ShgfiPidl) == IntPtr.Zero
                 || info.hIcon == IntPtr.Zero)
             {
                 return null;
@@ -68,7 +61,7 @@ internal static class ShellNamespaceHelper
             }
             finally
             {
-                _ = DestroyIcon(info.hIcon);
+                _ = NativeMethods.DestroyIcon(info.hIcon);
             }
         }
         catch

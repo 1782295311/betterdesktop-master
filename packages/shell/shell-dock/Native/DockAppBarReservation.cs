@@ -1,11 +1,12 @@
-// BetterDesktop.Shell.Dock — AppBar 空间预留（Win32 SHAppBarMessage，底部 dock 专属）
+﻿// BetterDesktop.Shell.Dock — AppBar 空间预留（Win32 SHAppBarMessage，底部 dock 专属）
 // 与 shell-menu-bar/Native/AppBarReservation 同范式（ABM_NEW → QUERYPOS+SETPOS → ABM_REMOVE），
 // 差异仅 edge=ABE_BOTTOM：dock 注册为底部 AppBar 后，explorer 自动把工作区上移，
 // **最大化窗口/桌面图标不再覆盖 dock 条带**——dock 不需要置顶就能始终可见（cairoshell 同款）。
-// 注意：APPBARDATA.rc 一律为物理像素（与 Window 逻辑坐标不同域），取自 GetWindowRect(hwnd)。
+// 注意：APPBARDATA.rc 一律为物理像素（与 Window 逻辑坐标不同域），取自 NativeMethods.GetWindowRect(hwnd)。
 
 using System;
 using System.Runtime.InteropServices;
+using BetterDesktop.Shell.Core.Native;
 using BetterDesktop.Shell.WindowTracker;
 
 namespace BetterDesktop.Shell.Dock.Native;
@@ -43,12 +44,6 @@ internal static class DockAppBarReservation
         public int Bottom;
     }
 
-    [DllImport("shell32.dll")]
-    private static extern IntPtr SHAppBarMessage(uint dwMessage, ref AppbarData pData);
-
-    [DllImport("user32.dll", SetLastError = true)]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool GetWindowRect(IntPtr hWnd, out NativeRect lpRect);
 
     [StructLayout(LayoutKind.Sequential)]
     private struct MonitorInfo
@@ -59,29 +54,18 @@ internal static class DockAppBarReservation
         public uint dwFlags;
     }
 
-    [DllImport("user32.dll")]
-    private static extern IntPtr MonitorFromWindow(IntPtr hWnd, uint dwFlags);
-
-    [DllImport("user32.dll")]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool GetMonitorInfo(IntPtr hMonitor, ref MonitorInfo lpmi);
-
     private const uint SwpNoZOrder = 0x0004;
     private const uint SwpNoActivate = 0x0010;
-
-    [DllImport("user32.dll", SetLastError = true)]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int x, int y, int cx, int cy, uint uFlags);
 
     /// <summary>窗口所在屏的物理工作区（GetMonitorInfo，物理像素，与协商矩形同域）。失败返回 false。</summary>
     public static bool GetMonitorWorkArea(IntPtr hwnd, out NativeRect work)
     {
         work = default;
         if (hwnd == IntPtr.Zero) return false;
-        var mon = MonitorFromWindow(hwnd, 2); // MONITOR_DEFAULTTONEAREST
-        var mi = new MonitorInfo { cbSize = Marshal.SizeOf<MonitorInfo>() };
-        if (mon == IntPtr.Zero || !GetMonitorInfo(mon, ref mi)) return false;
-        work = mi.rcWork;
+        var mon = NativeMethods.MonitorFromWindow(hwnd, 2); // MONITOR_DEFAULTTONEAREST
+        var mi = new NativeMethods.MONITORINFO { cbSize = Marshal.SizeOf<NativeMethods.MONITORINFO>() };
+        if (mon == IntPtr.Zero || !NativeMethods.GetMonitorInfo(mon, ref mi)) return false;
+        work = new NativeRect { Left = mi.rcWork.Left, Top = mi.rcWork.Top, Right = mi.rcWork.Right, Bottom = mi.rcWork.Bottom };
         return true;
     }
 
@@ -92,10 +76,10 @@ internal static class DockAppBarReservation
     {
         monitor = default;
         if (hwnd == IntPtr.Zero) return false;
-        var mon = MonitorFromWindow(hwnd, 2); // MONITOR_DEFAULTTONEAREST
-        var mi = new MonitorInfo { cbSize = Marshal.SizeOf<MonitorInfo>() };
-        if (mon == IntPtr.Zero || !GetMonitorInfo(mon, ref mi)) return false;
-        monitor = mi.rcMonitor;
+        var mon = NativeMethods.MonitorFromWindow(hwnd, 2); // MONITOR_DEFAULTTONEAREST
+        var mi = new NativeMethods.MONITORINFO { cbSize = Marshal.SizeOf<NativeMethods.MONITORINFO>() };
+        if (mon == IntPtr.Zero || !NativeMethods.GetMonitorInfo(mon, ref mi)) return false;
+        monitor = new NativeRect { Left = mi.rcMonitor.Left, Top = mi.rcMonitor.Top, Right = mi.rcMonitor.Right, Bottom = mi.rcMonitor.Bottom };
         return true;
     }
 
@@ -103,7 +87,7 @@ internal static class DockAppBarReservation
     public static void MoveWindowTo(IntPtr hwnd, NativeRect rect)
     {
         if (hwnd == IntPtr.Zero) return;
-        _ = SetWindowPos(hwnd, IntPtr.Zero, rect.Left, rect.Top,
+        _ = NativeMethods.SetWindowPos(hwnd, IntPtr.Zero, rect.Left, rect.Top,
             rect.Right - rect.Left, rect.Bottom - rect.Top, SwpNoZOrder | SwpNoActivate);
     }
 
@@ -111,14 +95,14 @@ internal static class DockAppBarReservation
     public static bool Register(IntPtr hwnd, uint callbackMessage)
     {
         if (hwnd == IntPtr.Zero) return false;
-        var data = new AppbarData
+        var data = new NativeMethods.AppbarData
         {
-            cbSize = Marshal.SizeOf<AppbarData>(),
+            cbSize = Marshal.SizeOf<NativeMethods.AppbarData>(),
             hWnd = hwnd,
             uCallbackMessage = callbackMessage,
             uEdge = AbeBottom
         };
-        var result = SHAppBarMessage(AbmNew, ref data);
+        var result = NativeMethods.SHAppBarMessage(AbmNew, ref data);
         return result != IntPtr.Zero;
     }
 
@@ -126,13 +110,13 @@ internal static class DockAppBarReservation
     public static void Unregister(IntPtr hwnd)
     {
         if (hwnd == IntPtr.Zero) return;
-        var data = new AppbarData
+        var data = new NativeMethods.AppbarData
         {
-            cbSize = Marshal.SizeOf<AppbarData>(),
+            cbSize = Marshal.SizeOf<NativeMethods.AppbarData>(),
             hWnd = hwnd,
             uEdge = AbeBottom
         };
-        _ = SHAppBarMessage(AbmRemove, ref data);
+        _ = NativeMethods.SHAppBarMessage(AbmRemove, ref data);
     }
 
     /// <summary>
@@ -150,37 +134,37 @@ internal static class DockAppBarReservation
         if (hwnd == IntPtr.Zero) return false;
         if (desired.Right - desired.Left <= 0 || desired.Bottom - desired.Top <= 0) return false;
 
-        var data = new AppbarData
+        var data = new NativeMethods.AppbarData
         {
-            cbSize = Marshal.SizeOf<AppbarData>(),
+            cbSize = Marshal.SizeOf<NativeMethods.AppbarData>(),
             hWnd = hwnd,
             uEdge = AbeBottom,
-            rc = desired
+            rc = new NativeMethods.RECT { Left = desired.Left, Top = desired.Top, Right = desired.Right, Bottom = desired.Bottom }
         };
 
-        var query = SHAppBarMessage(AbmQueryPos, ref data);
-        agreed = data.rc;
+        var query = NativeMethods.SHAppBarMessage(AbmQueryPos, ref data);
+        agreed = new NativeRect { Left = data.rc.Left, Top = data.rc.Top, Right = data.rc.Right, Bottom = data.rc.Bottom };
 
         // 防 ABN_POSCHANGED 自触发循环：SETPOS 会让系统重算工作区并广播 ABN_POSCHANGED，
         // 若每次协商都 SETPOS 会无限循环（实测 dock 被一路抬到屏幕顶）。仅在
         // (a) 从未 SETPOS（首次声明矩形）或 (b) 协商结果与窗口当前矩形不同 时才 SETPOS。
         var moved = true;
-        if (!forceSetPos && GetWindowRect(hwnd, out var cur))
+        if (!forceSetPos && NativeMethods.GetWindowRect(hwnd, out var cur))
         {
             moved = Math.Abs(cur.Left - agreed.Left) > 1 || Math.Abs(cur.Top - agreed.Top) > 1 ||
                     Math.Abs(cur.Right - agreed.Right) > 1 || Math.Abs(cur.Bottom - agreed.Bottom) > 1;
         }
         if (moved)
         {
-            _ = SHAppBarMessage(AbmSetPos, ref data);
+            _ = NativeMethods.SHAppBarMessage(AbmSetPos, ref data);
         }
 
         // 诊断（负高度排查）：期望矩形 vs 协商后 rc vs 所在屏工作区
         try
         {
-            var mon = MonitorFromWindow(hwnd, 2); // MONITOR_DEFAULTTONEAREST
-            var mi = new MonitorInfo { cbSize = Marshal.SizeOf<MonitorInfo>() };
-            var hasMon = GetMonitorInfo(mon, ref mi);
+            var mon = NativeMethods.MonitorFromWindow(hwnd, 2); // MONITOR_DEFAULTTONEAREST
+            var mi = new NativeMethods.MONITORINFO { cbSize = Marshal.SizeOf<NativeMethods.MONITORINFO>() };
+            var hasMon = NativeMethods.GetMonitorInfo(mon, ref mi);
             DebugLog.Trace("Dock",
                 $"AppBar 协商诊断: query={(query != IntPtr.Zero)} " +
                 $"desired=({desired.Left},{desired.Top},{desired.Right},{desired.Bottom}) W={desired.Right - desired.Left} H={desired.Bottom - desired.Top} " +

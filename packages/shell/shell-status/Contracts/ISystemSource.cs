@@ -2,6 +2,7 @@
 // monitor 不直接触碰 Interop，统一经 ISystemSource 取原始值；
 // 生产用 NativeSystemSource，单测注入 FakeSystemSource 即可稳定验证语义层。
 
+using BetterDesktop.Shell.Core.Native;
 using BetterDesktop.Shell.Status.Native;
 
 namespace BetterDesktop.Shell.Status.Contracts;
@@ -13,7 +14,7 @@ namespace BetterDesktop.Shell.Status.Contracts;
 public interface ISystemSource
 {
     /// <summary>读取物理内存状态；失败返回 null。</summary>
-    MemoryStatusEx? ReadMemory();
+    NativeMethods.MemoryStatusEx? ReadMemory();
 
     /// <summary>读取系统电源状态；失败返回 null。</summary>
     SystemPowerStatus? ReadPower();

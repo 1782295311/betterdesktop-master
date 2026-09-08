@@ -1,4 +1,4 @@
-// BetterDesktop.Shell.MenuBar — AppBar 空间预留（Win32 SHAppBarMessage）
+﻿// BetterDesktop.Shell.MenuBar — AppBar 空间预留（Win32 SHAppBarMessage）
 // 目的：把菜单栏注册为顶部 AppBar，explorer 会自动把工作区下移，
 // 桌面图标 / 最大化窗口都会让出菜单栏条带（不再被盖住）。
 // 生命周期：Register（ABM_NEW）→ ApplyPos（ABM_QUERYPOS + ABM_SETPOS）→ Unregister（ABM_REMOVE）。
@@ -7,6 +7,7 @@
 
 using System;
 using System.Runtime.InteropServices;
+using BetterDesktop.Shell.Core.Native;
 
 namespace BetterDesktop.Shell.MenuBar.Native;
 
@@ -43,25 +44,19 @@ internal static class AppBarReservation
         public int Bottom;
     }
 
-    [DllImport("shell32.dll")]
-    private static extern IntPtr SHAppBarMessage(uint dwMessage, ref AppbarData pData);
-
-    [DllImport("user32.dll", SetLastError = true)]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool GetWindowRect(IntPtr hWnd, out NativeRect lpRect);
 
     /// <summary>注册为顶部 AppBar。成功返回 true；失败返回 false（调用方静默降级，不崩溃）。</summary>
     public static bool Register(IntPtr hwnd, uint callbackMessage)
     {
         if (hwnd == IntPtr.Zero) return false;
-        var data = new AppbarData
+        var data = new NativeMethods.AppbarData
         {
-            cbSize = Marshal.SizeOf<AppbarData>(),
+            cbSize = Marshal.SizeOf<NativeMethods.AppbarData>(),
             hWnd = hwnd,
             uCallbackMessage = callbackMessage,
             uEdge = AbeTop
         };
-        var result = SHAppBarMessage(AbmNew, ref data);
+        var result = NativeMethods.SHAppBarMessage(AbmNew, ref data);
         return result != IntPtr.Zero;
     }
 
@@ -69,13 +64,13 @@ internal static class AppBarReservation
     public static void Unregister(IntPtr hwnd)
     {
         if (hwnd == IntPtr.Zero) return;
-        var data = new AppbarData
+        var data = new NativeMethods.AppbarData
         {
-            cbSize = Marshal.SizeOf<AppbarData>(),
+            cbSize = Marshal.SizeOf<NativeMethods.AppbarData>(),
             hWnd = hwnd,
             uEdge = AbeTop
         };
-        _ = SHAppBarMessage(AbmRemove, ref data);
+        _ = NativeMethods.SHAppBarMessage(AbmRemove, ref data);
     }
 
     /// <summary>
@@ -88,19 +83,19 @@ internal static class AppBarReservation
     public static bool TryApplyPos(IntPtr hwnd, out NativeRect agreed)
     {
         agreed = default;
-        if (hwnd == IntPtr.Zero || !GetWindowRect(hwnd, out var rect)) return false;
+        if (hwnd == IntPtr.Zero || !NativeMethods.GetWindowRect(hwnd, out var rect)) return false;
 
-        var data = new AppbarData
+        var data = new NativeMethods.AppbarData
         {
-            cbSize = Marshal.SizeOf<AppbarData>(),
+            cbSize = Marshal.SizeOf<NativeMethods.AppbarData>(),
             hWnd = hwnd,
             uEdge = AbeTop,
-            rc = rect
+            rc = new NativeMethods.RECT { Left = rect.Left, Top = rect.Top, Right = rect.Right, Bottom = rect.Bottom }
         };
 
-        var query = SHAppBarMessage(AbmQueryPos, ref data); // 系统调整 data.rc（贴顶、避开其他 AppBar）
-        _ = SHAppBarMessage(AbmSetPos, ref data);           // 采用调整后的 rc 并触发工作区重算
-        agreed = data.rc;
+        var query = NativeMethods.SHAppBarMessage(AbmQueryPos, ref data); // 系统调整 data.rc（贴顶、避开其他 AppBar）
+        _ = NativeMethods.SHAppBarMessage(AbmSetPos, ref data);           // 采用调整后的 rc 并触发工作区重算
+        agreed = new NativeRect { Left = data.rc.Left, Top = data.rc.Top, Right = data.rc.Right, Bottom = data.rc.Bottom };
         return query != IntPtr.Zero;
     }
 }

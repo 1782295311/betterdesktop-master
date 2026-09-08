@@ -1,6 +1,8 @@
 using System;
 using System.Runtime.InteropServices;
 using System.Windows.Interop;
+using BetterDesktop.Kernel.Core;
+using BetterDesktop.Shell.Core.Native;
 
 namespace BetterDesktop.Shell.Core.Vibrancy;
 
@@ -57,18 +59,21 @@ internal static class DwmHelper
     [DllImport("dwmapi.dll")]
     private static extern int DwmExtendFrameIntoClientArea(IntPtr hWnd, ref MARGINS pMarInset);
 
-    [DllImport("dwmapi.dll")]
-    private static extern int DwmSetWindowAttribute(IntPtr hWnd, int dwAttribute, ref int pvAttribute, int cbAttribute);
 
-    [DllImport("user32.dll")]
-    private static extern int SetWindowCompositionAttribute(IntPtr hWnd, ref WINCOMPATTRDATA pAttrData);
+    /// <summary>
+    /// F11/O3（7437 纪律 1）：WCA/DWM 调用返回值必须检查——毛玻璃失效静默降级透明窗时
+    /// 无从排查，失败必须带错误码记日志（降级照常，不崩溃）。
+    /// </summary>
+    private static void TraceFailure(string api, IntPtr hWnd, int hr)
+        => DiagnosticLog.Trace("Vibrancy", $"{api} 失败 hwnd={hWnd:X} hr=0x{hr:X8}（毛玻璃可能降级为透明窗）");
 
     /// <summary>按入参给窗口设置 DWM 系统默认圆角偏好（实证基准 FrostedGlassDemo 原样）。</summary>
     private static void ApplyCornerPreference(IntPtr hWnd, bool roundCorners, bool smallRadius)
     {
         if (!roundCorners) return;
         int corner = smallRadius ? DWMWCP_ROUNDSMALL : DWMWCP_ROUND;
-        DwmSetWindowAttribute(hWnd, DWMWA_WINDOW_CORNER_PREFERENCE, ref corner, sizeof(int));
+        int hr = NativeMethods.DwmSetWindowAttribute(hWnd, DWMWA_WINDOW_CORNER_PREFERENCE, ref corner, sizeof(int));
+        if (hr != 0) TraceFailure("NativeMethods.DwmSetWindowAttribute(CornerPreference)", hWnd, hr);
     }
 
     /// <summary>
@@ -89,8 +94,9 @@ internal static class DwmHelper
         Marshal.StructureToPtr(accent, p, false);
         try
         {
-            var data = new WINCOMPATTRDATA { nAttribute = WCA_ACCENT_POLICY, pData = p, ulSize = size };
-            SetWindowCompositionAttribute(hWnd, ref data);
+            var data = new NativeMethods.WINCOMPATTRDATA { nAttribute = WCA_ACCENT_POLICY, pData = p, ulSize = size };
+            int hr = NativeMethods.SetWindowCompositionAttribute(hWnd, ref data);
+            if (hr != 0) TraceFailure("SetWindowCompositionAttribute(BlurBehind)", hWnd, hr);
         }
         finally
         {
@@ -113,10 +119,12 @@ internal static class DwmHelper
             cyTopHeight = -1,
             cyBottomHeight = -1
         };
-        DwmExtendFrameIntoClientArea(hWnd, ref margins);
+        int extendHr = DwmExtendFrameIntoClientArea(hWnd, ref margins);
+        if (extendHr != 0) TraceFailure("DwmExtendFrameIntoClientArea", hWnd, extendHr);
 
         int backdrop = DWMSBT_TRANSIENTWINDOW;
-        DwmSetWindowAttribute(hWnd, DWMWA_SYSTEMBACKDROP_TYPE, ref backdrop, sizeof(int));
+        int backdropHr = NativeMethods.DwmSetWindowAttribute(hWnd, DWMWA_SYSTEMBACKDROP_TYPE, ref backdrop, sizeof(int));
+        if (backdropHr != 0) TraceFailure("NativeMethods.DwmSetWindowAttribute(SystemBackdrop)", hWnd, backdropHr);
 
         ApplyCornerPreference(hWnd, roundCorners, smallRadius);
     }
@@ -131,7 +139,9 @@ internal static class DwmHelper
         var accent = new ACCENT_POLICY
         {
             nAccentState = ACCENT_ENABLE_ACRYLICBLURBEHIND,
-            nFlags = 0,
+            // P0（7404 红线 1 [verified]）：AccentFlags=2 告知 GradientColor 被使用——
+            // 漏设则亚克力色调被忽略（BlurBehind 无色调不适用此规则，保持 0）。
+            nFlags = 2,
             nColor = unchecked((int)argb),
             nAnimationId = 0
         };
@@ -140,8 +150,9 @@ internal static class DwmHelper
         Marshal.StructureToPtr(accent, p, false);
         try
         {
-            var data = new WINCOMPATTRDATA { nAttribute = WCA_ACCENT_POLICY, pData = p, ulSize = size };
-            SetWindowCompositionAttribute(hWnd, ref data);
+            var data = new NativeMethods.WINCOMPATTRDATA { nAttribute = WCA_ACCENT_POLICY, pData = p, ulSize = size };
+            int hr = NativeMethods.SetWindowCompositionAttribute(hWnd, ref data);
+            if (hr != 0) TraceFailure("SetWindowCompositionAttribute(AccentTint)", hWnd, hr);
         }
         finally
         {
@@ -168,8 +179,9 @@ internal static class DwmHelper
         Marshal.StructureToPtr(accent, p, false);
         try
         {
-            var data = new WINCOMPATTRDATA { nAttribute = WCA_ACCENT_POLICY, pData = p, ulSize = size };
-            SetWindowCompositionAttribute(hWnd, ref data);
+            var data = new NativeMethods.WINCOMPATTRDATA { nAttribute = WCA_ACCENT_POLICY, pData = p, ulSize = size };
+            int hr = NativeMethods.SetWindowCompositionAttribute(hWnd, ref data);
+            if (hr != 0) TraceFailure("SetWindowCompositionAttribute(Disable)", hWnd, hr);
         }
         finally
         {
@@ -177,6 +189,7 @@ internal static class DwmHelper
         }
 
         int backdrop = DWMSBT_NONE;
-        DwmSetWindowAttribute(hWnd, DWMWA_SYSTEMBACKDROP_TYPE, ref backdrop, sizeof(int));
+        int backdropHr = NativeMethods.DwmSetWindowAttribute(hWnd, DWMWA_SYSTEMBACKDROP_TYPE, ref backdrop, sizeof(int));
+        if (backdropHr != 0) TraceFailure("NativeMethods.DwmSetWindowAttribute(SystemBackdrop=None)", hWnd, backdropHr);
     }
 }

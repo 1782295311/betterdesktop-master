@@ -1,8 +1,9 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Text;
+using BetterDesktop.Shell.Core.Native;
 
 namespace BetterDesktop.Shell.WindowTracker.Native;
 
@@ -54,15 +55,6 @@ public static class RunningAppDetector
     private const int DwmwaCloaked = 14;
     private const int SwRestore = 9;
 
-    private delegate bool EnumWindowsProc(IntPtr hwnd, IntPtr lParam);
-
-    [DllImport("user32.dll")]
-    private static extern bool EnumWindows(EnumWindowsProc lpEnumFunc, IntPtr lParam);
-
-    [DllImport("user32.dll")]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    public static extern bool IsWindowVisible(IntPtr hWnd);
-
     [DllImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool NativeGetWindowPlacement(IntPtr hWnd, out WindowPlacement lpwndpl);
@@ -86,48 +78,15 @@ public static class RunningAppDetector
         }
     }
 
-    [DllImport("user32.dll")]
-    private static extern IntPtr GetWindowLongPtr(IntPtr hWnd, int nIndex);
-
-    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
-    private static extern int GetWindowText(IntPtr hWnd, StringBuilder lpString, int nMaxCount);
-
-    [DllImport("user32.dll")]
-    private static extern int GetWindowTextLength(IntPtr hWnd);
-
-    [DllImport("user32.dll")]
-    private static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
 
     [DllImport("dwmapi.dll")]
     private static extern int DwmGetWindowAttribute(IntPtr hwnd, int dwAttribute, out uint pvAttribute, int cbAttribute);
 
     [DllImport("user32.dll")]
-    private static extern bool ShowWindowAsync(IntPtr hWnd, int nCmdShow);
-
-    [DllImport("user32.dll")]
     private static extern bool SetForegroundWindow(IntPtr hWnd);
-
-    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
-    private static extern int GetClassName(IntPtr hWnd, StringBuilder lpClassName, int nMaxCount);
-
-    [DllImport("user32.dll")]
-    private static extern IntPtr GetForegroundWindow();
-
-    [DllImport("user32.dll")]
-    private static extern bool AttachThreadInput(uint idAttach, uint idAttachTo, bool fAttach);
-
-    [DllImport("kernel32.dll")]
-    private static extern uint GetCurrentThreadId();
 
     [DllImport("user32.dll")]
     private static extern bool BringWindowToTop(IntPtr hWnd);
-
-    [DllImport("kernel32.dll")]
-    private static extern IntPtr OpenProcess(uint dwDesiredAccess, bool bInheritHandle, uint dwProcessId);
-
-    [DllImport("kernel32.dll")]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool CloseHandle(IntPtr hObject);
 
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
@@ -143,18 +102,18 @@ public static class RunningAppDetector
     {
         var result = new List<RunningWindow>();
 
-        EnumWindows((hwnd, _) =>
+        NativeMethods.EnumWindows((hwnd, _) =>
         {
             try
             {
                 // 必须有 WS_VISIBLE
-                if (!IsWindowVisible(hwnd))
+                if (!NativeMethods.IsWindowVisible(hwnd))
                 {
                     return true;
                 }
 
                 // 不能有 WS_EX_TOOLWINDOW（工具窗口不显示在任务栏）
-                if ((GetWindowLongPtr(hwnd, GwlExStyle).ToInt64() & WsExToolWindow) != 0)
+                if ((NativeMethods.GetWindowLongPtr(hwnd, GwlExStyle).ToInt64() & WsExToolWindow) != 0)
                 {
                     return true;
                 }
@@ -173,7 +132,7 @@ public static class RunningAppDetector
                 }
 
                 // 必须获取到进程 ID
-                if (GetWindowThreadProcessId(hwnd, out var pid) == 0 || pid == 0)
+                if (NativeMethods.GetWindowThreadProcessId(hwnd, out var pid) == 0 || pid == 0)
                 {
                     return true;
                 }
@@ -195,13 +154,23 @@ public static class RunningAppDetector
                 // 不排除的话它们会并入 explorer 的运行图标，且因 z-order 最底、常驻可见，
                 // 点击激活会选中桌面本身 → 看起来"点了资源管理器没反应"（实测回归）。
                 var className = new StringBuilder(64);
-                if (GetClassName(hwnd, className, 64) > 0)
+                if (NativeMethods.GetClassName(hwnd, className, 64) > 0)
                 {
                     var cn = className.ToString();
                     if (cn == "Progman" || cn == "WorkerW")
                     {
                         return true;
                     }
+                }
+
+                // 排除"幽灵窗口"：有标题、可见、未最小化，但矩形极小（< 64×48）。
+                // 这类窗口是应用的隐藏宿主/通信窗口，激活它毫无反应——
+                // 一旦它被当成"运行中的应用"，点击永远唤不出真正的窗口
+                // （表现为"dock 里看得到、点它没反应"）。最小化的窗口不参与此过滤：
+                // 最小化矩形本就小，且它们正是要被唤出来的目标。
+                if (IsGhostWindow(hwnd))
+                {
+                    return true;
                 }
 
                 result.Add(new RunningWindow(hwnd, pid, exePath, title));
@@ -237,31 +206,36 @@ public static class RunningAppDetector
     /// 前台是目标应用或桌面，不是本进程）——必须先 AttachThreadInput 把输入队列绑到前台线程
     /// 再置前（微软经典解法，cairoshell C1 WindowOperations 同款已验证范式）。
     /// </summary>
-    public static void ActivateWindow(IntPtr hwnd)
+    /// <returns>是否成功把目标置为前台窗口。</returns>
+    public static bool ActivateWindow(IntPtr hwnd)
     {
         if (hwnd == IntPtr.Zero)
         {
-            return;
+            return false;
         }
 
         try
         {
-            ShowWindowAsync(hwnd, SwRestore);
+            // ⚠️ 必须用**同步**的 ShowWindow，不能用 ShowWindowAsync：
+            // Async 版只往目标线程投递消息就立刻返回，窗口此刻**仍处于最小化状态**，
+            // 紧随其后的 SetForegroundWindow 对最小化窗口必然失败（"唤不出来"的经典竞态）。
+            // 同步 ShowWindow 保证窗口状态在返回前已更新。
+            NativeMethods.ShowWindow(hwnd, SwRestore);
 
-            var foreThread = GetWindowThreadProcessId(GetForegroundWindow(), out _);
-            var targetThread = GetWindowThreadProcessId(hwnd, out _);
-            var thisThread = GetCurrentThreadId();
+            var foreThread = NativeMethods.GetWindowThreadProcessId(NativeMethods.GetForegroundWindow(), out _);
+            var targetThread = NativeMethods.GetWindowThreadProcessId(hwnd, out _);
+            var thisThread = (uint)NativeMethods.GetCurrentThreadId();
             var bound = foreThread != 0 && foreThread != thisThread;
             var boundTarget = bound && targetThread != 0 && targetThread != foreThread;
 
             if (bound)
             {
-                _ = AttachThreadInput(thisThread, foreThread, true);
+                _ = NativeMethods.AttachThreadInput(thisThread, foreThread, true);
             }
 
             if (boundTarget)
             {
-                _ = AttachThreadInput(targetThread, foreThread, true);
+                _ = NativeMethods.AttachThreadInput(targetThread, foreThread, true);
             }
 
             try
@@ -270,40 +244,112 @@ public static class RunningAppDetector
                 if (!SetForegroundWindow(hwnd))
                 {
                     // 前台锁兜底：ALT 键抖动为本线程解锁前台权限后再试（经典技巧，无害）。
-                    keybd_event(VkMenu, 0, 0, IntPtr.Zero);
-                    keybd_event(VkMenu, 0, KeyEventFKeyUp, IntPtr.Zero);
+                    NativeMethods.keybd_event(VkMenu, 0, 0, UIntPtr.Zero);
+                    NativeMethods.keybd_event(VkMenu, 0, KeyEventFKeyUp, UIntPtr.Zero);
                     var retried = SetForegroundWindow(hwnd);
                     DebugLog.Trace("Activate", $"SetForegroundWindow retry={retried} hwnd={hwnd:X} foreThread={foreThread} targetThread={targetThread}");
+                    return retried;
                 }
-                else
-                {
-                    DebugLog.Trace("Activate", $"SetForegroundWindow ok hwnd={hwnd:X} foreThread={foreThread} targetThread={targetThread}");
-                }
+
+                DebugLog.Trace("Activate", $"SetForegroundWindow ok hwnd={hwnd:X} foreThread={foreThread} targetThread={targetThread}");
+                return true;
             }
             finally
             {
                 if (boundTarget)
                 {
-                    _ = AttachThreadInput(targetThread, foreThread, false);
+                    _ = NativeMethods.AttachThreadInput(targetThread, foreThread, false);
                 }
 
                 if (bound)
                 {
-                    _ = AttachThreadInput(thisThread, foreThread, false);
+                    _ = NativeMethods.AttachThreadInput(thisThread, foreThread, false);
                 }
             }
         }
         catch
         {
             // 激活失败不影响 Dock
+            return false;
         }
+    }
+
+    // 前台设置失败后，延迟多久校验"是否真的唤出来了"。
+    private const int ActivateVerifyDelayMs = 320;
+
+    /// <summary>
+    /// 激活窗口；**明确失败时回退为「重新启动该 exe」**。
+    ///
+    /// 【为什么需要回退 · UIPI】任务管理器（Taskmgr.exe）在管理员账户下会自动提权到**高完整性级别**，
+    /// 而本 shell 以中等完整性运行。UIPI（用户界面特权隔离）会让低完整性进程对高完整性窗口的
+    /// `ShowWindowAsync` / `SetForegroundWindow` **静默失败**——现象就是"dock 运行区看得到缩略图，
+    /// 点它却唤不出来"（实测：任务管理器最小化后必现）。
+    ///
+    /// 回退把激活权交还给应用自己：Taskmgr 是单例，再次 ShellExecute 时由它自己把已有实例唤到前台，
+    /// 这一步发生在它的进程/完整性级别内，不受 UIPI 限制。
+    ///
+    /// 【避免误伤】只有"前台设置明确失败 **且** 延迟校验后目标仍是最小化"才回退；
+    /// 前台失败但窗口其实已显示（只是没抢到焦点）时不会多开窗口。
+    /// </summary>
+    public static void ActivateWindowOrRelaunch(IntPtr hwnd, string? exePath)
+    {
+        if (ActivateWindow(hwnd))
+        {
+            return;
+        }
+
+        if (hwnd == IntPtr.Zero || string.IsNullOrWhiteSpace(exePath))
+        {
+            return;
+        }
+
+        var path = exePath;
+        _ = Task.Delay(ActivateVerifyDelayMs).ContinueWith(_ =>
+        {
+            try
+            {
+                if (!NativeMethods.IsWindowVisible(hwnd) || !NativeMethods.IsIconic(hwnd))
+                {
+                    return; // 已经显示出来了（只是没抢到焦点），不重启
+                }
+
+                DebugLog.Trace("Activate", $"relaunch fallback exe={path} hwnd=0x{(long)hwnd:X}");
+                Process.Start(new ProcessStartInfo(path) { UseShellExecute = true });
+            }
+            catch
+            {
+                // 回退失败静默：原始激活已尽力。
+            }
+        }, TaskScheduler.Default);
     }
 
     private const byte VkMenu = 0xA4;       // VK_MENU (ALT)
     private const uint KeyEventFKeyUp = 0x0002;
 
-    [DllImport("user32.dll")]
-    private static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, IntPtr dwExtraInfo);
+    /// <summary>
+    /// 请求关闭窗口——等价于点标题栏的 ✕：投递 `WM_CLOSE`，**由应用自己决定**是否提示保存/拒绝关闭。
+    /// ⚠️ 不强制结束进程：强杀不可逆（未保存数据直接丢失），那是任务管理器该干的事，shell 只做"优雅关闭"。
+    /// 用 PostMessage（异步）而非 SendMessage：无响应的应用不会把调用方挂死。
+    /// </summary>
+    /// <returns>消息是否成功投递（true ≠ 窗口已关闭）。</returns>
+    public static bool CloseWindow(IntPtr hwnd)
+    {
+        if (hwnd == IntPtr.Zero)
+        {
+            return false;
+        }
+
+        try
+        {
+            return NativeMethods.PostMessage(hwnd, WmClose, IntPtr.Zero, IntPtr.Zero);
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private const uint WmClose = 0x0010;
 
     /// <summary>
     /// 激活指定可执行路径对应的第一个窗口。
@@ -325,6 +371,46 @@ public static class RunningAppDetector
         }
     }
 
+    // 幽灵窗口判定阈值（保守）：宽**且**高都小于此尺寸的"可见未最小化"顶层窗口，
+    // 才判定为隐藏宿主/通信窗口。阈值取小值 + AND 条件，宁可漏放也不误伤真实小窗口。
+    private const int MinRealWindowSize = 48;
+
+    /// <summary>
+    /// 是否为"幽灵窗口"：**可见且未最小化**，但矩形小到不可能是一个应用主窗口。
+    /// 最小化的窗口一律不算（最小化矩形本就小，且是合法的激活目标）。
+    /// </summary>
+    private static bool IsGhostWindow(IntPtr hwnd)
+    {
+        try
+        {
+            if (NativeMethods.IsIconic(hwnd))
+            {
+                return false;
+            }
+
+            if (!NativeMethods.GetWindowRect(hwnd, out var rect))
+            {
+                return false;
+            }
+
+            return (rect.Right - rect.Left) < MinRealWindowSize &&
+                   (rect.Bottom - rect.Top) < MinRealWindowSize;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct RECT
+    {
+        public int Left;
+        public int Top;
+        public int Right;
+        public int Bottom;
+    }
+
     private static bool IsCloaked(IntPtr hWnd)
     {
         // DwmGetWindowAttribute(DwmwaCloaked) 返回 S_OK (0) 且 cloaked != 0 时表示窗口被折叠隐藏
@@ -334,14 +420,14 @@ public static class RunningAppDetector
 
     internal static string GetWindowText(IntPtr hwnd)
     {
-        var length = GetWindowTextLength(hwnd);
+        var length = NativeMethods.GetWindowTextLength(hwnd);
         if (length <= 0)
         {
             return string.Empty;
         }
 
         var sb = new StringBuilder(length + 1);
-        _ = GetWindowText(hwnd, sb, sb.Capacity);
+        _ = NativeMethods.GetWindowText(hwnd, sb, sb.Capacity);
         return sb.ToString();
     }
 
@@ -370,7 +456,7 @@ public static class RunningAppDetector
         // 方式 2：QueryFullProcessImageName（只需 PROCESS_QUERY_LIMITED_INFORMATION）
         try
         {
-            var handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, processId);
+            var handle = NativeMethods.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, processId);
             if (handle != IntPtr.Zero)
             {
                 try
@@ -385,7 +471,7 @@ public static class RunningAppDetector
                 }
                 finally
                 {
-                    CloseHandle(handle);
+                    NativeMethods.CloseHandle(handle);
                 }
             }
         }

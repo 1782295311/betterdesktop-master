@@ -1,4 +1,4 @@
-// BetterDesktop.Shell.Status — 网络状态 P/Invoke 收口：
+﻿// BetterDesktop.Shell.Status — 网络状态 P/Invoke 收口：
 //   - ConnectionState：托管层 NetworkInterface（零依赖），区分接口类型/连接状态/速度。
 //   - WirelessAdapters：wlanapi WlanOpenHandle + WlanEnumInterfaces 枚举无线适配器及其连接态。
 //
@@ -8,6 +8,7 @@
 
 using System.Net.NetworkInformation;
 using System.Runtime.InteropServices;
+using BetterDesktop.Shell.Core.Native;
 
 namespace BetterDesktop.Shell.Status.Native;
 
@@ -43,6 +44,18 @@ internal static class NetworkInterop
                     continue;
                 }
 
+                // N1：Hyper-V/VMware 等虚拟交换机恒为 Up，会把"WiFi 断网"误判成"有线在线"。
+                // 只按名称/描述保守排除（仅作用于 Ethernet，避免误杀真实网卡；未知命名不拦）。
+                if (ni.NetworkInterfaceType == NetworkInterfaceType.Ethernet)
+                {
+                    var ifaceName = InteropGuard.SafeInvoke(() => ni.Name, string.Empty);
+                    var ifaceDesc = InteropGuard.SafeInvoke(() => ni.Description, string.Empty);
+                    if (IsVirtualSwitchLike(ifaceName, ifaceDesc))
+                    {
+                        continue;
+                    }
+                }
+
                 var connected = ni.OperationalStatus == OperationalStatus.Up;
                 result.Add(new InterfaceLinkStatus(
                     InteropGuard.SafeInvoke(() => ni.Name, string.Empty),
@@ -63,6 +76,32 @@ internal static class NetworkInterop
     public static bool HasActiveConnection()
         => ReadPhysicalInterfaces().Any(x => x.ConnectedFast);
 
+    /// <summary>虚拟交换机/虚拟网卡命名标记（保守黑名单：只匹配明确虚拟来源，宁漏勿误杀）。</summary>
+    private static readonly string[] VirtualAdapterMarkers =
+    {
+        "vethernet",   // Hyper-V 默认/专用交换机（"vEthernet (Default Switch)"）
+        "hyper-v",
+        "vmware",      // VMware Network Adapter VMnet*
+        "virtualbox",
+        "virtual switch",
+        "docker",
+        "wsl"
+    };
+
+    /// <summary>是否为虚拟交换机/虚拟网卡（按名称+描述匹配黑名单标记）。</summary>
+    private static bool IsVirtualSwitchLike(string name, string description)
+    {
+        var hay = $"{name} {description}".ToLowerInvariant();
+        foreach (var marker in VirtualAdapterMarkers)
+        {
+            if (hay.Contains(marker))
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
     /// <summary>枚举当前无线适配器（wlanapi）；异常时返回空列表。</summary>
     public static IReadOnlyList<WirelessAdapterStatus> ReadWirelessAdapters()
     {
@@ -70,12 +109,12 @@ internal static class NetworkInterop
         IntPtr pInterfaceList = IntPtr.Zero;
         try
         {
-            if (WlanOpenHandle(2, IntPtr.Zero, out _, out hClient) != 0)
+            if (NativeMethods.WlanOpenHandle(2, IntPtr.Zero, out _, out hClient) != 0)
             {
                 return Array.Empty<WirelessAdapterStatus>();
             }
 
-            if (WlanEnumInterfaces(hClient, IntPtr.Zero, out pInterfaceList) != 0)
+            if (NativeMethods.WlanEnumInterfaces(hClient, IntPtr.Zero, out pInterfaceList) != 0)
             {
                 return Array.Empty<WirelessAdapterStatus>();
             }
@@ -105,11 +144,11 @@ internal static class NetworkInterop
         {
             if (pInterfaceList != IntPtr.Zero)
             {
-                WlanFreeMemory(pInterfaceList);
+                NativeMethods.WlanFreeMemory(pInterfaceList);
             }
             if (hClient != IntPtr.Zero)
             {
-                _ = WlanCloseHandle(hClient, IntPtr.Zero);
+                _ = NativeMethods.WlanCloseHandle(hClient, IntPtr.Zero);
             }
         }
     }
@@ -155,15 +194,7 @@ internal static class NetworkInterop
         Authenticating = 7
     }
 
-    [DllImport("wlanapi.dll")]
-    private static extern int WlanOpenHandle(uint dwClientVersion, IntPtr pReserved, out uint pdwNegotiatedVersion, out IntPtr phClientHandle);
 
-    [DllImport("wlanapi.dll")]
-    private static extern int WlanEnumInterfaces(IntPtr hClientHandle, IntPtr pReserved, out IntPtr ppInterfaceList);
 
-    [DllImport("wlanapi.dll")]
-    private static extern void WlanFreeMemory(IntPtr pMemory);
 
-    [DllImport("wlanapi.dll")]
-    private static extern int WlanCloseHandle(IntPtr hClientHandle, IntPtr pReserved);
 }
