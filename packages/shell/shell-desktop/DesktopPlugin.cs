@@ -1,4 +1,4 @@
-// BetterDesktop.Shell.Desktop — 自绘桌面插件入口
+﻿// BetterDesktop.Shell.Desktop — 自绘桌面插件入口
 // 装配：DesktopBrowser（Provide 给菜单栏左区/工具条）+ DesktopWindow（透明"文件显示器"，壁纸归 explorer）。
 // 启用时隐藏 explorer 原桌面图标（ShellHelper.ToggleDesktopIcons），退出/卸载时还原（用户环境不可破坏）。
 //
@@ -26,7 +26,7 @@
 //   bool 参数不改变其行为），且其内部窗口查找只认 Progman 直子的 SHELLDLL_DefView——
 //   壁纸引擎（Wallpaper Engine）等会把 DefView 移到 WorkerW 下，此时隐藏/恢复都会静默失效
 //   （曾导致"关闭自绘桌面后 explorer 图标不恢复"）。
-//   现改为自实现**幂等**的 ShowWindow(SW_SHOW/SW_HIDE) 直接作用于 SysListView32，
+//   现改为自实现**幂等**的 NativeMethods.ShowWindow(SW_SHOW/SW_HIDE) 直接作用于 SysListView32，
 //   查找链兼容 Progman 直子与 WorkerW 变体；幂等 = 重复调用无副作用，所有时序坑消失。
 
 using System;
@@ -38,6 +38,8 @@ using System.Windows;
 using BetterDesktop.Kernel.Contracts;
 using BetterDesktop.Kernel.Core;
 using BetterDesktop.Shell.ContextMenus.Contracts;
+using BetterDesktop.Shell.Core;
+using BetterDesktop.Shell.Core.Native;
 using BetterDesktop.Shell.Core.Surface;
 using BetterDesktop.Shell.Core.Vibrancy;
 using BetterDesktop.Shell.Desktop.Contracts;
@@ -60,11 +62,10 @@ public sealed class DesktopPlugin : IPlugin
     private DesktopBrowser? _browser;
     private DesktopWindow? _window;
     private bool _running;
-    private bool _settingsHooked;
 
     // WH_MOUSE_LL：原生桌面模式的双击监听（自绘模式由 DesktopWindow 自行处理）
     private IntPtr _mouseHook;
-    private MouseHookProcDelegate? _mouseHookProc; // 持有委托引用，防被 GC 回收导致回调失效
+    private NativeMethods.LowLevelMouseProc? _mouseHookProc; // 持有委托引用，防被 GC 回收导致回调失效
 
     /// <summary>桌面组件开关（设置中心「桌面」分区里的 components.desktop，默认启用）。</summary>
     private bool IsDesktopEnabled => _settings?.Get("components.desktop", true) ?? true;
@@ -73,6 +74,14 @@ public sealed class DesktopPlugin : IPlugin
     {
         _context = context;
         _settings = context.Get<ISettingsService>();
+
+        // 系统桌面右键菜单「切换自绘桌面」入口（2026-09-07）：注册到 explorer 桌面空白右键，
+        // 宿主未运行时也能从系统菜单开关自绘桌面。幂等注册，每次启动重写同值。
+        DesktopSystemMenuRegistrar.EnsureRegistered();
+        // 系统文件右键「转换为…」（2026-09-07）：注册到 explorer 文件右键，经命令桥 → 自绘转换菜单。
+        DesktopSystemMenuRegistrar.EnsureConvertRegistered();
+        DesktopSystemMenuRegistrar.EnsureArchiveRegistered();
+        DesktopSystemMenuRegistrar.EnsureUiTogglesRegistered();
 
         // 设置分区（侧栏「桌面」）：无论桌面开关如何都注册，保证用户能在设置里重新开启。
         try
@@ -94,12 +103,22 @@ public sealed class DesktopPlugin : IPlugin
             DiagnosticLog.Trace("shell.desktop", $"设置分区注册失败：{ex.Message}");
         }
 
-        // 订阅开关变更 → 即时启停（用户点击「启用自绘桌面」无需重启即生效）。
-        if (_settings is not null && !_settingsHooked)
+        // 订阅开关变更 → 即时启停（违规1修复：跨程序集裸 event → IEventBus，Effect 托管生命周期）。
+        if (_settings is not null)
         {
-            _settings.Changed += OnSettingsChanged;
-            _settingsHooked = true;
+            context.Effect(() => context.Events.On<SettingsChangedEventArgs>(
+                ShellEvents.SettingsChanged,
+                (e, _) =>
+                {
+                    OnSettingsChanged(e);
+                    return Task.CompletedTask;
+                }));
         }
+
+        // 退出兜底无条件注册（2026-09-06 修复）：自绘/原生两种模式都可能留下隐藏态
+        //（原生模式 iconsHidden=true 也会隐藏 explorer 图标层），退出必须恢复，环境不可破坏。
+        // 先反注册再注册：插件可能多次 Load（HMR），幂等。
+        RegisterExitRestoreHooks();
 
         // 双击桌面空白切换图标显隐（desktop.iconsHidden）：
         //   自绘模式 → DesktopWindow 窗口级双击；原生模式 → 本钩子感知（窗口不存在，无别的感知手段）。
@@ -119,6 +138,7 @@ public sealed class DesktopPlugin : IPlugin
             if (_settings?.Get("desktop.iconsHidden", false) ?? false)
             {
                 SetNativeIconsVisible(false);
+                SpawnIconRestoreSentinel();
             }
         }
 
@@ -127,12 +147,6 @@ public sealed class DesktopPlugin : IPlugin
 
     public Task UnloadAsync(CancellationToken cancellationToken = default)
     {
-        if (_settings is not null && _settingsHooked)
-        {
-            _settings.Changed -= OnSettingsChanged;
-            _settingsHooked = false;
-        }
-
         RemoveDesktopDoubleClickHook();
         StopDesktop();
         _browser = null;
@@ -140,7 +154,7 @@ public sealed class DesktopPlugin : IPlugin
     }
 
     /// <summary>设置变更：components.desktop 开关即时启停；desktop.iconsHidden 在原生模式落到 explorer 图标层。</summary>
-    private void OnSettingsChanged(object? sender, SettingsChangedEventArgs e)
+    private void OnSettingsChanged(SettingsChangedEventArgs e)
     {
         if (e.Key == "components.desktop")
         {
@@ -198,27 +212,28 @@ public sealed class DesktopPlugin : IPlugin
 
         try
         {
+            // 步骤日志：12:47 会话曾冻结在创建/显示窗口阶段无从定位，每步落点。
+            DiagnosticLog.Trace("shell.desktop", "启动：创建 DesktopWindow");
             _browser ??= new DesktopBrowser();
             _context.Provide<IDesktopBrowser>(_browser);
 
             var vibrancy = _context.Get<IVibrancyService>() ?? NullVibrancy.Instance;
             var appearance = _context.Get<IAppearanceService>();
-            var menus = _context.Get<IMenuService>();
-            var classifier = _context.Get<IFileClassifier>();
-            _window = new DesktopWindow(_browser, vibrancy, appearance, _settings, menus, classifier);
+            var convertMenu = _context.Get<BetterDesktop.Shell.Convert.Contracts.IConvertMenuService>();
+            var archiveService = _context.Get<BetterDesktop.Shell.Convert.Contracts.IArchiveService>();
+            _window = new DesktopWindow(_browser, vibrancy, appearance, _settings, convertMenu, archiveService, _context?.Events);
             _window.Show();
+            DiagnosticLog.Trace("shell.desktop", "启动：窗口已显示，隐藏原生图标");
 
-            // 幂等隐藏：ShowWindow(SW_HIDE) 重复调用无副作用，无翻转语义的时序坑。
+            // 幂等隐藏：NativeMethods.ShowWindow(SW_HIDE) 重复调用无副作用，无翻转语义的时序坑。
+            // （仅隐 SysListView32 图标层；DefView 保持可见以承载自绘层。）
             SetNativeIconsVisible(false);
-
-            // 兜底：正常退出与进程退出都恢复（幂等）。先反注册再注册，防重复订阅。
-            Application.Current.Exit -= OnExitRestoreIcons;
-            Application.Current.Exit += OnExitRestoreIcons;
-            AppDomain.CurrentDomain.ProcessExit -= OnProcessExitRestoreIcons;
-            AppDomain.CurrentDomain.ProcessExit += OnProcessExitRestoreIcons;
+            // 哨兵进程：宿主进程死亡（含强杀/冻结被结束任务等不触发 Exit/ProcessExit 的路径）
+            // 即恢复 explorer 图标层——退出恢复的最后一道兜底。
+            SpawnIconRestoreSentinel();
 
             _running = true;
-            _context.Logger.Info($"{Name} 已启动：透明文件显示器已嵌入桌面（壁纸归 explorer），explorer 桌面图标已隐藏（含退出兜底）");
+            _context?.Logger.Info($"{Name} 已启动：透明文件显示器已嵌入桌面（壁纸归 explorer），explorer 桌面图标已隐藏（含退出兜底）");
         }
         catch (Exception ex)
         {
@@ -234,16 +249,8 @@ public sealed class DesktopPlugin : IPlugin
             return;
         }
 
-        try
-        {
-            Application.Current.Exit -= OnExitRestoreIcons;
-            AppDomain.CurrentDomain.ProcessExit -= OnProcessExitRestoreIcons;
-        }
-        catch
-        {
-            // 移除钩子失败不阻断（M10）
-        }
-
+        // 退出兜底钩子保持订阅不摘除（恢复在退出时无条件执行，幂等无害；摘除反而会让
+        // "运行过自绘桌面后关闭组件再退出"的场景失去兜底）。
         RestoreIcons();
         _window?.Close();
         _window = null;
@@ -252,10 +259,64 @@ public sealed class DesktopPlugin : IPlugin
     }
 
     /// <summary>Application.Exit：恢复 explorer 桌面图标（幂等）。</summary>
-    private void OnExitRestoreIcons(object? sender, EventArgs e) => RestoreIcons();
+    private void OnExitRestoreIcons(object? sender, EventArgs e)
+    {
+        DiagnosticLog.Trace("shell.desktop", "Application.Exit → 恢复 explorer 图标层");
+        RestoreIcons();
+    }
 
     /// <summary>AppDomain.ProcessExit：恢复 explorer 桌面图标（幂等，防双触发）。</summary>
-    private void OnProcessExitRestoreIcons(object? sender, EventArgs e) => RestoreIcons();
+    private void OnProcessExitRestoreIcons(object? sender, EventArgs e)
+    {
+        DiagnosticLog.Trace("shell.desktop", "ProcessExit → 恢复 explorer 图标层");
+        RestoreIcons();
+    }
+
+    /// <summary>注册退出兜底（Application.Exit + AppDomain.ProcessExit，幂等）。</summary>
+    private void RegisterExitRestoreHooks()
+    {
+        try
+        {
+            Application.Current.Exit -= OnExitRestoreIcons;
+            Application.Current.Exit += OnExitRestoreIcons;
+            AppDomain.CurrentDomain.ProcessExit -= OnProcessExitRestoreIcons;
+            AppDomain.CurrentDomain.ProcessExit += OnProcessExitRestoreIcons;
+        }
+        catch (Exception ex)
+        {
+            DiagnosticLog.Trace("shell.desktop", $"退出兜底注册失败：{ex.Message}");
+        }
+    }
+
+    /// <summary>拉起图标恢复哨兵：宿主 exe 自身以 --icon-restore-sentinel &lt;pid&gt; 运行，
+    /// 等待本进程死亡后恢复 explorer 图标层。覆盖 TerminateProcess/强杀/冻结被结束任务等
+    /// 不触发任何托管退出事件的死亡路径（2026-09-06 真机实证：会话冻结后被结束任务，
+    /// Exit/ProcessExit 均未执行，图标层残留隐藏、桌面右键失效）。</summary>
+    private void SpawnIconRestoreSentinel()
+    {
+        try
+        {
+            var exe = System.Diagnostics.Process.GetCurrentProcess().MainModule?.FileName;
+            if (string.IsNullOrEmpty(exe))
+            {
+                DiagnosticLog.Trace("shell.desktop", "图标恢复哨兵未拉起：MainModule 为空");
+                return;
+            }
+
+            var psi = new System.Diagnostics.ProcessStartInfo(
+                exe, $"--icon-restore-sentinel {System.Diagnostics.Process.GetCurrentProcess().Id}")
+            {
+                UseShellExecute = false,
+                CreateNoWindow = true,
+            };
+            _ = System.Diagnostics.Process.Start(psi);
+            DiagnosticLog.Trace("shell.desktop", "图标恢复哨兵已拉起");
+        }
+        catch (Exception ex)
+        {
+            DiagnosticLog.Trace("shell.desktop", $"图标恢复哨兵拉起失败：{ex.Message}");
+        }
+    }
 
     /// <summary>恢复 explorer 桌面图标为可见（无条件 SW_SHOW，幂等）：壳退出后用户桌面必须
     /// 回到 explorer 默认可见态（环境不可破坏）——无论此前是壳隐藏的还是用户双击隐藏的。
@@ -264,11 +325,54 @@ public sealed class DesktopPlugin : IPlugin
     {
         try
         {
-            SetNativeIconsVisible(true);
+            // 图标层整体恢复（DefView + SysListView32）：只恢复 ListView 而 DefView 残留隐藏
+            // 会让桌面右键整体失效（真机实证）。
+            var listView = FindDesktopListView();
+            var defView = FindDesktopDefView();
+            if (listView != IntPtr.Zero)
+            {
+                _ = NativeMethods.ShowWindow(listView, SW_SHOW);
+            }
+            if (defView != IntPtr.Zero)
+            {
+                _ = NativeMethods.ShowWindow(defView, SW_SHOW);
+            }
+
+            if (listView != IntPtr.Zero || defView != IntPtr.Zero)
+            {
+                DiagnosticLog.Trace("shell.desktop", $"图标恢复：listView=0x{listView:X} defView=0x{defView:X} SW_SHOW 已执行");
+            }
+            else
+            {
+                // 查找失败必须落盘：这是"恢复静默落空"的唯一路径（explorer 桌面结构瞬时变化等）
+                DiagnosticLog.Trace("shell.desktop", "图标恢复失败：找不到 DefView/SysListView32（Progman/WorkerW 链）");
+            }
+
+            // 【回归修复 2026-09-06】任务栏恢复：explorer 崩溃/壳异常退出后任务栏可能残留隐藏或消失。
+            // 1) explorer 未运行则手动拉起（崩溃后未自动重启的场景）；
+            // 2) 确保 Shell_TrayWnd / Shell_SecondaryTrayWnd 可见（NativeTaskbarManager 幂等）。
+            try
+            {
+                var explorerProcs = System.Diagnostics.Process.GetProcessesByName("explorer");
+                if (explorerProcs.Length == 0)
+                {
+                    DiagnosticLog.Trace("shell.desktop", "任务栏恢复：explorer 未运行，启动 explorer.exe");
+                    System.Diagnostics.Process.Start("explorer.exe");
+                }
+                else
+                {
+                    BetterDesktop.Shell.Core.Windowing.NativeTaskbarManager.SetTaskbarVisible(true);
+                    DiagnosticLog.Trace("shell.desktop", "任务栏恢复：Shell_TrayWnd SW_SHOW 已执行");
+                }
+            }
+            catch (Exception ex2)
+            {
+                DiagnosticLog.Trace("shell.desktop", $"任务栏恢复异常：{ex2.Message}");
+            }
         }
-        catch
+        catch (Exception ex)
         {
-            // 还原失败不阻断（M10）
+            DiagnosticLog.Trace("shell.desktop", $"图标恢复异常：{ex.Message}");
         }
     }
 
@@ -281,19 +385,7 @@ public sealed class DesktopPlugin : IPlugin
     private const int SW_HIDE = 0;
     private const int SW_SHOW = 5;
 
-    [DllImport("user32.dll")]
-    private static extern IntPtr GetShellWindow();
 
-    [DllImport("user32.dll", CharSet = CharSet.Auto)]
-    private static extern IntPtr FindWindowEx(IntPtr parent, IntPtr after, string? className, string? windowName);
-
-    [DllImport("user32.dll")]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool IsWindowVisible(IntPtr hwnd);
-
-    [DllImport("user32.dll")]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
 
     /// <summary>
     /// 定位 explorer 桌面图标 ListView（SysListView32）。
@@ -301,28 +393,28 @@ public sealed class DesktopPlugin : IPlugin
     /// </summary>
     private static IntPtr FindDesktopListView()
     {
-        var shell = GetShellWindow();
+        var shell = NativeMethods.GetShellWindow();
         if (shell == IntPtr.Zero)
         {
             return IntPtr.Zero;
         }
 
-        var defView = FindWindowEx(shell, IntPtr.Zero, "SHELLDLL_DefView", null);
+        var defView = NativeMethods.FindWindowEx(shell, IntPtr.Zero, "SHELLDLL_DefView", null);
         if (defView == IntPtr.Zero)
         {
             // DefView 被移到 WorkerW 下（壁纸引擎等）：遍历同级 WorkerW 找它
             IntPtr worker = IntPtr.Zero;
             do
             {
-                worker = FindWindowEx(shell, worker, "WorkerW", null);
-                defView = worker == IntPtr.Zero ? IntPtr.Zero : FindWindowEx(worker, IntPtr.Zero, "SHELLDLL_DefView", null);
+                worker = NativeMethods.FindWindowEx(shell, worker, "WorkerW", null);
+                defView = worker == IntPtr.Zero ? IntPtr.Zero : NativeMethods.FindWindowEx(worker, IntPtr.Zero, "SHELLDLL_DefView", null);
             }
             while (defView == IntPtr.Zero && worker != IntPtr.Zero);
         }
 
         return defView == IntPtr.Zero
             ? IntPtr.Zero
-            : FindWindowEx(defView, IntPtr.Zero, "SysListView32", "FolderView");
+            : NativeMethods.FindWindowEx(defView, IntPtr.Zero, "SysListView32", "FolderView");
     }
 
     /// <summary>explorer 原生桌面图标当前是否可见；窗口找不到按不可见处理（M10，不阻断）。</summary>
@@ -331,7 +423,7 @@ public sealed class DesktopPlugin : IPlugin
         try
         {
             var listView = FindDesktopListView();
-            return listView != IntPtr.Zero && IsWindowVisible(listView);
+            return listView != IntPtr.Zero && NativeMethods.IsWindowVisible(listView);
         }
         catch
         {
@@ -342,6 +434,8 @@ public sealed class DesktopPlugin : IPlugin
     /// <summary>
     /// 幂等设置 explorer 原生桌面图标可见性（ShowWindow 直接作用于 ListView，
     /// 非 toggle 翻转——重复调用无副作用，彻底消除翻转语义的时序坑）。
+    /// 只隐 SysListView32：DefView 必须保持可见——它是自绘层的宿主（隐藏会连带
+    /// 自绘层不可见，真机实证），且承载自绘层的父链。
     /// </summary>
     private static void SetNativeIconsVisible(bool visible)
     {
@@ -350,13 +444,39 @@ public sealed class DesktopPlugin : IPlugin
             var listView = FindDesktopListView();
             if (listView != IntPtr.Zero)
             {
-                _ = ShowWindow(listView, visible ? SW_SHOW : SW_HIDE);
+                _ = NativeMethods.ShowWindow(listView, visible ? SW_SHOW : SW_HIDE);
             }
         }
         catch
         {
             // 显隐失败不阻断（M10）
         }
+    }
+
+    /// <summary>定位 SHELLDLL_DefView（兼容 Progman 直子与 WorkerW 变体；FindDesktopListView 的父级）。</summary>
+    private static IntPtr FindDesktopDefView()
+    {
+        var shell = NativeMethods.GetShellWindow();
+        if (shell == IntPtr.Zero)
+        {
+            return IntPtr.Zero;
+        }
+
+        var defView = NativeMethods.FindWindowEx(shell, IntPtr.Zero, "SHELLDLL_DefView", null);
+        if (defView != IntPtr.Zero)
+        {
+            return defView;
+        }
+
+        IntPtr worker = IntPtr.Zero;
+        do
+        {
+            worker = NativeMethods.FindWindowEx(shell, worker, "WorkerW", null);
+            defView = worker == IntPtr.Zero ? IntPtr.Zero : NativeMethods.FindWindowEx(worker, IntPtr.Zero, "SHELLDLL_DefView", null);
+        }
+        while (defView == IntPtr.Zero && worker != IntPtr.Zero);
+
+        return defView;
     }
 
     // ======== 原生桌面模式的双击切换（WH_MOUSE_LL） ========
@@ -375,19 +495,12 @@ public sealed class DesktopPlugin : IPlugin
     private const int LvmHittest = 0x1012;   // LVM_FIRST + 0x12
     private const uint LvhtOnitem = 0x000E;  // ONITEMICON|ONITEMLABEL|ONITEMSTATEICON
 
-    private delegate IntPtr MouseHookProcDelegate(int nCode, IntPtr wParam, IntPtr lParam);
 
-    [StructLayout(LayoutKind.Sequential)]
-    private struct POINT
-    {
-        public int X;
-        public int Y;
-    }
 
     [StructLayout(LayoutKind.Sequential)]
     private struct MSLLHOOKSTRUCT
     {
-        public POINT pt;
+        public NativeMethods.POINT pt;
         public uint mouseData;
         public uint flags;
         public uint time;
@@ -397,32 +510,18 @@ public sealed class DesktopPlugin : IPlugin
     [StructLayout(LayoutKind.Sequential)]
     private struct LVHITTESTINFO
     {
-        public POINT pt;
+        public NativeMethods.POINT pt;
         public uint flags;
         public int iItem;
         public int iSubItem;
     }
 
-    [DllImport("user32.dll", SetLastError = true)]
-    private static extern IntPtr SetWindowsHookEx(int idHook, MouseHookProcDelegate lpfn, IntPtr hMod, uint dwThreadId);
 
-    [DllImport("user32.dll", SetLastError = true)]
-    private static extern bool UnhookWindowsHookEx(IntPtr hhk);
 
-    [DllImport("user32.dll")]
-    private static extern IntPtr CallNextHookEx(IntPtr hhk, int nCode, IntPtr wParam, IntPtr lParam);
 
-    [DllImport("kernel32.dll", CharSet = CharSet.Auto)]
-    private static extern IntPtr GetModuleHandle(string? lpModuleName);
 
-    [DllImport("user32.dll")]
-    private static extern IntPtr WindowFromPoint(POINT p);
 
-    [DllImport("user32.dll")]
-    private static extern bool ScreenToClient(IntPtr hWnd, ref POINT p);
 
-    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
-    private static extern int GetClassName(IntPtr hWnd, StringBuilder lpClassName, int nMaxCount);
 
     [DllImport("user32.dll", EntryPoint = "SendMessageW")]
     private static extern IntPtr SendMessage(IntPtr hWnd, int msg, IntPtr wParam, ref LVHITTESTINFO lParam);
@@ -443,7 +542,7 @@ public sealed class DesktopPlugin : IPlugin
 
         // LL 钩子装在 UI 线程（有消息泵即工作）；回调内只做快判定，切换经 Dispatcher 落设置
         _mouseHookProc = OnMouseHookProc;
-        _mouseHook = SetWindowsHookEx(WhMouseLl, _mouseHookProc, GetModuleHandle(null), 0);
+        _mouseHook = NativeMethods.SetWindowsHookEx(WhMouseLl, _mouseHookProc, NativeMethods.GetModuleHandle(null), 0);
         DiagnosticLog.Trace("shell.desktop", $"原生桌面双击钩子安装：{_mouseHook != IntPtr.Zero}");
     }
 
@@ -454,7 +553,7 @@ public sealed class DesktopPlugin : IPlugin
             return;
         }
 
-        _ = UnhookWindowsHookEx(_mouseHook);
+        _ = NativeMethods.UnhookWindowsHookEx(_mouseHook);
         _mouseHook = IntPtr.Zero;
         _mouseHookProc = null;
     }
@@ -486,23 +585,23 @@ public sealed class DesktopPlugin : IPlugin
             // 钩子回调绝不允许抛异常（挂掉会拖垮全局鼠标输入）
         }
 
-        return CallNextHookEx(_mouseHook, nCode, wParam, lParam);
+        return NativeMethods.CallNextHookEx(_mouseHook, nCode, wParam, lParam);
     }
 
     /// <summary>屏幕点是否落在原生桌面上（Progman/WorkerW/DefView/SysListView32 任一）。
     /// 命中 SysListView32 时用 LVM_HITTEST 排除"双击在原生图标上"的情况。</summary>
-    private static bool IsOverNativeDesktop(POINT pt)
+    private static bool IsOverNativeDesktop(NativeMethods.POINT pt)
     {
         try
         {
-            var hwnd = WindowFromPoint(pt);
+            var hwnd = NativeMethods.WindowFromPoint(pt);
             if (hwnd == IntPtr.Zero)
             {
                 return false;
             }
 
             var sb = new StringBuilder(64);
-            if (GetClassName(hwnd, sb, 64) <= 0)
+            if (NativeMethods.GetClassName(hwnd, sb, 64) <= 0)
             {
                 return false;
             }
@@ -511,7 +610,7 @@ public sealed class DesktopPlugin : IPlugin
             if (cls == "SysListView32")
             {
                 var ht = new LVHITTESTINFO { pt = pt };
-                _ = ScreenToClient(hwnd, ref ht.pt);
+                _ = NativeMethods.ScreenToClient(hwnd, ref ht.pt);
                 _ = SendMessage(hwnd, LvmHittest, IntPtr.Zero, ref ht);
                 return (ht.flags & LvhtOnitem) == 0;
             }
