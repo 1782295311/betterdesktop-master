@@ -42,8 +42,8 @@ internal sealed class ClipboardHistoryWindow : ShellWindow
     private TextBox _searchBox = null!;
     private StackPanel _entryList = null!;
     private TextBlock _countLabel = null!;
-    private StackPanel _sourceFilterBar = null!;
-    private StackPanel _filterChipsPanel = null!;
+    private WrapPanel _sourceFilterBar = null!;
+    private WrapPanel _filterChipsPanel = null!;
     private Border _pauseIndicator = null!;
     private TextBlock _pauseText = null!;
     private ToggleButton _pauseBtn = null!;
@@ -242,7 +242,8 @@ internal sealed class ClipboardHistoryWindow : ShellWindow
 
     private FrameworkElement CreateFilterChips()
     {
-        _filterChipsPanel = new StackPanel { Orientation = Orientation.Horizontal, Name = "FilterChips" };
+        // WrapPanel：6 类 chips 在窄窗口（MinWidth 380）下自动换行，避免横向溢出与相邻元素重叠。
+        _filterChipsPanel = new WrapPanel { Name = "FilterChips" };
         var defs = new[] { ("全部", "all"), ("文本", "text"), ("图片", "image"), ("文件", "files"), ("代码", "code"), ("收藏", "pinned") };
         foreach (var (label, tag) in defs)
         {
@@ -255,9 +256,10 @@ internal sealed class ClipboardHistoryWindow : ShellWindow
         return _filterChipsPanel;
     }
 
-    private StackPanel CreateSourceFilterBar()
+    private WrapPanel CreateSourceFilterBar()
     {
-        var bar = new StackPanel { Orientation = Orientation.Horizontal, Name = "SourceFilterBar", Margin = new Thickness(0, 6, 0, 0) };
+        // WrapPanel：应用来源 chips 数量不定，窄窗口自动换行防溢出重叠。
+        var bar = new WrapPanel { Name = "SourceFilterBar", Margin = new Thickness(0, 6, 0, 0) };
         var all = CreateChip("全部来源");
         all.Tag = null;
         all.MouseLeftButtonUp += SourceFilterChip_Click;

@@ -52,7 +52,16 @@ public static class DesktopSystemMenuRegistrar
             EnsureUiSub(exe, key, "toggle-dock", "Dock 显隐");
             EnsureUiSub(exe, key, "toggle-taskbar", "任务栏显隐");
 
-            DiagnosticLog.Trace("shell.desktop", $"系统UI开关菜单已注册: {UiDisplayName}（图标/菜单栏/Dock/任务栏 四项）");
+            // 剪贴板历史显式入口（2026-09-09）：HKCU 4 场景右键项在 Win11 会被折叠进
+            // 「显示更多选项」（经典菜单）；这里在自绘桌面 ▸ 子菜单常驻一项，任何位置右键都直达。
+            using (var cb = key.CreateSubKey(@"shell\toggle-clipboard"))
+            {
+                cb.SetValue("MUIVerb", "剪贴板历史…");
+                using var cbCmd = cb.CreateSubKey("command");
+                cbCmd.SetValue(null, $"\"{exe}\" --menu-cmd clipboard-history");
+            }
+
+            DiagnosticLog.Trace("shell.desktop", $"系统UI开关菜单已注册: {UiDisplayName}（图标/菜单栏/Dock/任务栏/剪贴板历史 五项）");
         }
         catch (Exception ex)
         {

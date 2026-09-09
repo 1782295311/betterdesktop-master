@@ -96,7 +96,15 @@ internal static class DwmHelper
         {
             var data = new NativeMethods.WINCOMPATTRDATA { nAttribute = WCA_ACCENT_POLICY, pData = p, ulSize = size };
             int hr = NativeMethods.SetWindowCompositionAttribute(hWnd, ref data);
-            if (hr != 0) TraceFailure("SetWindowCompositionAttribute(BlurBehind)", hWnd, hr);
+            if (hr != 0)
+            {
+                TraceFailure("SetWindowCompositionAttribute(BlurBehind)", hWnd, hr);
+                // Win11 24H2+/26200 上 ACCENT_ENABLE_BLURBEHIND 已失效（实测 hr=0x00000001），
+                // 毛玻璃静默降级透明窗。降级为 Win11 DWM 系统亚克力（DWMSBT_TRANSIENTWINDOW），
+                // 保证窗口仍有模糊背景（EnableAcrylic 内部已含圆角处理，勿重复 ApplyCornerPreference）。
+                EnableAcrylic(hWnd, roundCorners, smallRadius);
+                return;
+            }
         }
         finally
         {

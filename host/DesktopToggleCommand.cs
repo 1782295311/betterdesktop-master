@@ -47,6 +47,7 @@ public static class DesktopToggleCommand
         var next = !current;
 
         // 写回（宿主未运行无并发；失败不阻断——退出即可，下次宿主启动按旧值）
+        // 【防清空】文件存在但读取失败/非对象 → 直接放弃本次切换，绝不重建空对象覆盖（会丢全部其他键）。
         try
         {
             var root = new JsonObject();
@@ -54,11 +55,17 @@ public static class DesktopToggleCommand
             {
                 try
                 {
-                    root = (JsonNode.Parse(File.ReadAllText(path)) as JsonObject) ?? new JsonObject();
+                    if (JsonNode.Parse(File.ReadAllText(path)) is not JsonObject parsed)
+                    {
+                        DiagnosticLog.Trace("menu-cmd", "切换自绘桌面取消：settings.json 非有效对象，不覆盖以免清空配置");
+                        return;
+                    }
+                    root = parsed;
                 }
-                catch
+                catch (Exception ex)
                 {
-                    root = new JsonObject();
+                    DiagnosticLog.Trace("menu-cmd", $"切换自绘桌面取消：读取设置失败，不覆盖原文件: {ex.Message}");
+                    return;
                 }
             }
             root[Key] = next;

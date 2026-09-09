@@ -83,7 +83,9 @@ public sealed class ClipboardPlugin : IPlugin
             ApplyEnabledState();
         }
 
-        bool enabledInitial = _settings?.Get(EnabledKey, false) ?? false;
+        // 默认开启：剪贴板历史是核心功能，开箱即用；用户可在设置里显式关闭。
+        // （曾因 settings.json 键丢失导致静默关闭、面板无数据——键缺失按开启处理。）
+        bool enabledInitial = _settings?.Get(EnabledKey, true) ?? true;
         context.Logger.Info($"{Name} 已加载：IClipboardService 已注册（{EnabledKey}={enabledInitial}）");
         return Task.CompletedTask;
     }
@@ -126,7 +128,7 @@ public sealed class ClipboardPlugin : IPlugin
 
     private void ApplyEnabledState()
     {
-        bool enabled = _settings?.Get(EnabledKey, false) ?? false;
+        bool enabled = _settings?.Get(EnabledKey, true) ?? true;
         if (enabled)
         {
             Activate();
