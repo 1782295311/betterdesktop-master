@@ -23,8 +23,14 @@ if ($MyInvocation.InvocationName -ne '.') {
     $manifestPath = Join-Path $root 'scripts\manifests\readme-ratchet.baseline.json'
     $baseline = Get-Content $manifestPath -Raw | ConvertFrom-Json
 
-    $projects = @(Get-ChildItem (Join-Path $root 'packages') -Recurse -Filter '*.csproj' -File -ErrorAction SilentlyContinue | Where-Object { $_.FullName -notmatch '\\(obj|bin)\\' })
-    $missing = @($projects | Where-Object { -not (Test-Path (Join-Path $_.DirectoryName 'README.md')) })
+    # 只扫描 git 跟踪的 csproj（忽略备份/生成目录）
+    $relProjects = @(& git -C $root ls-files) | Where-Object { $_ -match '^packages/.*\.csproj$' -or $_ -match '^packages/.*/.*\.csproj$' } | Where-Object { $_ -notmatch '\\(obj|bin)\\' }
+    $projects = @()
+    foreach ($rel in $relProjects) {
+        $full = Join-Path $root $rel
+        if (Test-Path $full -PathType Leaf) { $projects += $full }
+    }
+    $missing = @($projects | Where-Object { -not (Test-Path (Join-Path (Split-Path $_) 'README.md')) })
     $allow = @(@($baseline.allowlist) | ForEach-Object { "$_" })
 
     $locksBad = @()
@@ -36,20 +42,20 @@ if ($MyInvocation.InvocationName -ne '.') {
     }
 
     foreach ($s in $allow) {
-        if ($s -notin @($missing | ForEach-Object { Get-RelPath $_.FullName })) {
+        if ($s -notin @($missing | ForEach-Object { Get-RelPath $_ })) {
             Write-Output "[WARN] $s 已补 README，白名单条目已陈旧，请收窄基线（只减不增）"
         }
     }
 
-    $violations = @($missing | Where-Object { (Get-RelPath $_.FullName) -notin $allow })
+    $violations = @($missing | Where-Object { (Get-RelPath $_) -notin $allow })
     $fails = @($locksBad)
     foreach ($p in $violations) {
-        $fails += "$(Get-RelPath $p.FullName) — 缺少 README.md"
+        $fails += "$(Get-RelPath $p) — 缺少 README.md"
     }
     foreach ($p in $projects) {
-        $readme = Join-Path $p.DirectoryName 'README.md'
+        $readme = Join-Path (Split-Path $p) 'README.md'
         $v = Get-PackageReadmeViolation $readme
-        if ($null -ne $v) { $fails += "$(Get-RelPath $p.FullName) — $v" }
+        if ($null -ne $v) { $fails += "$(Get-RelPath $p) — $v" }
     }
     $fails = @($fails | Select-Object -Unique)
     if ($fails.Count -gt 0) { Write-GateFail 'package-readme' $fails }

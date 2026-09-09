@@ -26,13 +26,20 @@ if ($MyInvocation.InvocationName -ne '.') {
     if ($xmlFiles.Count -eq 0) {
         Write-GateFail 'test-coverage' @('未找到 coverage.cobertura.xml')
     }
-    $latest = $xmlFiles | Sort-Object LastWriteTime -Descending | Select-Object -First 1
-    [xml]$doc = Get-Content $latest.FullName
-    $packages = @($doc.coverage.packages.package)
+    # 聚合所有测试工程的 cobertura：同一程序集被多个测试工程覆盖时取最高行覆盖率
+    # （单一测试工程只覆盖其调用面，取最新单个文件会误判共享内核程序集）
     $actual = @{}
-    foreach ($pkg in $packages) {
-        $rate = [double]::Parse([string]$pkg.'line-rate', [Globalization.CultureInfo]::InvariantCulture)
-        $actual[[string]$pkg.name] = $rate
+    foreach ($xf in $xmlFiles) {
+        try {
+            [xml]$doc = Get-Content $xf.FullName
+        } catch { continue }
+        foreach ($pkg in @($doc.coverage.packages.package)) {
+            $rate = [double]::Parse([string]$pkg.'line-rate', [Globalization.CultureInfo]::InvariantCulture)
+            $name = [string]$pkg.name
+            if (-not $actual.ContainsKey($name) -or $rate -gt $actual[$name]) {
+                $actual[$name] = $rate
+            }
+        }
     }
 
     $fails = @()

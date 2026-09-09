@@ -22,6 +22,24 @@ Describe 'Test-HardWrapBlock' {
 }
 
 Describe 'Get-HardWrappedParagraphCount' {
+    It '围栏代码块内部硬换行不判违规' {
+        $bt = [char]96
+        $content = "$bt$bt$bt`n第一行`n第二行`n$bt$bt$bt"
+        Get-HardWrappedParagraphCount $content | Should Be 0
+    }
+
+    It '代码块内空行不截断围栏' {
+        $bt = [char]96
+        $content = "$bt$bt$bt`n第一行`n`n第三行`n$bt$bt$bt"
+        Get-HardWrappedParagraphCount $content | Should Be 0
+    }
+
+    It '围栏闭合后的散文仍正常检测' {
+        $bt = [char]96
+        $content = "$bt$bt$bt`n代码`n$bt$bt$bt`n`n第一段第一行`n第一段第二行"
+        Get-HardWrappedParagraphCount $content | Should BeGreaterThan 0
+    }
+
     It '含硬换行段落的内容判为 >= 1' {
         $content = "第一段第一行`n第一段第二行`n`n- 列表项"
         Get-HardWrappedParagraphCount $content | Should BeGreaterThan 0

@@ -24,7 +24,15 @@ function Get-HardWrappedParagraphCount([string]$Content) {
     $lines = @($Content -split "`r?`n")
     $count = 0
     $block = @()
+    $inFence = $false
     foreach ($line in $lines) {
+        if ($line -match '^\s*(```|~~~)') {
+            if (Test-HardWrapBlock $block) { $count++ }
+            $block = @()
+            $inFence = -not $inFence
+            continue
+        }
+        if ($inFence) { continue }
         if ($line.Trim() -eq '') {
             if (Test-HardWrapBlock $block) { $count++ }
             $block = @()
@@ -41,15 +49,19 @@ if ($MyInvocation.InvocationName -ne '.') {
     $root = Get-RepoRoot
     $fails = @()
     $mdFiles = @()
-    $mdFiles += @(Get-ChildItem $root -Filter '*.md' -File -ErrorAction SilentlyContinue)
-    foreach ($dir in @('docs', 'packages', 'scripts', '.agents\notes')) {
-        $mdFiles += @(Get-ChildItem (Join-Path $root $dir) -Recurse -Filter '*.md' -File -ErrorAction SilentlyContinue | Where-Object { $_.FullName -notmatch '\\archived\\' })
+    # 只扫描 git 跟踪的 Markdown（忽略备份/生成目录），并豁免归档 notes
+    $tracked = @(& git -C $root ls-files) | Where-Object { $_ -like '*.md' }
+    foreach ($rel in $tracked) {
+        if ($rel -match '(^|/|\\)archived(/|\\|$)') { continue }
+        $full = Join-Path $root $rel
+        if (-not (Test-Path $full -PathType Leaf)) { continue }
+        $mdFiles += $full
     }
-    $mdFiles = @($mdFiles | Sort-Object FullName -Unique)
+    $mdFiles = @($mdFiles | Sort-Object -Unique)
 
     foreach ($f in $mdFiles) {
-        $relF = Get-RelPath $f.FullName
-        $content = Get-Content $f.FullName -Raw
+        $relF = Get-RelPath $f
+        $content = Get-Content $f -Raw
         $n = Get-HardWrappedParagraphCount $content
         if ($n -gt 0) { $fails += "$relF — 散文段落被硬换行（应一段一行物理行）" }
     }

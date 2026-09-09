@@ -17,10 +17,12 @@ function Get-BusinessXamlPaths([string]$HostDir) {
 # 门禁主体（dot-source 时跳过，供单测仅加载函数）
 if ($MyInvocation.InvocationName -ne '.') {
     $hostDir = Join-Path (Get-RepoRoot) 'host'
-    $businessXaml = @(Get-BusinessXamlPaths $hostDir)
+    # 豁免清单（ADR-003 D2）：SplashWindow 为宿主启动画面（插件加载前须由宿主展示），只减不增
+    $allowed = @('host\Views\SplashWindow.xaml')
+    $businessXaml = @(Get-BusinessXamlPaths $hostDir | Where-Object { (Get-RelPath $_) -notin $allowed })
     if ($businessXaml.Count -gt 0) {
         $fails = @($businessXaml | ForEach-Object { "$(Get-RelPath $_) — 宿主不得携带业务 UI，该窗口应由 shell 插件提供" })
         Write-GateFail 'architecture-guard' $fails
     }
-    Write-GatePass 'architecture-guard' 'host/ 下无业务 UI（App.xaml 入口除外）'
+    Write-GatePass 'architecture-guard' 'host/ 下无业务 UI（App.xaml 与 ADR-003 D2 豁免项除外）'
 }

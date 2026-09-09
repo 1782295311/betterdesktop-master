@@ -1,4 +1,4 @@
-# Better Desktop Cordis — 统一门禁入口
+﻿# Better Desktop Cordis — 统一门禁入口
 # 用法:
 #   .\scripts\run-gates.ps1              全部门禁
 #   .\scripts\run-gates.ps1 -Filter md   只跑 id 含 "md" 的门禁
@@ -20,8 +20,10 @@ $gates = @(
     [pscustomobject]@{ Id = 'gate-registry';     Script = 'verify-gate-registry.ps1';     Needs = @() },
     [pscustomobject]@{ Id = 'architecture-guard'; Script = 'verify-architecture-guard.ps1'; Needs = @() },
     [pscustomobject]@{ Id = 'host-log-sink';     Script = 'verify-host-log-sink.ps1';     Needs = @() },
+    [pscustomobject]@{ Id = 'cross-asm-event';   Script = 'verify-no-cross-assembly-event.ps1'; Needs = @() },
+    [pscustomobject]@{ Id = 'native-convergence'; Script = 'verify-native-convergence.ps1';     Needs = @() },
     [pscustomobject]@{ Id = 'dotnet-format';     Script = 'verify-dotnet-format.ps1';     Needs = @() },
-    [pscustomobject]@{ Id = 'test-coverage';     Script = 'verify-test-coverage.ps1';     Needs = @('dotnet-format') },
+    [pscustomobject]@{ Id = 'test-coverage';     Script = 'verify-test-coverage.ps1';     Needs = @() },
     [pscustomobject]@{ Id = 'smoke-test';        Script = 'verify-smoke-test.ps1';        Needs = @() }
 )
 

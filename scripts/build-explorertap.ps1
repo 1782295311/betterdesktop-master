@@ -1,6 +1,6 @@
 # build-explorertap.ps1 — 本地编译 ExplorerTAP.dll（Win11 任务栏注入桥）
 # 依据：参考\TranslucentTB-release（TTB 完整 C++ 源码，含 ExplorerTAP.vcxproj）。
-# 2026-09-01 实测跑通。产物部署到 packages/shell/Taskbar/native/（csproj 随构建分发）。
+# 2026-09-01 实测跑通。产物部署到 packages/shell/shell-taskbar/native/（csproj 随构建分发）。
 #
 # 依赖：VS2022（含 MSVC v143 + Windows SDK 10.0.26100）、nuget.exe、git。
 # 网络受限时的取源路径（github 443 不通时）：
@@ -93,7 +93,7 @@ $rsp = "C:\ttb-src\build.rsp"
 # ---------- 5. 部署 ----------
 $product = "$TtbSrc\ExplorerTAP\x64\Release\ExplorerTAP.dll"
 if (-not (Test-Path $product)) { throw "编译产物缺失" }
-$dst = Join-Path $RepoRoot "packages\shell\Taskbar\native\ExplorerTAP.dll"
+$dst = Join-Path $RepoRoot "packages\shell\shell-taskbar\native\ExplorerTAP.dll"
 Copy-Item $product $dst -Force
 Write-Host "✔ ExplorerTAP.dll 已部署: $dst"
 Write-Host "注意：host bin 根目录的那份若被 explorer 锁定（注入中）无法覆盖，属正常；"
