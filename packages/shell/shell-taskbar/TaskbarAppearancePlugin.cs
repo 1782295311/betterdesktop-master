@@ -10,6 +10,15 @@ using BetterDesktop.Shell.Taskbar.Services;
 
 namespace BetterDesktop.Shell.Taskbar;
 
+// ============================================================
+// 【白话导航 · 任务栏外观域】凭白话需求定位到精确文件：
+//   "任务栏透明 / 模糊 / 亚克力效果"   → Services/TaskbarAppearanceEngine.cs（DWM 外观状态机）
+//   "找不到任务栏窗口 / 多显示器任务栏" → Native/TaskbarWindowFinder.cs
+//   "全屏应用时任务栏自动恢复/隐藏"    → Native/AppVisibilityWatcher.cs（窗口可见性事件）
+//   "任务栏外观设置页"                → Sections/TaskbarAppearanceSection.cs
+//   实现方法参考 TranslucentTB / Open-Shell（见引擎内注释署名）。
+// ============================================================
+
 /// <summary>
 /// 任务栏外观控制插件：接管原生 Windows 任务栏的透明/模糊/亚克力与场景化外观联动。
 /// 灵感与方法来自 参考/TranslucentTB-release 与 参考/Open-Shell-Menu-master。

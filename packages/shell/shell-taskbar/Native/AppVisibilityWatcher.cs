@@ -1,6 +1,8 @@
 using System;
 using System.Runtime.InteropServices;
 using System.Threading;
+using BetterDesktop.Kernel.Core;
+using BetterDesktop.Shell.Core.Native;
 
 namespace BetterDesktop.Shell.Taskbar.Native;
 
@@ -16,6 +18,8 @@ public sealed class AppVisibilityWatcher : IDisposable
     private static readonly Guid IID_IAppVisibility = new("2246EA2D-48B5-4B71-A8E6-BC12E4712AB5");
 
     private IAppVisibility? _avi;
+    // F7/V8：COM sink 必须字段持有——局部变量在某些 COM 实现下 CCW 被回收导致回调失效（7438 同源纪律）。
+    private LauncherSink? _sink;
     private uint _cookie;
     private readonly object _lock = new();
     private bool _disposed;
@@ -45,16 +49,30 @@ public sealed class AppVisibilityWatcher : IDisposable
             if (_disposed || _avi is not null) return;
             try
             {
-                var hr = CoCreateInstance(CLSID_AppVisibility, IntPtr.Zero, 1 /*CLSCTX_LOCAL_SERVER*/, IID_IAppVisibility, out var ppv);
-                if (hr != 0 || ppv == IntPtr.Zero) return;
+                var clsid = CLSID_AppVisibility;
+                var iid = IID_IAppVisibility;
+                var hr = NativeMethods.CoCreateInstance(ref clsid, IntPtr.Zero, 1 /*CLSCTX_LOCAL_SERVER*/, ref iid, out var ppv);
+                if (hr != 0 || ppv == IntPtr.Zero)
+                {
+                    DiagnosticLog.Trace("TaskbarAccent", $"CoCreateInstance(AppVisibility) 失败 hr=0x{hr:X8}（开始菜单联动不生效）");
+                    return;
+                }
                 _avi = (IAppVisibility)Marshal.GetObjectForIUnknown(ppv);
                 Marshal.Release(ppv);
-                var sink = new LauncherSink(this);
-                _avi.Advise(sink, out _cookie);
+                _sink = new LauncherSink(this);
+                // F6/V7：Advise 返回值必须检查（cookie 有效性未知则 Unadvise 静默失败，7437 纪律 4）。
+                var adviseHr = _avi.Advise(_sink, out _cookie);
+                if (adviseHr != 0 || _cookie == 0)
+                {
+                    DiagnosticLog.Trace("TaskbarAccent", $"IAppVisibility.Advise 失败 hr=0x{adviseHr:X8} cookie={_cookie}（开始菜单联动不生效）");
+                    _cookie = 0;
+                }
             }
             catch (Exception)
             {
                 _avi = null;
+                _sink = null;
+                _cookie = 0;
             }
         }
     }
@@ -75,17 +93,15 @@ public sealed class AppVisibilityWatcher : IDisposable
                 try { _avi.Unadvise(_cookie); } catch { /* ignore */ }
                 _cookie = 0;
             }
-            _avi = null;
+            // F6/V7：COM 对象必须显式释放（RCW 延迟 GC = COM 引用泄漏，7437 纪律 3）。
+            if (_avi is not null)
+            {
+                try { _ = Marshal.ReleaseComObject(_avi); } catch { /* 已释放 */ }
+                _avi = null;
+            }
+            _sink = null;
         }
     }
-
-    [DllImport("ole32.dll", EntryPoint = "CoCreateInstance", CallingConvention = CallingConvention.StdCall, SetLastError = true)]
-    private static extern int CoCreateInstance(
-        [MarshalAs(UnmanagedType.LPStruct)] Guid rclsid,
-        IntPtr pUnkOuter,
-        uint dwClsContext,
-        [MarshalAs(UnmanagedType.LPStruct)] Guid riid,
-        out IntPtr ppv);
 
     // ---- COM 接口（严格按 Windows SDK 签名，不得改） ----
     [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
@@ -119,3 +135,4 @@ public sealed class AppVisibilityWatcher : IDisposable
         }
     }
 }
+

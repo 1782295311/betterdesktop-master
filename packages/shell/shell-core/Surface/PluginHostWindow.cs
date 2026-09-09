@@ -1,8 +1,10 @@
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
-using BetterDesktop.Shell.PluginSdk;
+using BetterDesktop.Kernel.Contracts;
+using BetterDesktop.Shell.Core;
 using BetterDesktop.Shell.Core.Vibrancy;
+using BetterDesktop.Shell.PluginSdk;
 
 namespace BetterDesktop.Shell.Core.Surface;
 
@@ -17,16 +19,19 @@ public sealed class PluginHostWindow : ShellWindow
 {
     private readonly IShellPluginWindow _pluginWindow;
     private readonly string _pluginId;
+    private IDisposable? _pluginAppearanceSub;
 
     /// <summary>插件内容容器：外壳（ChromeBorder）完全由基类管控，插件只能操作此内容区。</summary>
     private readonly ContentPresenter _contentPresenter = new();
 
     public PluginHostWindow(IShellPluginWindow pluginWindow, string pluginId,
-        IAppearanceService? appearance = null, IVibrancyService? vibrancy = null)
+        IAppearanceService? appearance = null, IVibrancyService? vibrancy = null,
+        IEventBus? events = null)
         : base(appearance, vibrancy) // 步骤①②：基类构造注入双服务并应用窗口行为虚属性（经 CanSetProperty 校验）
     {
         _pluginWindow = pluginWindow;
         _pluginId = pluginId;
+        Events = events;
 
         // 步骤③：内核自动创建根 ChromeBorder，插件内容注入内部
         var chromeBorder = new Border
@@ -46,13 +51,19 @@ public sealed class PluginHostWindow : ShellWindow
 
         // 订阅外观变更：把皮肤/主题变化以只读 ThemeSnapshot 抛给插件（路径 B 自定义绘制协调）。
         // 根背景/描边/圆角已由基类 ShellWindow 自动处理（路径 A），此处仅补"插件自定义绘制"的快照通知。
-        if (AppearanceService is not null)
+        if (AppearanceService is not null && Events is not null)
         {
-            AppearanceService.Changed += OnAppearanceChangedForPlugin;
+            _pluginAppearanceSub = Events.On<AppearanceChangedArgs>(
+                ShellEvents.AppearanceChanged,
+                (e, _) =>
+                {
+                    OnAppearanceChangedForPlugin(e);
+                    return Task.CompletedTask;
+                });
         }
     }
 
-    private void OnAppearanceChangedForPlugin(object? sender, AppearanceChangedArgs e)
+    private void OnAppearanceChangedForPlugin(AppearanceChangedArgs e)
     {
         if (AppearanceService is null) return;
         // 仅当对插件可见的维度变化时才抛（避免无关维度打扰）；皮肤/模式/强调/描边/字号均影响自定义绘制。

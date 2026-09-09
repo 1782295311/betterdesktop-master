@@ -10,6 +10,7 @@ using BetterDesktop.Kernel.Contracts;
 using BetterDesktop.Shell.AppSource.Contracts;
 using BetterDesktop.Shell.AppSource.Models;
 using BetterDesktop.Shell.ContextMenus.Contracts;
+using BetterDesktop.Shell.Core;
 using BetterDesktop.Shell.Core.Surface;
 using BetterDesktop.Shell.Core.Vibrancy;
 using BetterDesktop.Shell.Pinning.Contracts;
@@ -22,12 +23,21 @@ using BetterDesktop.Shell.WindowTracker.Contracts;
 
 namespace BetterDesktop.Shell.StartMenu.Services;
 
+// ── 本文件方法级白话索引（开始菜单数据/动作总服务，白话 → 方法）──
+//   "注册/切换/刷新布局（Win7/10/11…）" → RegisterLayout / ShowLayout / RefreshLayout
+//   "注册菜单分区（电源/最近/位置）"   → RegisterSection（分区实现在 Sections/）
+//   "取固定应用/所有应用/搜索结果/图标" → GetPinnedStartMenuApps / GetAllApps / SearchAsync / GetIconAsync；用户名 GetUserName
+//   "打开/管理员运行/打开位置/卸载/固定到区" → ActivateOrLaunch / LaunchAsAdmin / OpenFileLocation / Uninstall / PinToZone（启动路径解析 ResolveLaunchPath）
+//   "启用/禁用开始菜单、Win 键设置"    → Enable / Disable / ApplyWinKeySetting；打开设置 OpenSettings
+//   窗口显隐与动画在 Windows/StartMenuWindow.cs，布局在 Windows/Layouts/。
+// ────────────────────────────────────
+
 /// <summary>
 /// 开始菜单服务（自绘唯一后端）：菜单状态、数据聚合（程序树 / 全应用 / 搜索 / 最近）、
 /// 布局与栏目扩展点、应用动作（固定/管理员/位置/卸载）。
 /// Win 键钩子收到单独 Win 键时切换菜单；窗口单例 Show/Hide。
 /// </summary>
-public sealed class StartMenuService : IStartMenuService, IDisposable
+public sealed class StartMenuService : IStartMenuService, IStartMenuDataService, IDisposable
 {
     private readonly IAppSourceService _appSource;
     private readonly IWindowTrackerService _windowTracker;
@@ -38,6 +48,8 @@ public sealed class StartMenuService : IStartMenuService, IDisposable
     private readonly IAppearanceService? _appearance;
     private readonly ISettingsService _settings;
     private readonly IKernelLogger _logger;
+    private readonly IEventBus _events;
+    private IDisposable? _settingsSub;
     private readonly StartKeyHook _keyHook;
     private IAppIconService? _appIcon;
     private ISettingsWindowService? _settingsWindow;
@@ -49,12 +61,6 @@ public sealed class StartMenuService : IStartMenuService, IDisposable
     private bool _hookInstalled;
 
     public event EventHandler? OpenStateChanged;
-
-    /// <summary>
-    /// 统一右键菜单服务（context-menu 插件注入；布局/条目右键经 MenuSurface 接统一弹层）。
-    /// 缺失时右键降级不弹（装配顺序兜底：context-menu 先于本插件加载）。
-    /// </summary>
-    public IMenuService? Menus { get; set; }
 
     /// <summary>活动布局切换通知（窗口据此重建内容）。</summary>
     public event Action? LayoutChanged;
@@ -74,7 +80,8 @@ public sealed class StartMenuService : IStartMenuService, IDisposable
         ISettingsWindowService? settingsWindow,
         IAppIconService? appIcon,
         IKernelLogger logger,
-        IStartMenuLayoutProvider layout)
+        IStartMenuLayoutProvider layout,
+        IEventBus events)
     {
         _appSource = appSource ?? throw new ArgumentNullException(nameof(appSource));
         _windowTracker = windowTracker ?? throw new ArgumentNullException(nameof(windowTracker));
@@ -88,12 +95,19 @@ public sealed class StartMenuService : IStartMenuService, IDisposable
         _settingsWindow = settingsWindow;
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         _activeLayout = layout ?? throw new ArgumentNullException(nameof(layout));
+        _events = events ?? throw new ArgumentNullException(nameof(events));
 
         _keyHook = new StartKeyHook();
         _keyHook.WinKeyPressed += OnWinKeyPressed;
 
         // 设置分区热更新：win-key 即时重挂钩子；其余 startmenu.* 触发菜单重建（宽度/栏目/搜索）。
-        _settings.Changed += OnSettingChanged;
+        _settingsSub = _events.On<SettingsChangedEventArgs>(
+            ShellEvents.SettingsChanged,
+            (e, _) =>
+            {
+                OnSettingChanged(e);
+                return Task.CompletedTask;
+            });
     }
 
     /// <summary>设置服务（供设置分区 / 栏目扩展点读取 startmenu.* 配置）。</summary>
@@ -103,7 +117,7 @@ public sealed class StartMenuService : IStartMenuService, IDisposable
     /// 主题语义令牌（圆角/字号/颜色），由全局外观服务 <see cref="IAppearanceService"/> 承载；
     /// 布局据以免去硬编码圆角/字号（M6）。未注入时返回 null（调用方回退默认值）。
     /// </summary>
-    internal IThemeTokens? ThemeTokens => _appearance as IThemeTokens;
+    public IThemeTokens? ThemeTokens => _appearance as IThemeTokens;
 
     /// <summary>打开 BetterDesktop 设置窗口（Places 栏目「设置」入口；未注入时静默）。</summary>
     public void OpenSettings()
@@ -221,7 +235,7 @@ public sealed class StartMenuService : IStartMenuService, IDisposable
         return list;
     }
 
-    private void OnSettingChanged(object? sender, SettingsChangedEventArgs e)
+    private void OnSettingChanged(SettingsChangedEventArgs e)
     {
         if (string.Equals(e.Key, "startmenu.win-key", StringComparison.OrdinalIgnoreCase))
         {
@@ -594,7 +608,9 @@ public sealed class StartMenuService : IStartMenuService, IDisposable
     /// <inheritdoc />
     public void Show()
     {
-        if (!_hookInstalled)
+        // C8 修复：仅在用户开启 startmenu.win-key 时才挂载 Win 键钩子；
+        // 用户关闭 Win 键后，Show() 只做程序化弹出，不再绕过设置偷偷装钩子。
+        if (!_hookInstalled && _settings.Get("startmenu.win-key", true))
         {
             _hookInstalled = _keyHook.Install();
         }
@@ -693,7 +709,7 @@ public sealed class StartMenuService : IStartMenuService, IDisposable
 
     public void Dispose()
     {
-        _settings.Changed -= OnSettingChanged;
+        _settingsSub?.Dispose();
         _keyHook.WinKeyPressed -= OnWinKeyPressed;
         _keyHook.Dispose();
         _window?.Close();

@@ -32,6 +32,15 @@ using BetterDesktop.Shell.Core.Native;
 
 namespace BetterDesktop.Shell.ContextMenus.Services;
 
+// ── 本文件方法级白话索引（白话 → 方法）──
+//   "对选中文件/文件夹弹系统右键菜单"   → TryShowItems（异步入口，失败返 false 让调用方回退）/ ShowItemsSync（子进程同步入口）
+//   "桌面空白处弹系统背景菜单"          → TryShowDesktopBackground；实现 ShowBackgroundCore（先转发 explorer DefView，失败降级 SHGetDesktopFolder）
+//   "弹菜单主流程（取 IContextMenu→建 HMENU→TrackPopupMenuEx）" → ShowItemsCore
+//   "把右键转发给 explorer 的 DefView 窗口" → TryForwardDefView
+//   "用户点中某项后执行命令"            → InvokeCommand
+//   "owner-draw 菜单的绘制/测量/选择消息（转发 IContextMenu2/3）" → 内部类 MenuOwnerWindow.WndProc
+// ────────────────────────────────────
+
 /// <summary>系统原生右键弹层（IContextMenu HMENU → TrackPopupMenuEx；全部 COM 在常驻 STA 线程）。</summary>
 public static class NativeMenuPopup
 {

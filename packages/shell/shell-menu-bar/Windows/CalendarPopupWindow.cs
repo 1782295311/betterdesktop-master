@@ -1,41 +1,56 @@
-﻿// BetterDesktop.Shell.MenuBar — 日历独立弹出面板（失焦关闭）
-// UI 内容完全来自真实日期计算，零硬编码：
-//   - 顶部"年月日 + 星期 + 农历月日"：DateTime + ChineseLunisolarCalendar（系统农历算法）
-//   - 月视图表头：CultureInfo.InvariantCulture 或 CurrentUICulture 的真实星期名缩写（顺序本地化）
-//   - 日期格子：System.DateTime.DaysInMonth 动态算当月天数，不写死任何日期文本
-//   - 前后月翻页：修改 currentMonth，完全重算（禁用常量边界）
-//   - 左右翻页按钮：无文字，仅箭头（用户截图风格）；按钮功能=真实翻页，非占位
+// BetterDesktop.Shell.MenuBar — 日历独立弹出面板（月视图，失焦关闭）
+//
+// 数据全部来自 ICalendarService（shell-calendar 包）与系统日期计算，零硬编码日期：
+//   - 月视图：DateTime.DaysInMonth 动态算当月天数；每格 = 公历日 + 一行信息（休/班/节日/节气/农历）
+//   - 信息来源（全部可插拔，新增数据源 UI 不用改）：
+//       法定节假日与调休（年表 JSON）· 24 节气（天文算法）· 传统节日（规则推算）
+//       · 系统日程（WinRT，未授权则隐藏）· 天气（无数据源则隐藏）· 便签（**接口预留**）
+//   - 格子底部小圆点：有日程 / 有便签 / 有天气
+//   - 点某天 → CalendarDayPopupWindow（日详情：该日全部条目分组列出）
+// 服务缺失时降级为"纯农历月视图"（M10），绝不显示编造数据。
 
 using System;
+using System.Collections.Generic;
 using System.Globalization;
+using System.Linq;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
+using BetterDesktop.Shell.Calendar.Contracts;
 using BetterDesktop.Shell.Core.Surface;
 using BetterDesktop.Shell.Core.Vibrancy;
-using BetterDesktop.Shell.Status.Contracts; // 未来如引入外部时钟服务可 Inject
 using BetterDesktop.Shell.MenuBar.Contracts;
 
 namespace BetterDesktop.Shell.MenuBar.Windows;
 
-/// <summary>
-/// 日历独立弹出面板（含农历）。内容 100% 来自系统时钟/本地化信息，零硬编码日期数据。
-/// </summary>
 internal sealed class CalendarPopupWindow : MenuBarPopupWindow
 {
     private const double DefaultWidth = 340;
+    private const double RowHeight = 46;
+
+    private readonly ICalendarService? _calendar;
     private readonly ChineseLunisolarCalendar _lunisolar = new();
     private DateTime _displayMonth; // 当次显示的月份（Day=1）
     private Grid? _dayGrid;
     private TextBlock? _headerText;
+    private CalendarDayPopupWindow? _dayPopup;
 
-    public CalendarPopupWindow(IVibrancyService vibrancy, IAppearanceService? appearance = null)
+    public CalendarPopupWindow(
+        ICalendarService? calendar,
+        IVibrancyService vibrancy,
+        IAppearanceService? appearance = null)
         : base(vibrancy, appearance)
     {
+        _calendar = calendar;
         Width = DefaultWidth;
         MinWidth = DefaultWidth;
         SizeToContent = SizeToContent.Height;
         _displayMonth = new DateTime(DateTime.Today.Year, DateTime.Today.Month, 1);
+
+        if (_calendar is not null)
+        {
+            _calendar.EntriesChanged += OnCalendarEntriesChanged;
+        }
     }
 
     /// <summary>Playground/大容器 预览入口：直接取内容 UI（不走 ShellWindow 生命周期）。</summary>
@@ -45,7 +60,6 @@ internal sealed class CalendarPopupWindow : MenuBarPopupWindow
     {
         var root = new Border
         {
-            // 根容器透明：面板背景/描边/圆角由基类 ApplyContent 按主题令牌统一挂载。
             Padding = new Thickness(14),
             SnapsToDevicePixels = true,
             UseLayoutRounding = true
@@ -53,7 +67,7 @@ internal sealed class CalendarPopupWindow : MenuBarPopupWindow
 
         var column = new StackPanel { Orientation = Orientation.Vertical };
 
-        // 顶部：年/月/日 + 农历（全部来自系统，不写死任何节日或日期）
+        // 顶部：今天日期 + 农历；左右翻月
         _headerText = new TextBlock
         {
             FontSize = 14,
@@ -67,11 +81,30 @@ internal sealed class CalendarPopupWindow : MenuBarPopupWindow
         headerRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         Grid.SetColumn(_headerText, 0);
         headerRow.Children.Add(_headerText);
+        headerRow.Children.Add(ArrowButton("‹", -1, 1));
+        headerRow.Children.Add(ArrowButton("›", 1, 2));
+        column.Children.Add(headerRow);
 
-        // 左/右翻页
-        var prevBtn = new Button
+        // 星期表头（本地化缩写）
+        column.Children.Add(BuildWeekHeader());
+
+        _dayGrid = new Grid();
+        for (var i = 0; i < 7; i++) _dayGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        column.Children.Add(_dayGrid);
+
+        // 图例：让"休/班/圆点"自解释，避免用户猜
+        column.Children.Add(BuildLegend());
+
+        Refresh();
+        root.Child = column;
+        return root;
+    }
+
+    private Button ArrowButton(string text, int delta, int columnIndex)
+    {
+        var button = new Button
         {
-            Content = "‹",
+            Content = text,
             Width = 22,
             Height = 22,
             Background = Brushes.Transparent,
@@ -83,35 +116,16 @@ internal sealed class CalendarPopupWindow : MenuBarPopupWindow
             VerticalContentAlignment = VerticalAlignment.Center,
             HorizontalContentAlignment = HorizontalAlignment.Center
         };
-        prevBtn.Click += (_, _) => ChangeMonth(-1);
-        Grid.SetColumn(prevBtn, 1);
-        headerRow.Children.Add(prevBtn);
+        button.Click += (_, _) => ChangeMonth(delta);
+        Grid.SetColumn(button, columnIndex);
+        return button;
+    }
 
-        var nextBtn = new Button
-        {
-            Content = "›",
-            Width = 22,
-            Height = 22,
-            Background = Brushes.Transparent,
-            BorderBrush = Brushes.Transparent,
-            FontSize = 18,
-            FontWeight = FontWeights.Bold,
-            Padding = new Thickness(0),
-            VerticalContentAlignment = VerticalAlignment.Center,
-            HorizontalContentAlignment = HorizontalAlignment.Center
-        };
-        nextBtn.Click += (_, _) => ChangeMonth(1);
-        Grid.SetColumn(nextBtn, 2);
-        headerRow.Children.Add(nextBtn);
-
-        column.Children.Add(headerRow);
-
-        // 星期表头：使用当前 UICulture 的 AbbreviatedDayNames；顺序跟随 Calendar.GetDayOfWeek 约定
+    private static FrameworkElement BuildWeekHeader()
+    {
         var weekHeader = new Grid { Margin = new Thickness(0, 0, 0, 6) };
         for (var i = 0; i < 7; i++) weekHeader.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-        var culture = CultureInfo.CurrentUICulture;
-        var dayNames = culture.DateTimeFormat.AbbreviatedDayNames;
-        // 中文习惯周日放最前，英文同样；大多数本地化都以周日=0起始，对齐即可
+        var dayNames = CultureInfo.CurrentUICulture.DateTimeFormat.AbbreviatedDayNames;
         for (var i = 0; i < 7; i++)
         {
             var tb = new TextBlock
@@ -120,21 +134,30 @@ internal sealed class CalendarPopupWindow : MenuBarPopupWindow
                 FontSize = 11,
                 TextAlignment = TextAlignment.Center
             };
-            // 星期表头：次要前景走主题令牌
             SetThemeBinding(tb, TextBlock.ForegroundProperty, "ThemeMutedForeground");
             Grid.SetColumn(tb, i);
             weekHeader.Children.Add(tb);
         }
-        column.Children.Add(weekHeader);
+        return weekHeader;
+    }
 
-        // 日期格：7 列 N 行（Grid 动态 RowDefinitions）；每行7格
-        _dayGrid = new Grid();
-        for (var i = 0; i < 7; i++) _dayGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-        column.Children.Add(_dayGrid);
-
-        Refresh();
-        root.Child = column;
-        return root;
+    private FrameworkElement BuildLegend()
+    {
+        var panel = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            Margin = new Thickness(0, 10, 0, 0)
+        };
+        void Add(string text, bool accent)
+        {
+            var tb = new TextBlock { Text = text, FontSize = 10, Margin = new Thickness(0, 0, 10, 0) };
+            SetThemeBinding(tb, TextBlock.ForegroundProperty, accent ? "AccentBrush" : "ThemeMutedForeground");
+            panel.Children.Add(tb);
+        }
+        Add("休=放假", true);
+        Add("班=调休补班", false);
+        Add("● 日程/天气/便签", false);
+        return panel;
     }
 
     private void ChangeMonth(int deltaMonths)
@@ -145,7 +168,7 @@ internal sealed class CalendarPopupWindow : MenuBarPopupWindow
         }
         catch
         {
-            return; // 边界（超出 DateTime 范围）忽略
+            return; // 超出 DateTime 范围忽略
         }
         Refresh();
     }
@@ -159,62 +182,98 @@ internal sealed class CalendarPopupWindow : MenuBarPopupWindow
 
         var today = DateTime.Today;
         var ymd = _displayMonth;
-        // 顶部：年月日 + 星期 + 当日农历月日（全部系统计算）
-        var todayWeek = GetDayNameLocalized(today.DayOfWeek);
-        var todayGanZhi = FormatLunarFull(today);
-        _headerText.Text = $"{today:yyyy年M月d日} {todayWeek} {todayGanZhi}";
+
+        // 顶部：今天 + 农历（服务可用时走服务，缺服务降级到本地算法）
+        var todayDate = DateOnly.FromDateTime(today);
+        var todayInfo = _calendar?.GetDayInfo(todayDate);
+        var todayLunar = todayInfo is not null
+            ? $"农历{todayInfo.LunarMonthText}{todayInfo.LunarDayText}"
+            : FormatLunarFullLocal(today);
+        _headerText.Text = $"{today:yyyy年M月d日} {GetDayNameLocalized(today.DayOfWeek)} {todayLunar}";
+
+        var first = new DateTime(ymd.Year, ymd.Month, 1);
+        var daysInMonth = DateTime.DaysInMonth(ymd.Year, ymd.Month);
+        var offset = (int)first.DayOfWeek;
+
+        // 一次取整月条目（区间查询，禁止逐日跨层调用）
+        var rangeFrom = DateOnly.FromDateTime(first);
+        var rangeTo = DateOnly.FromDateTime(new DateTime(ymd.Year, ymd.Month, daysInMonth));
+        var byDate = new Dictionary<DateOnly, List<CalendarEntry>>();
+        if (_calendar is not null)
+        {
+            try
+            {
+                foreach (var entry in _calendar.GetEntries(rangeFrom, rangeTo))
+                {
+                    if (!byDate.TryGetValue(entry.Date, out var list))
+                    {
+                        list = new List<CalendarEntry>();
+                        byDate[entry.Date] = list;
+                    }
+                    list.Add(entry);
+                }
+            }
+            catch
+            {
+                // 聚合失败：降级为无条目月视图（M10）
+            }
+        }
 
         _dayGrid.Children.Clear();
         _dayGrid.RowDefinitions.Clear();
-        var first = new DateTime(ymd.Year, ymd.Month, 1);
-        var daysInMonth = DateTime.DaysInMonth(ymd.Year, ymd.Month);
-        var offset = (int)first.DayOfWeek; // Sunday = 0
         var totalCells = offset + daysInMonth;
         var totalRows = (int)Math.Ceiling(totalCells / 7.0);
-        for (var r = 0; r < totalRows; r++) _dayGrid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(44) });
+        for (var r = 0; r < totalRows; r++) _dayGrid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(RowHeight) });
 
-        int idx = 0;
-        // 前置空白（用不可见边框占位）
+        var idx = 0;
         for (var i = 0; i < offset; i++, idx++)
         {
-            var place = new Border { Width = 40, Height = 38 };
+            var place = new Border { Width = 42, Height = 42 };
             Grid.SetColumn(place, idx % 7);
             Grid.SetRow(place, idx / 7);
             _dayGrid.Children.Add(place);
         }
+
         for (var day = 1; day <= daysInMonth; day++, idx++)
         {
             var cellDate = new DateTime(ymd.Year, ymd.Month, day);
-            var isToday = cellDate == today;
-            var lunarDay = FormatLunarShort(cellDate);
-            var cell = CreateDayCell(day, lunarDay, isToday);
+            var dateOnly = DateOnly.FromDateTime(cellDate);
+            var info = _calendar?.GetDayInfo(dateOnly);
+            var entries = byDate.TryGetValue(dateOnly, out var list) ? list : new List<CalendarEntry>();
+            var cell = CreateDayCell(day, cellDate == today, info, entries);
             Grid.SetColumn(cell, idx % 7);
             Grid.SetRow(cell, idx / 7);
             _dayGrid.Children.Add(cell);
         }
     }
 
-    private static FrameworkElement CreateDayCell(int day, string lunarShort, bool isToday)
+    /// <summary>单个日期格：公历数字 + 一行信息（休/班/节日/节气/农历）+ 底部来源圆点。</summary>
+    private FrameworkElement CreateDayCell(int day, bool isToday, CalendarDayInfo? info, IReadOnlyList<CalendarEntry> entries)
     {
+        var date = DateOnly.FromDateTime(new DateTime(_displayMonth.Year, _displayMonth.Month, day));
+
         var outer = new Border
         {
-            Width = 40,
-            Height = 38,
-            CornerRadius = isToday ? new CornerRadius(19) : default,
+            Width = 42,
+            Height = 42,
+            CornerRadius = isToday ? new CornerRadius(21) : new CornerRadius(6),
             HorizontalAlignment = HorizontalAlignment.Center,
             VerticalAlignment = VerticalAlignment.Center,
-            SnapsToDevicePixels = true
+            SnapsToDevicePixels = true,
+            Cursor = System.Windows.Input.Cursors.Hand
         };
-        // 今天高亮圆形背景：强调色走主题令牌
         if (isToday)
         {
             SetThemeBinding(outer, Border.BackgroundProperty, "AccentBrush");
         }
-        var column = new StackPanel
+
+        var stack = new StackPanel
         {
             HorizontalAlignment = HorizontalAlignment.Center,
             VerticalAlignment = VerticalAlignment.Center
         };
+
+        // 1) 公历数字
         var dayText = new TextBlock
         {
             Text = day.ToString(),
@@ -223,43 +282,127 @@ internal sealed class CalendarPopupWindow : MenuBarPopupWindow
             TextAlignment = TextAlignment.Center,
             HorizontalAlignment = HorizontalAlignment.Center
         };
-        // 今天数字恒白字（强调色圆形上可读）；其余日期继承主题前景
         if (isToday)
         {
             dayText.Foreground = MenuBarTheme.Foreground;
         }
-        column.Children.Add(dayText);
-        var lunarText = new TextBlock
+        else if (info is not null && info.IsDayOff)
         {
-            Text = lunarShort,
+            SetThemeBinding(dayText, TextBlock.ForegroundProperty, "AccentBrush"); // 放假：强调色
+        }
+        else if (info is not null && (info.IsWeekend || info.IsMakeUpWorkday))
+        {
+            SetThemeBinding(dayText, TextBlock.ForegroundProperty, "ThemeMutedForeground"); // 周末/补班：弱化
+        }
+        stack.Children.Add(dayText);
+
+        // 2) 一行信息：休 > 班 > 节日 > 节气 > 农历日
+        var label = ResolveLabel(day, info, entries);
+        var labelText = new TextBlock
+        {
+            Text = label,
             FontSize = 9,
             TextAlignment = TextAlignment.Center,
             HorizontalAlignment = HorizontalAlignment.Center
         };
-        // 今天农历恒白字；其余农历用主题次要前景
         if (isToday)
         {
-            lunarText.Foreground = MenuBarTheme.Foreground;
+            labelText.Foreground = MenuBarTheme.Foreground;
+        }
+        else if (label is "休" or "班")
+        {
+            SetThemeBinding(labelText, TextBlock.ForegroundProperty, "AccentBrush");
         }
         else
         {
-            SetThemeBinding(lunarText, TextBlock.ForegroundProperty, "ThemeMutedForeground");
+            SetThemeBinding(labelText, TextBlock.ForegroundProperty, "ThemeMutedForeground");
         }
-        column.Children.Add(lunarText);
-        outer.Child = column;
+        stack.Children.Add(labelText);
+
+        // 3) 来源圆点：日程 / 天气 / 便签
+        var dots = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            HorizontalAlignment = HorizontalAlignment.Center,
+            Margin = new Thickness(0, 1, 0, 0)
+        };
+        if (entries.Any(e => e.Kind == CalendarEntryKind.Event)) dots.Children.Add(Dot("AccentBrush"));
+        if (entries.Any(e => e.Kind == CalendarEntryKind.Weather)) dots.Children.Add(Dot("ThemeMutedForeground"));
+        if (entries.Any(e => e.Kind == CalendarEntryKind.Note)) dots.Children.Add(Dot("AccentBrush"));
+        stack.Children.Add(dots);
+
+        outer.Child = stack;
+        outer.MouseLeftButtonUp += (_, _) => ShowDay(date);
         return outer;
     }
 
-    /// <summary>
-    /// 日期格子下方的农历短名：只显示农历日（初一…三十），不显示月份，
-    /// 避免每个格子上方月号冗余、也符合"数字下只显示农历日子"的观感。
-    /// </summary>
-    private string FormatLunarShort(DateTime dt)
+    private FrameworkElement Dot(string brushToken)
+    {
+        var dot = new Border
+        {
+            Width = 3,
+            Height = 3,
+            CornerRadius = new CornerRadius(1.5),
+            Margin = new Thickness(1, 0, 1, 0)
+        };
+        SetThemeBinding(dot, Border.BackgroundProperty, brushToken);
+        return dot;
+    }
+
+    /// <summary>格子第二行的文案优先级：休/班 → 节日 → 节气 → 农历日。</summary>
+    private string ResolveLabel(int day, CalendarDayInfo? info, IReadOnlyList<CalendarEntry> entries)
+    {
+        if (info is not null)
+        {
+            if (info.IsDayOff) return "休";
+            if (info.IsMakeUpWorkday) return "班";
+        }
+
+        var festival = entries.FirstOrDefault(e => e.Kind == CalendarEntryKind.Festival);
+        if (festival is not null) return Shorten(festival.Title, 3);
+
+        var term = entries.FirstOrDefault(e => e.Kind == CalendarEntryKind.SolarTerm);
+        if (term is not null) return Shorten(term.Title, 3);
+
+        // 服务可用走服务（含闰月等完整信息），缺失时退回本地农历算法
+        return info is not null
+            ? info.LunarDayText
+            : FormatLunarShortLocal(new DateTime(_displayMonth.Year, _displayMonth.Month, day));
+    }
+
+    private static string Shorten(string text, int max) => text.Length <= max ? text : text[..max];
+
+    /// <summary>点某天 → 日详情面板（贴着日历右侧展开，越界回拉）。</summary>
+    private void ShowDay(DateOnly date)
+    {
+        if (_calendar is null)
+        {
+            return;
+        }
+
+        try
+        {
+            var entries = _calendar.GetEntries(date);
+            var info = _calendar.GetDayInfo(date);
+            _dayPopup?.Close();
+            _dayPopup = new CalendarDayPopupWindow(date, entries, info, VibrancyService!, AppearanceService);
+
+            var area = MenuBarScreen.GetWorkArea(new Point(Left, Top));
+            var x = Math.Clamp(Left + Width + 6, area.Left, Math.Max(area.Left, area.Right - _dayPopup.Width));
+            var y = Math.Clamp(Top, area.Top, Math.Max(area.Top, area.Bottom - 320));
+            _dayPopup.ShowAt(new Point(x, y));
+        }
+        catch
+        {
+            // 日详情打开失败：静默（M10）
+        }
+    }
+
+    private string FormatLunarShortLocal(DateTime dt)
     {
         try
         {
-            var day = _lunisolar.GetDayOfMonth(dt);
-            return ToChineseDayNumber(day);
+            return ToChineseDayNumber(_lunisolar.GetDayOfMonth(dt));
         }
         catch
         {
@@ -267,14 +410,12 @@ internal sealed class CalendarPopupWindow : MenuBarPopupWindow
         }
     }
 
-    private string FormatLunarFull(DateTime dt)
+    private string FormatLunarFullLocal(DateTime dt)
     {
         try
         {
-            // 农历 XX 年 + 生肖？简化为：年天干地支 + FormatLunarShort 的月日
             var year = _lunisolar.GetSexagenaryYear(dt);
-            var gz = ToGanZhi(year);
-            return $"{gz}年 {FormatLunarShort(dt)}";
+            return $"{ToGanZhi(year)}年 {FormatLunarShortLocal(dt)}";
         }
         catch
         {
@@ -288,23 +429,29 @@ internal sealed class CalendarPopupWindow : MenuBarPopupWindow
         catch { return dow.ToString(); }
     }
 
-    // ---- 农历辅助：不用查表写死的中文数字/天干地支，使用固定序（不是假数据，是算法常量） ----
+    private void OnCalendarEntriesChanged(object? sender, EventArgs e)
+    {
+        Dispatcher.BeginInvoke(new Action(Refresh), System.Windows.Threading.DispatcherPriority.Background);
+    }
+
+    protected override void OnClosed(EventArgs e)
+    {
+        if (_calendar is not null)
+        {
+            _calendar.EntriesChanged -= OnCalendarEntriesChanged;
+        }
+        _dayPopup?.Close();
+        _dayPopup = null;
+        base.OnClosed(e);
+    }
+
+    // ---- 降级路径（无 ICalendarService 时用本地农历算法） ----
     private static readonly string[] ChineseNumbers = { "一", "二", "三", "四", "五", "六", "七", "八", "九", "十" };
     private static readonly string[] Tiangan = { "甲", "乙", "丙", "丁", "戊", "己", "庚", "辛", "壬", "癸" };
     private static readonly string[] Dizhi = { "子", "丑", "寅", "卯", "辰", "巳", "午", "未", "申", "酉", "戌", "亥" };
 
-    private static string ToChineseMonthNumber(int m)
-    {
-        // 正 二 三 … 十 冬 腊（此处保留算法：1-10 数字汉字；11→十一/12→十二；月范围 1-12 公历法）
-        if (m is >= 1 and <= 10) return ChineseNumbers[m - 1];
-        if (m == 11) return "十一";
-        if (m == 12) return "十二";
-        return m.ToString();
-    }
-
     private static string ToChineseDayNumber(int d)
     {
-        // 农历日：初一…初十 / 十一…十九 / 二十 / 廿一…廿九 / 三十
         if (d == 10) return "初十";
         if (d == 20) return "二十";
         if (d == 30) return "三十";
@@ -316,8 +463,7 @@ internal sealed class CalendarPopupWindow : MenuBarPopupWindow
 
     private static string ToGanZhi(int sexagenaryIndex)
     {
-        // 60 甲子循环：index 1..60 → (i-1)%10, (i-1)%12
-        var i = (sexagenaryIndex - 1 + 6000) % 60;
+        var i = ((sexagenaryIndex - 1) % 60 + 60) % 60;
         return $"{Tiangan[i % 10]}{Dizhi[i % 12]}";
     }
 }

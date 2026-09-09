@@ -1,6 +1,8 @@
 // BetterDesktop.Shell.Dock — DockWindow 的底部 AppBar 接线（partial）
-// dock 注册为底部 AppBar 后 explorer 自动上移工作区，最大化窗口/桌面图标不再覆盖 dock——
-// dock 无需置顶即可常驻可见（"不要盖在窗口上"的正解：不是被盖住，而是窗口根本不与它重叠）。
+// dock 注册为底部 AppBar 后 explorer 自动上移工作区，最大化窗口/桌面图标不再覆盖 dock
+// （"不要盖在窗口上"的正解：不是被盖住，而是窗口根本不与它重叠）。
+// 注（2026-09-06）：AppBar 只解决"避让"，不解决"层级"——dock 同时常驻置顶层（DefaultTopmost=true，
+// 等同系统任务栏），否则悬停缩略图 peek 抬起预览目标时会把 dock 盖掉。
 // 生命周期：OnSourceInitialized Register → 布局后首次协商 → ABN_POSCHANGED 重申请 → OnClosed Unregister。
 // 空闲隐藏（SetDockVisible(false)）时 Unregister 释放条带，唤出时重新 Register（见 SetDockVisible）。
 
@@ -129,6 +131,8 @@ public partial class DockWindow
                 DebugLog.Trace("Dock", $"AppBar 协商回写: L={leftLog:F0} T={topLog:F0} (物理 {agreed.Left},{agreed.Top},{agreed.Right},{agreed.Bottom})");
             }
         }
+
+        UpdateRecycleDropRect(); // dock 窗口移动后：回收站屏幕矩形同步更新（供桌面拖放命中）
     }
 
     private IntPtr AppBarWndProc(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)

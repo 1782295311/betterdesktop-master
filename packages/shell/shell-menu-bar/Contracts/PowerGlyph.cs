@@ -88,7 +88,9 @@ internal static class PowerGlyph
         // 支点 + 支柱 + 底座
         canvas.Children.Add(new Ellipse
         {
-            Width = 3.2, Height = 3.2, Fill = brush
+            Width = 3.2,
+            Height = 3.2,
+            Fill = brush
         });
         var pivot = (Ellipse)canvas.Children[^1];
         Canvas.SetLeft(pivot, 12 - 1.6);
@@ -127,7 +129,9 @@ internal static class PowerGlyph
         canvas.Children.Add(Line(12, 17, tip.Item1, tip.Item2, brush));
         canvas.Children.Add(new Ellipse
         {
-            Width = 2.6, Height = 2.6, Fill = brush
+            Width = 2.6,
+            Height = 2.6,
+            Fill = brush
         });
         var hub = (Ellipse)canvas.Children[^1];
         Canvas.SetLeft(hub, 12 - 1.3);
@@ -153,7 +157,10 @@ internal static class PowerGlyph
 
     private static Line Line(double x1, double y1, double x2, double y2, Brush brush) => new()
     {
-        X1 = x1, Y1 = y1, X2 = x2, Y2 = y2,
+        X1 = x1,
+        Y1 = y1,
+        X2 = x2,
+        Y2 = y2,
         Stroke = brush,
         StrokeThickness = StrokeWidth,
         StrokeStartLineCap = PenLineCap.Round,

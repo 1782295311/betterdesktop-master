@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
@@ -10,6 +10,16 @@ using BetterDesktop.Shell.Settings.Sections;
 using BetterDesktop.Shell.Settings.Services;
 
 namespace BetterDesktop.Shell.Settings;
+
+// ============================================================
+// 【白话导航 · 设置中心域】凭白话需求定位到精确文件：
+//   "设置窗口本体"               → SettingsWindow.xaml.cs + Surface/SettingsUi.cs
+//   "设置项的读写/持久化"         → Services/SettingsService.cs（ISettingsService）+ SettingsKernelBridge.cs
+//   "设置分区注册机制"           → Services/SettingsSectionRegistry.cs（ISettingsSectionRegistry；各功能域的 Section 都注册到这里）
+//   "主题/皮肤/配色/强调色"       → Services/AppearanceService.cs、Services/SkinManager.cs + Contracts/IThemeTokens.cs、Native/SystemAccentColorReader.cs
+//   "系统管理（关机/启动项等）"   → Services/SystemManagement.cs
+//   "本域自带分区：系统/主题/左Dock" → Sections/SystemSection.cs、Sections/ThemeSection.cs、Sections/LeftDockSection.cs
+// ============================================================
 
 /// <summary>
 /// 设置中心插件：Provide 设置服务 / 分区注册表 / 设置窗口服务。
@@ -30,11 +40,11 @@ public sealed class SettingsPlugin : IPlugin
         // 生命周期说明：SettingsService 自注册 AppDomain.ProcessExit 兜底 flush/释放，
         // 此处不手动 Dispose（分析器 CA2000 压制）：
 #pragma warning disable CA2000
-        var settings = context.Get<ISettingsService>() ?? new SettingsService();
+        var settings = context.Get<ISettingsService>() ?? new SettingsService(context);
 #pragma warning restore CA2000
         var registry = context.Get<ISettingsSectionRegistry>() ?? new SettingsSectionRegistry();
         // 全局外观服务：同时实现 IThemeTokens（兼容现有消费者）与 IAppearanceService（主题板块/皮肤）。
-        var appearance = new AppearanceService(settings);
+        var appearance = new AppearanceService(settings, context);
         // 启动即把已保存的外观模式（控件画刷 + 主题令牌画刷）推入 App 资源，首屏即应用上次模式。
         appearance.Initialize();
         // 跟随统一窗口基类：注入毛玻璃服务，使设置窗口获得与壳面一致的材质外观。
@@ -56,7 +66,7 @@ public sealed class SettingsPlugin : IPlugin
         context.Provide<IThemeTokens>(appearance);
         context.Provide<IAppearanceService>(appearance);
         context.Provide<ISettingsWindowService>(new SettingsWindowService(
-            () => new SettingsWindow(registry, settings, appearance, vibrancy)));
+            () => new SettingsWindow(registry, settings, appearance, vibrancy, context.Events)));
 
         // 启动弹出设置窗口：仅调试开关（BETTERDESKTOP_SETTINGS_ONSTART=1），默认不弹（挡桌面）；
         // 设置入口在菜单栏 Logo 快捷菜单

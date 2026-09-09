@@ -1,31 +1,32 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Text.Json;
 using System.Threading;
+using BetterDesktop.Kernel.Contracts;
+using BetterDesktop.Shell.Core;
 
 namespace BetterDesktop.Shell.Settings.Services;
 
 /// <summary>
 /// 设置服务实现：扁平键值 JSON 持久化（%APPDATA%\BetterDesktop\settings.json）。
 /// 线程安全：读写与落盘均加锁。
-/// 内存写入与 Changed 事件即时生效（UI 刷新依赖）；落盘走 debounce 合并——
-/// 高频 Set（如拖动滑块）在 500ms 内只落盘一次，避免反复全量序列化写文件。
+/// 内存写入即时生效（UI 刷新依赖）；变更经内核事件总线 EmitAsync 广播（ShellEvents.SettingsChanged），
+/// 落盘走 debounce 合并——高频 Set（如拖动滑块）在 500ms 内只落盘一次，避免反复全量序列化写文件。
 /// 落盘本身走"临时文件 + 替换"避免写一半损坏。
 /// </summary>
 public sealed class SettingsService : Contracts.ISettingsService, IDisposable
 {
+    private readonly IContext? _context;
     private readonly string _filePath;
     private readonly object _gate = new();
     private readonly Dictionary<string, JsonElement> _store = new();
     private readonly Timer _saveTimer;
     private const int SaveDebounceMs = 500;
 
-    /// <inheritdoc />
-    public event EventHandler<Contracts.SettingsChangedEventArgs>? Changed;
-
-    public SettingsService(string? dataDirectory = null)
+    public SettingsService(IContext? context = null, string? dataDirectory = null)
     {
+        _context = context;
         var appData = dataDirectory ?? Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
             "BetterDesktop");
@@ -77,7 +78,10 @@ public sealed class SettingsService : Contracts.ISettingsService, IDisposable
             _store[key] = element;
         }
 
-        Changed?.Invoke(this, new Contracts.SettingsChangedEventArgs(key, value));
+        // 变更经内核事件总线广播（fire-and-forget：Set 保持同步 void，不阻塞调用方；
+        // EmitAsync 异常由内核单监听器隔离机制记录到内核日志，不阻断主流程）。
+        var args = new Contracts.SettingsChangedEventArgs(key, value);
+        if (_context is not null) _ = _context.Events.EmitAsync(ShellEvents.SettingsChanged, args);
         // 落盘 debounce：拖滑块期间只预约一次，500ms 后合并落盘。
         try { _saveTimer.Change(SaveDebounceMs, Timeout.Infinite); }
         catch { /* timer 已释放则忽略 */ }

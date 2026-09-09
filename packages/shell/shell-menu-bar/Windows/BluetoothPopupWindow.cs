@@ -35,6 +35,15 @@ using Windows.Devices.Radios;
 
 namespace BetterDesktop.Shell.MenuBar.Windows;
 
+// ── 本文件方法级白话索引（蓝牙面板，白话 → 方法）──
+//   "开始/停止扫描蓝牙设备（经典 + BLE）" → StartScanning / StopScanning；BLE 广播回调 OnBleAdvertisementReceived → AddNearbyBle / FindBleItem
+//   "蓝牙开关（无线电状态）"              → RefreshRadioStateAsync / OnRadioStateChanged
+//   "渲染已配对/附近设备列表"             → RenderDeviceList（渲染节流 ScheduleRender/QueueRender/OnRenderThrottleTick）；面板内容 BuildPreviewContent/BuildContent
+//   "配对/连接/断开某设备（点击总入口）"  → ToggleDeviceAsync；清理过期设备 CleanupStaleDevices；连接状态确认 WaitForStateAsync
+//   扫描随面板可见性启停：OnVisibilityChanged → StartScanning / StopScanning（后者停全部 timer 与 watcher）。
+// B9 已修：临时诊断基础设施（Diag 写盘日志、_diagPulseTimer、_uiWatchdog 及诊断计数器）已整体移除，不再随开关泄漏/写盘。
+// ────────────────────────────────────
+
 /// <summary>蓝牙独立弹出面板。支持持续扫描附近设备、所有设备点击配对/连接/断开。</summary>
 internal sealed class BluetoothPopupWindow : MenuBarPopupWindow
 {
@@ -67,46 +76,6 @@ internal sealed class BluetoothPopupWindow : MenuBarPopupWindow
     private DispatcherTimer? _cleanupTimer;
     private bool _isScanning;
 
-    // ---- 诊断（定位 UI 卡死 / 事件风暴；定位后可移除）----
-    private static readonly object _diagLock = new();
-    private static void Diag(string msg)
-    {
-        try
-        {
-            lock (_diagLock)
-            {
-                System.IO.File.AppendAllText(
-                    System.IO.Path.Combine(System.AppContext.BaseDirectory, "bluetooth-diag.log"),
-                    $"{DateTime.Now:HH:mm:ss.fff} [{Environment.CurrentManagedThreadId}] {msg}{Environment.NewLine}");
-            }
-        }
-        catch { /* 日志失败不影响功能 */ }
-    }
-
-    private DateTime _lastUiPulse = DateTime.UtcNow;
-    private long _updatedEventCount;
-    private long _bleEventCount;
-    private long _renderCount;
-    private readonly DispatcherTimer _diagPulseTimer = new() { Interval = TimeSpan.FromMilliseconds(500) };
-    private System.Threading.Timer? _uiWatchdog;
-    private DateTime _scanStart = DateTime.UtcNow;
-
-    private void StartDiag()
-    {
-        _lastUiPulse = DateTime.UtcNow;
-        _diagPulseTimer.Tick += (_, _) => _lastUiPulse = DateTime.UtcNow;
-        _diagPulseTimer.Start();
-        _uiWatchdog = new System.Threading.Timer(_ =>
-        {
-            var age = DateTime.UtcNow - _lastUiPulse;
-            if (age > TimeSpan.FromSeconds(2))
-            {
-                Diag($"!!! UI 线程疑似阻塞 {age.TotalSeconds:F1}s (Updated={Interlocked.Read(ref _updatedEventCount)} BLE={Interlocked.Read(ref _bleEventCount)} Render={Interlocked.Read(ref _renderCount)})");
-            }
-        }, null, 1500, 1000);
-        Diag($"--- 扫描开始 (isPaired={_known.Count}) ---");
-    }
-
     public BluetoothPopupWindow(IVibrancyService vibrancy, IAppearanceService? appearance = null)
         : base(vibrancy, appearance)
     {
@@ -131,7 +100,6 @@ internal sealed class BluetoothPopupWindow : MenuBarPopupWindow
     {
         if (_isScanning) return;
         _isScanning = true;
-        StartDiag();
 
         if (_progressRing is not null)
             _progressRing.Visibility = Visibility.Visible;
@@ -265,7 +233,6 @@ internal sealed class BluetoothPopupWindow : MenuBarPopupWindow
         // 无名称的设备直接跳过（不显示 MAC 地址，减少重复和过时）
         var rawName = args.Advertisement.LocalName;
         if (string.IsNullOrWhiteSpace(rawName)) return;
-        Interlocked.Increment(ref _bleEventCount);
 
         var address = args.BluetoothAddress;
         var name = rawName.Trim();
@@ -530,7 +497,6 @@ internal sealed class BluetoothPopupWindow : MenuBarPopupWindow
     /// </summary>
     private void OnDeviceUpdated(DeviceWatcher sender, DeviceInformationUpdate update)
     {
-        Interlocked.Increment(ref _updatedEventCount);
         _ = Dispatcher.BeginInvoke(() => ApplyDeviceUpdate(update));
     }
 
@@ -781,8 +747,6 @@ internal sealed class BluetoothPopupWindow : MenuBarPopupWindow
     /// <summary>依据蓝牙开关状态与已收集设备，重建设备列表区（使用缓存的无线电状态，UI 线程不 P/Invoke）。</summary>
     private void RenderDeviceList()
     {
-        Interlocked.Increment(ref _renderCount);
-        var sw = System.Diagnostics.Stopwatch.StartNew();
         _deviceHost.Children.Clear();
         _nearbyHost.Children.Clear();
         var radio = _radioState;
@@ -808,9 +772,6 @@ internal sealed class BluetoothPopupWindow : MenuBarPopupWindow
         {
             _nearbyHost.Children.Add(CreateDeviceRow(d, isNearby: true));
         }
-        sw.Stop();
-        if (sw.ElapsedMilliseconds > 30)
-            Diag($"RenderDeviceList 耗时 {sw.ElapsedMilliseconds}ms (known={_known.Count} nearby={_nearby.Count})");
     }
 
     private static TextBlock EmptyText(string message)
@@ -1049,13 +1010,11 @@ internal sealed class BluetoothPopupWindow : MenuBarPopupWindow
     /// <summary>统一处理设备点击：未配对→配对，已配对未连接→连接，已连接→断开。</summary>
     private async Task ToggleDeviceAsync(BluetoothDeviceItem device, bool isNearby)
     {
-        Diag($"点击设备: {device.Name} addr={device.Address:X12} isNearby={isNearby} IsPaired={device.IsPaired} IsConnected={device.IsConnected}");
         if (_pendingAddresses.Contains(device.Address)) return;
         if (device.Address == 0) return;
 
         _pendingAddresses.Add(device.Address);
         RenderDeviceList(); // 立即显示"配对中/连接中/断开中"
-        Diag($"已加入 pending，渲染完成，开始执行操作");
 
         try
         {
@@ -1063,9 +1022,7 @@ internal sealed class BluetoothPopupWindow : MenuBarPopupWindow
             {
                 // 未配对设备：发起配对请求。
                 // 配对对话框在 UI 线程弹出（模态自带消息泵），父窗口挂真实句柄，避免后台线程弹窗挂起。
-                Diag("→ 配对路径: PairDevice 开始");
                 bool ok = BluetoothEnumerator.PairDevice(device.Address, device.Name, GetOwnerHandle());
-                Diag($"→ 配对返回 ok={ok}");
                 if (ok)
                 {
                     await WaitForStateAsync(device.Address, expectConnected: true, maxWaitSeconds: 20);
@@ -1077,9 +1034,7 @@ internal sealed class BluetoothPopupWindow : MenuBarPopupWindow
             else if (device.IsConnected)
             {
                 // 已连接：断开
-                Diag("→ 断开路径: DisconnectDevice 开始");
                 bool ok = await RunWithTimeout(() => BluetoothEnumerator.DisconnectDevice(device), 8);
-                Diag($"→ 断开返回 ok={ok}");
                 if (ok)
                 {
                     await WaitForStateAsync(device.Address, expectConnected: false, maxWaitSeconds: 10);
@@ -1088,28 +1043,21 @@ internal sealed class BluetoothPopupWindow : MenuBarPopupWindow
             else
             {
                 // 已配对未连接：连接
-                Diag("→ 连接路径: ConnectDevice 开始");
-                var sw = System.Diagnostics.Stopwatch.StartNew();
                 bool ok = await RunWithTimeout(() => BluetoothEnumerator.ConnectDevice(device), 10);
-                sw.Stop();
-                Diag($"→ ConnectDevice 返回 ok={ok} 耗时 {sw.ElapsedMilliseconds}ms");
                 // 无论申请是否返回成功，都以实际枚举状态为准轮询确认：
                 // 部分设备枚举已安装服务为空但连接仍能建立，以真实状态为准，避免"连上了却不显示"。
                 await WaitForStateAsync(device.Address, expectConnected: true, maxWaitSeconds: ok ? 12 : 6);
-                Diag("→ 状态确认完成");
             }
         }
-        catch (Exception ex)
+        catch
         {
-            Diag($"!!! 操作异常: {ex.GetType().Name}: {ex.Message}");
+            // 配对/连接/断开失败不在此弹窗打断：finally 的全量枚举刷新会让 UI 回到真实状态。
         }
         finally
         {
             _pendingAddresses.Remove(device.Address);
-            Diag("→ finally: 全量刷新已配对列表");
             await RefreshKnownDevicesAsync(); // 全量刷新，保留已有图标
             RenderDeviceList();
-            Diag("→ finally 完成");
         }
     }
 
@@ -1146,11 +1094,7 @@ internal sealed class BluetoothPopupWindow : MenuBarPopupWindow
     /// <summary>在后台线程重新枚举已配对设备并更新 _known 列表（保留已有设备的系统图标）。</summary>
     private async Task RefreshKnownDevicesAsync()
     {
-        var sw = System.Diagnostics.Stopwatch.StartNew();
         var devices = await Task.Run(() => BluetoothEnumerator.Enumerate());
-        sw.Stop();
-        if (sw.ElapsedMilliseconds > 500)
-            Diag($"RefreshKnownDevicesAsync 枚举耗时 {sw.ElapsedMilliseconds}ms (返回 {devices.Count} 台)");
         // 保存已有设备的图标，避免全量替换后图标丢失
         var iconCache = new Dictionary<ulong, System.Windows.Media.ImageSource>();
         foreach (var old in _known)
@@ -1190,7 +1134,6 @@ internal sealed class BluetoothPopupWindow : MenuBarPopupWindow
     {
         var tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         lock (_stateWaiters) _stateWaiters[address] = (tcs, expectConnected);
-        var sw = System.Diagnostics.Stopwatch.StartNew();
         try
         {
             var deadline = DateTime.UtcNow.AddSeconds(maxWaitSeconds);
@@ -1201,7 +1144,6 @@ internal sealed class BluetoothPopupWindow : MenuBarPopupWindow
                 {
                     UpdateDeviceConnectedState(address, expectConnected);
                     ScheduleRender();
-                    Diag($"WaitForState({address:X12}, expect={expectConnected}) 事件命中 {sw.ElapsedMilliseconds}ms");
                     break; // 事件驱动已达成，立即返回
                 }
 
@@ -1212,13 +1154,10 @@ internal sealed class BluetoothPopupWindow : MenuBarPopupWindow
                     ScheduleRender();
                     if (connected.Value == expectConnected)
                     {
-                        Diag($"WaitForState({address:X12}, expect={expectConnected}) 轮询命中 {sw.ElapsedMilliseconds}ms");
                         break;
                     }
                 }
             }
-            if (sw.ElapsedMilliseconds >= maxWaitSeconds * 1000 - 100)
-                Diag($"WaitForState({address:X12}, expect={expectConnected}) 超时 {maxWaitSeconds}s");
         }
         finally
         {

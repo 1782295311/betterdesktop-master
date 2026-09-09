@@ -19,4 +19,7 @@
     <PackageReference Include="ManagedShell" Version="0.0.370" />
   </ItemGroup>
 
+  <ItemGroup>
+    <ProjectReference Include="..\..\api\BetterDesktop.Api.csproj" />
+  </ItemGroup>
 </Project>

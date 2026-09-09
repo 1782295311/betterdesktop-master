@@ -18,12 +18,14 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
 using System.Windows.Media.Animation;
+using BetterDesktop.Kernel.Contracts;
+using BetterDesktop.Shell.Core.Contracts;
 using BetterDesktop.Shell.Core.Surface;
 using BetterDesktop.Shell.Core.Vibrancy;
 using BetterDesktop.Shell.Desktop.Contracts;
 using BetterDesktop.Shell.Desktop.Windows;
 using BetterDesktop.Shell.MenuBar.Contracts;
-using BetterDesktop.Shell.MenuBar.Windows;
+using BetterDesktop.Shell.MenuBar.Services;
 using BetterDesktop.Shell.Settings.Contracts;
 using BetterDesktop.Shell.WindowTracker.Contracts;
 
@@ -47,6 +49,8 @@ internal sealed class MenuBarLeftZone : StackPanel, IDisposable
     private readonly IWindowTrackerService? _windowTracker;
     private readonly IDesktopBrowser? _desktopBrowser;
     private readonly ISettingsService? _settings;
+    private readonly IEventBus? _events;
+    private readonly IMenuBarExtensionRegistry _registry;
     private FolderToolbar? _folderToolbar;
     private TextBlock? _foregroundTitle;
 
@@ -54,22 +58,32 @@ internal sealed class MenuBarLeftZone : StackPanel, IDisposable
     private Border? _logoButton;
     private bool _expanded;
     private bool _disposed;
-    private StacksPopupWindow? _stacksPopup; // 位置/下载/文档共用一个全宽条带面板（懒创建）
+    private StacksPopupWindow? _stacksPopup;
+
+    /// <summary>Resolve logo menu provider from registry (C3: no direct new).</summary>
+    private LogoMenuWindow? ResolveLogoMenu() => (_registry.Get("logo-menu") as LogoMenuBarExtension)?.GetOrCreate();
+
+    /// <summary>Resolve stacks popup provider from registry (C3: no direct new).</summary>
+    private StacksPopupWindow? ResolveStacksPopup() => (_registry.Get("stacks-popup") as StacksPopupBarExtension)?.GetOrCreate(); // 位置/下载/文档共用一个全宽条带面板（懒创建）
 
     public MenuBarLeftZone(
         IVibrancyService vibrancy,
         IAppearanceService? appearance,
         ISettingsWindowService? settingsWindow,
+        IMenuBarExtensionRegistry registry,
         IWindowTrackerService? windowTracker = null,
         IDesktopBrowser? desktopBrowser = null,
-        ISettingsService? settings = null)
+        ISettingsService? settings = null,
+        IEventBus? events = null)
     {
         _vibrancy = vibrancy;
         _appearance = appearance;
         _settingsWindow = settingsWindow;
+        _registry = registry;
         _windowTracker = windowTracker;
         _desktopBrowser = desktopBrowser;
         _settings = settings;
+        _events = events;
 
         Orientation = Orientation.Horizontal;
         VerticalAlignment = VerticalAlignment.Center;
@@ -177,7 +191,11 @@ internal sealed class MenuBarLeftZone : StackPanel, IDisposable
         }
 
         PlayLogoMorph(expanded: true);
-        _logoMenu ??= new LogoMenuWindow(_settingsWindow, _vibrancy, _appearance);
+        _logoMenu ??= ResolveLogoMenu();
+        if (_logoMenu is null)
+        {
+            return; // M10: registry miss -> silent
+        }
         _logoMenu.Hidden -= OnLogoMenuHidden;
         _logoMenu.Hidden += OnLogoMenuHidden;
 
@@ -233,7 +251,15 @@ internal sealed class MenuBarLeftZone : StackPanel, IDisposable
         Border? anchor = null;
         var btn = CreateTextButton(label, tooltip, () =>
         {
-            _stacksPopup ??= new StacksPopupWindow(_vibrancy, _appearance, _settings);
+            _stacksPopup ??= ResolveStacksPopup();
+            if (_stacksPopup is null)
+            {
+                return; // M10: registry miss -> silent
+            }
+            if (_stacksPopup is null)
+            {
+                return; // M10: registry miss -> silent
+            }
             _stacksPopup.OpenPlaces(anchor!.PointToScreen(new Point(0, 0)));
         });
         anchor = btn;
@@ -274,7 +300,11 @@ internal sealed class MenuBarLeftZone : StackPanel, IDisposable
     /// <summary>懒创建并打开全宽条带面板（锚点取按钮所在显示器工作区）。</summary>
     private void ShowStacksPopup(FrameworkElement anchor, string path)
     {
-        _stacksPopup ??= new StacksPopupWindow(_vibrancy, _appearance, _settings);
+        _stacksPopup ??= ResolveStacksPopup();
+        if (_stacksPopup is null)
+        {
+            return; // M10: registry miss -> silent
+        }
         var physical = anchor.PointToScreen(new Point(0, 0));
         _stacksPopup.Open(physical, path);
     }

@@ -1,4 +1,6 @@
 using System;
+using BetterDesktop.Kernel.Contracts;
+using BetterDesktop.Shell.Core;
 using BetterDesktop.Shell.Settings.Contracts;
 
 namespace BetterDesktop.Shell.Dock.Services;
@@ -12,20 +14,31 @@ namespace BetterDesktop.Shell.Dock.Services;
 public sealed class DockVisualSettings
 {
     private readonly ISettingsService? _settings;
+    private readonly IEventBus? _events;
+    private IDisposable? _settingsSub;
 
-    public DockVisualSettings(ISettingsService? settings = null)
+    public DockVisualSettings(ISettingsService? settings = null, IEventBus? events = null)
     {
         _settings = settings;
-        if (_settings is not null)
+        _events = events;
+        if (_settings is not null && _events is not null)
         {
-            _settings.Changed += OnSettingsChanged;
+            _settingsSub = _events.On<SettingsChangedEventArgs>(
+                ShellEvents.SettingsChanged,
+                (e, _) =>
+                {
+                    OnSettingsChanged(e);
+                    return Task.CompletedTask;
+                });
         }
     }
+
+    public void Dispose() => _settingsSub?.Dispose();
 
     /// <summary>任意 dock 视觉配置键变更时触发（渲染层据此重建面板/重新定位）。</summary>
     public event EventHandler? Changed;
 
-    private void OnSettingsChanged(object? sender, SettingsChangedEventArgs e)
+    private void OnSettingsChanged(SettingsChangedEventArgs e)
     {
         if (e.Key.StartsWith("dock.", StringComparison.Ordinal))
         {

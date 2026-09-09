@@ -19,7 +19,7 @@ namespace BetterDesktop.Shell.StartMenu.Windows.Layouts;
 /// </summary>
 public sealed class ClassicLayout : IStartMenuLayoutProvider, IStartMenuLayoutHost
 {
-    private StartMenuService? _service;
+    private IStartMenuDataService? _service;
     private TreeView? _tree;
 
     /// <inheritdoc />
@@ -35,7 +35,7 @@ public sealed class ClassicLayout : IStartMenuLayoutProvider, IStartMenuLayoutHo
     public TreeView ProgramTree => _tree!;
 
     /// <inheritdoc />
-    public FrameworkElement BuildLayout(StartMenuService service)
+    public FrameworkElement BuildLayout(IStartMenuDataService service)
     {
         _service = service;
         var grid = new Grid();
@@ -102,7 +102,7 @@ public sealed class ClassicLayout : IStartMenuLayoutProvider, IStartMenuLayoutHo
     /// 包 ScrollViewer：最近 + 位置 + 电源等多栏目内容超出菜单高度时可滚动，
     /// 避免"区块已注入但被裁剪看不见"。单个栏目异常不拖垮整个菜单（M10）。
     /// </summary>
-    internal static FrameworkElement BuildRightPanel(StartMenuService service)
+    internal static FrameworkElement BuildRightPanel(IStartMenuDataService service)
     {
         var right = new StackPanel
         {
@@ -176,7 +176,10 @@ public sealed class ClassicLayout : IStartMenuLayoutProvider, IStartMenuLayoutHo
                         Cursor = Cursors.Hand
                     };
                     item.MouseLeftButtonUp += (_, _) => ExecuteResult(result);
-                    MenuSurface.Attach(item, () => BuildResultItems(result), _service?.Menus);
+                    if (result.AppItem is not null)
+                    {
+                        AppItemActions.AttachNative(item, result.AppItem);
+                    }
                     ResultsList.Items.Add(item);
                 }
             }
@@ -246,11 +249,6 @@ public sealed class ClassicLayout : IStartMenuLayoutProvider, IStartMenuLayoutHo
         _service.Hide();
     }
 
-    private IReadOnlyList<MenuItemDef>? BuildResultItems(SearchResult result)
-    {
-        return result.AppItem is not null ? AppItemActions.BuildItems(result.AppItem, _service!) : null;
-    }
-
     private void PopulateTree(ProgramFolder root, TreeView tree)
     {
         var rootNode = new TreeViewItem { Header = root.Name, IsExpanded = true };
@@ -297,7 +295,7 @@ public sealed class ClassicLayout : IStartMenuLayoutProvider, IStartMenuLayoutHo
         };
         if (_service is not null)
         {
-            MenuSurface.Attach(leaf, () => AppItemActions.BuildItems(app, _service!), _service?.Menus);
+            AppItemActions.AttachNative(leaf, app);
         }
 
         return leaf;

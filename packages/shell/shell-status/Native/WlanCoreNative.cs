@@ -15,7 +15,8 @@ public readonly record struct WlanConnectedNative(
     string AdapterName,
     string? Ipv4,
     string? Mac,
-    long LinkSpeedBps);
+    long LinkSpeedBps,
+    int SignalQuality);
 
 /// <summary>附近扫描到的单个网络。</summary>
 public readonly record struct WlanNearbyNative(
@@ -33,7 +34,8 @@ public static class WlanCoreNative
         [Out] ushort[] desc, int descCch,
         [Out] ushort[] ipv4, int ipv4Cch,
         [Out] ushort[] mac, int macCch,
-        out long linkSpeedBps);
+        out long linkSpeedBps,
+        out int signalQuality);
     private delegate int WlanScanStart(out int networkCount);
     private delegate int WlanScanCollect(out int networkCount);
     private delegate int WlanScanGetItem(int index, [Out] ushort[] ssid, int ssidCch,
@@ -56,7 +58,7 @@ public static class WlanCoreNative
     public static bool IsAvailable => _read is not null && _scanStart is not null && _scanCollect is not null && _scanGet is not null;
 
     /// <summary>读当前无线连接。失败时返回 Connected=false。</summary>
-    public static WlanConnectedNative ReadConnected(int maxSsid = 64)
+    public static WlanConnectedNative ReadConnected()
     {
         if (_read is null)
         {
@@ -69,7 +71,7 @@ public static class WlanCoreNative
             var ipv4 = new ushort[48];
             var mac = new ushort[32];
             int hr = _read(out int connected, ssid, ssid.Length, desc, desc.Length,
-                ipv4, ipv4.Length, mac, mac.Length, out long linkSpeedBps);
+                ipv4, ipv4.Length, mac, mac.Length, out long linkSpeedBps, out int signalQuality);
             if (hr != 0)
             {
                 return default;
@@ -80,7 +82,8 @@ public static class WlanCoreNative
                 Trim(desc),
                 Trim(ipv4),
                 Trim(mac),
-                linkSpeedBps);
+                linkSpeedBps,
+                signalQuality);
         }
         catch
         {

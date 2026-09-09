@@ -175,16 +175,35 @@ public sealed class WindowPeek : IDisposable
 
     /// <summary>
     /// 放弃还原（点选缩略图要真正激活窗口时调用）：
-    /// 清掉状态但**不执行任何还原动作**，让激活流程接管——
+    /// 清掉状态但**不执行"收回最小化"动作**，让激活流程接管——
     /// 否则会先被 End() 收回最小化、再被 ActivateWindow 还原，出现"闪一下"的抖动。
+    ///
+    /// ⚠️ 但 peek 造成的**层级副作用必须还原**：若 Begin 走了置顶层回退（<see cref="_usedTopmost"/>），
+    /// 窗口已被设 WS_EX_TOPMOST。此时若只清状态不退出置顶层，点选进入的应用会被**永久留在置顶层**，
+    /// 从此无法被任何后来窗口覆盖（用户实测 bug）。因此仅放弃"收回最小化"，置顶层仍需退出。
     /// </summary>
     public void Cancel()
     {
+        var target = _target;
+        var usedTopmost = _usedTopmost;
         _target = IntPtr.Zero;
         _restoreAnchor = IntPtr.Zero;
         _restoreMinimized = false;
         _minimizedPlacement = default;
         _usedTopmost = false;
+
+        if (target == IntPtr.Zero || !NativeMethods.IsWindow(target))
+        {
+            return;
+        }
+
+        if (usedTopmost)
+        {
+            // 退出置顶层：HWND_NOTOPMOST 把它落回普通层最前，随后 ActivateWindow 的
+            // SetForegroundWindow 接手激活。普通层模式无需动作（窗口本就在普通层）。
+            MoveZOrder(target, HwndNotTopmost);
+            DebugLog.Trace("Peek", $"cancel hwnd=0x{(long)target:X} exitedTopmost=1");
+        }
     }
 
     /// <summary>释放即还原（宿主窗口/浮层销毁时的兜底路径）。</summary>

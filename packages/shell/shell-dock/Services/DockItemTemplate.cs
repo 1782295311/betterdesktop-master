@@ -27,7 +27,10 @@ public sealed class DockItemTemplate(IDockAppsService apps) : IMenuTemplate
         //    单实例/已运行激活是任务栏级行为，模板不做简化复制品）
         b.AddItem(new MenuItemDef
         {
-            Id = "dockitem.launch", Text = "启动", Group = MenuGroup.Common, IsDefault = true,
+            Id = "dockitem.launch",
+            Text = "启动",
+            Group = MenuGroup.Common,
+            IsDefault = true,
             Command = () => (Launch ?? LaunchAppFallback)(item),
         });
 
@@ -40,19 +43,25 @@ public sealed class DockItemTemplate(IDockAppsService apps) : IMenuTemplate
             {
                 b.AddItem(new MenuItemDef
                 {
-                    Id = "dockitem.openas", Text = "打开方式…", Group = MenuGroup.Common,
+                    Id = "dockitem.openas",
+                    Text = "打开方式…",
+                    Group = MenuGroup.Common,
                     RequiredCapability = FileCapabilities.OpenWith,
                     Command = () => RunVerb(path, "openas"),
                 });
                 b.AddItem(new MenuItemDef
                 {
-                    Id = "dockitem.dir", Text = "打开所在目录", Group = MenuGroup.Common,
+                    Id = "dockitem.dir",
+                    Text = "打开所在目录",
+                    Group = MenuGroup.Common,
                     RequiredCapability = FileCapabilities.OpenFileLocation,
                     Command = () => OpenContainingDirectory(item),
                 });
                 b.AddItem(new MenuItemDef
                 {
-                    Id = "dockitem.copypath", Text = "复制文件地址", Group = MenuGroup.Manage,
+                    Id = "dockitem.copypath",
+                    Text = "复制文件地址",
+                    Group = MenuGroup.Manage,
                     Command = () =>
                     {
                         try { System.Windows.Clipboard.SetText(path); }
@@ -65,19 +74,25 @@ public sealed class DockItemTemplate(IDockAppsService apps) : IMenuTemplate
         // ② 管理组：从 Dock 移除
         b.AddItem(new MenuItemDef
         {
-            Id = "dockitem.remove", Text = "从 Dock 移除", Group = MenuGroup.Manage,
+            Id = "dockitem.remove",
+            Text = "从 Dock 移除",
+            Group = MenuGroup.Manage,
             Command = () => { apps.RemoveById(item.Id); apps.Save(); },
         });
 
         // ④ 系统组：开始菜单 / 应用提取器（dock 自身语义，原裸菜单迁入）
         b.AddItem(new MenuItemDef
         {
-            Id = "dockitem.startmenu", Text = "开始菜单", Group = MenuGroup.System,
+            Id = "dockitem.startmenu",
+            Text = "开始菜单",
+            Group = MenuGroup.System,
             Command = () => ToggleStartMenu?.Invoke(),
         });
         b.AddItem(new MenuItemDef
         {
-            Id = "dockitem.appgrabber", Text = "应用提取器", Group = MenuGroup.System,
+            Id = "dockitem.appgrabber",
+            Text = "应用提取器",
+            Group = MenuGroup.System,
             Command = () => ShowAppGrabber?.Invoke(),
         });
     }

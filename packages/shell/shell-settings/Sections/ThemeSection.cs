@@ -13,6 +13,7 @@ using BetterDesktop.Shell.Core.Vibrancy;
 using BetterDesktop.Shell.PluginSdk;
 using BetterDesktop.Shell.Settings.Contracts;
 using BetterDesktop.Shell.Settings.Services;
+using BetterDesktop.Shell.Settings.Surface;
 
 namespace BetterDesktop.Shell.Settings.Sections;
 
@@ -37,20 +38,14 @@ public sealed class ThemeSection : ISettingsSection
         var appearance = tokens as IAppearanceService;
 
         var panel = new StackPanel { Orientation = Orientation.Vertical };
-        panel.Children.Add(new TextBlock
-        {
-            Text = "主题",
-            FontSize = 24,
-            FontWeight = FontWeights.SemiBold,
-            Foreground = tokens.Foreground,
-            Margin = new Thickness(0, 0, 0, 4)
-        });
+        // 页面标题统一由窗口标题栏承载；此处只保留说明文字。
+        // descBlock 必须保留：切换外观模式时会就地刷新它的次要前景色。
         var descBlock = new TextBlock
         {
             Text = "统一管控程序的外观模式、强调色、透明度、毛玻璃、字号与皮肤。改动即时生效于所有窗口。",
             Foreground = tokens.MutedForeground,
             FontSize = 13,
-            Margin = new Thickness(0, 0, 0, 18),
+            Margin = new Thickness(0, 0, 0, 16),
             TextWrapping = TextWrapping.Wrap
         };
         panel.Children.Add(descBlock);
@@ -119,7 +114,7 @@ public sealed class ThemeSection : ISettingsSection
             FontSize = 13,
             Foreground = tokens.Foreground
         };
-        DockPanel.SetDock(text, Dock.Left);
+        DockPanel.SetDock(text, System.Windows.Controls.Dock.Left);
 
         var valueText = new TextBlock
         {
@@ -148,12 +143,12 @@ public sealed class ThemeSection : ISettingsSection
         };
 
         var right = new DockPanel { LastChildFill = false };
-        DockPanel.SetDock(valueText, Dock.Right);
+        DockPanel.SetDock(valueText, System.Windows.Controls.Dock.Right);
         right.Children.Add(valueText);
-        DockPanel.SetDock(slider, Dock.Left);
+        DockPanel.SetDock(slider, System.Windows.Controls.Dock.Left);
         right.Children.Add(slider);
 
-        DockPanel.SetDock(right, Dock.Right);
+        DockPanel.SetDock(right, System.Windows.Controls.Dock.Right);
         row.Children.Add(text);
         row.Children.Add(right);
         return row;
@@ -368,9 +363,9 @@ public sealed class ThemeSection : ISettingsSection
                 SyncParamPanelVisibility(paramPanel, appearance);
             }
         };
-        DockPanel.SetDock(pick, Dock.Left);
+        DockPanel.SetDock(pick, System.Windows.Controls.Dock.Left);
         actions.Children.Add(pick);
-        DockPanel.SetDock(clear, Dock.Left);
+        DockPanel.SetDock(clear, System.Windows.Controls.Dock.Left);
         actions.Children.Add(clear);
 
         wrap.Children.Add(current);
@@ -438,9 +433,9 @@ public sealed class ThemeSection : ISettingsSection
             FontSize = 13,
             Foreground = tokens.Foreground
         };
-        DockPanel.SetDock(text, Dock.Left);
+        DockPanel.SetDock(text, System.Windows.Controls.Dock.Left);
         row.Children.Add(text);
-        DockPanel.SetDock(control, Dock.Left);
+        DockPanel.SetDock(control, System.Windows.Controls.Dock.Left);
         row.Children.Add(control);
         return row;
     }
@@ -489,28 +484,7 @@ public sealed class ThemeSection : ISettingsSection
 
     // ===== 共享 UI helper（Section 自包含） =====
 
-    private static Border GroupCard(IThemeTokens tokens)
-    {
-        var body = new StackPanel { Margin = new Thickness(16, 14, 16, 14) };
-        // 暂停描边尝试：分组卡片不再画任何描边线（含内层 inner 亮线），仅保留圆角透明容器，
-        // 与"暂时去掉所有描边和阴影"的总要求一致；待视觉方案重做后再恢复。
-        var inner = new Border
-        {
-            CornerRadius = new CornerRadius(9),
-            Child = body
-        };
-        var card = new Border
-        {
-            Margin = new Thickness(0, 0, 0, 16),
-            CornerRadius = new CornerRadius(10),
-            // 透明：透出统一窗口基类的毛玻璃托盘，不叠加第二层 ContentBackground 色块，也不画描边。
-            Background = Brushes.Transparent,
-            Child = inner
-        };
-
-        // 描边/阴影档位只作用于大窗口根 ChromeBorder，分组卡片不参与；无需订阅 AppearanceService。
-        return card;
-    }
+    private static Border GroupCard(IThemeTokens tokens) => SettingsUi.CreateCard();
 
     private static StackPanel CardBody(Border card) => (StackPanel)((Border)card.Child!).Child!;
 

@@ -16,14 +16,32 @@ using BetterDesktop.Shell.Status.Native;
 
 namespace BetterDesktop.Shell.MenuBar.Windows;
 
+// ── 本文件方法级白话索引（声音面板，白话 → 方法）──
+//   "上一首/播放/下一首控件"    → MakeControls；播放/暂停字形 GetGlyph
+//   "每个应用的独立音量行"      → BuildAppRow；设置应用音量 SetAppVolume
+//   "音频轮询后台工作线程"      → AudioWorkerLoop（经 SubmitAudioRefresh 归并到 UI 线程；B8 已修：CloseSelf 置 _audioWorkerRunning=false 并 Pulse 让其退出）
+//   "重新加载音频会话/设备"     → ReloadAudio；主音量 SetVolume；外部数据入口 Attach
+//   数据模型 SoundPanelViewModel。面板族同构见 MemoryPanelWindow；B8 已修：隐藏 Pause/显示 Resume/关闭 CloseSelf。
+// ────────────────────────────────────
+
 internal sealed class SoundPanelWindow : MenuBarPopupWindow
 {
+    private SoundPanelViewModel? _vm;
+
     public SoundPanelWindow(IVibrancyService vibrancy, IAppearanceService? appearance = null)
         : base(vibrancy, appearance)
     {
         Width = 320;
         MinWidth = 320;
         SizeToContent = SizeToContent.Height;
+        // B8：隐藏即停 1s 轮询（worker 无任务时本就在 Monitor.Wait 休眠，停 timer 即不再投递）；
+        // 显示恢复并立即刷新；关闭时停 timer 并让音频 worker 线程退出、释放控件树闭包。
+        IsVisibleChanged += (_, e) =>
+        {
+            if (e.NewValue is true) _vm?.Resume();
+            else _vm?.Pause();
+        };
+        Closed += (_, _) => _vm?.CloseSelf();
     }
 
     public FrameworkElement BuildPreviewContent() => BuildContent();
@@ -190,7 +208,7 @@ internal sealed class SoundPanelWindow : MenuBarPopupWindow
             col.Children.Add(prefLink);
         });
 
-        var vm = new SoundPanelViewModel();
+        var vm = _vm = new SoundPanelViewModel();
         vm.Attach(v =>
         {
             volumeValue.Text = v.VolumePct.ToString("0");
@@ -507,6 +525,30 @@ internal sealed class SoundPanelViewModel
     {
         _changed = changed;
         _changed?.Invoke(this);
+    }
+
+    /// <summary>面板隐藏：停 1s 轮询，不再向 worker 投递任务（worker 无任务即在 Monitor.Wait 休眠）（B8）。</summary>
+    public void Pause() => _timer.Stop();
+
+    /// <summary>面板重新显示：恢复轮询并立即刷新一帧（B8）。</summary>
+    public void Resume()
+    {
+        if (!_timer.IsEnabled) _timer.Start();
+        ReloadAudio();
+        _ = RefreshMediaAsync();
+    }
+
+    /// <summary>窗口最终关闭：停轮询、通知音频 worker 线程退出、释放刷新闭包（B8）。</summary>
+    public void CloseSelf()
+    {
+        _timer.Stop();
+        lock (_audioGate)
+        {
+            _audioWorkerRunning = false;
+            // 唤醒可能正阻塞在 Monitor.Wait 的 worker，使其看到 false 后 return 退出。
+            Monitor.PulseAll(_audioGate);
+        }
+        _changed = null;
     }
 
     /// <summary>设置主音量（0-100），设置后回读系统真值，避免 UI 与系统不一致。原生调用走后台线程。</summary>

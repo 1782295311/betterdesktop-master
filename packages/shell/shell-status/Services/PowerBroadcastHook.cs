@@ -7,6 +7,7 @@
 using System;
 using System.Runtime.InteropServices;
 using System.Threading;
+using BetterDesktop.Shell.Core.Native;
 
 namespace BetterDesktop.Shell.Status.Services;
 
@@ -65,7 +66,7 @@ internal sealed class PowerBroadcastHook : IDisposable
             if (_thread is null) return;
             if (_hwnd != IntPtr.Zero)
             {
-                _ = PostMessage(_hwnd, WM_QUIT, IntPtr.Zero, IntPtr.Zero);
+                _ = NativeMethods.PostMessage(_hwnd, WM_QUIT, IntPtr.Zero, IntPtr.Zero);
             }
             _thread.Join(2000);
             _thread = null;
@@ -93,7 +94,7 @@ internal sealed class PowerBroadcastHook : IDisposable
 
         try
         {
-            _hwnd = CreateWindowExW(
+            _hwnd = NativeMethods.CreateWindowExW(
                 0, ClassName, WindowName,
                 0,                     // 无 WS_* 样式：不可见、无边框、无任务栏，仅作广播接收载体
                 0, 0, 0, 0,
@@ -107,23 +108,23 @@ internal sealed class PowerBroadcastHook : IDisposable
             // 把实例压进窗口的 GWLP_USERDATA，静态 WndProc 据此取回收发广播的宿主。
             var gch = GCHandle.Alloc(this);
             _userDataHandle = GCHandle.ToIntPtr(gch);
-            SetWindowLongPtr(_hwnd, GWLP_USERDATA, _userDataHandle);
+            NativeMethods.SetWindowLongPtr(_hwnd, GWLP_USERDATA, _userDataHandle);
 
             _ready.Set();
 
             // 消息泵：广播（含 WM_POWERBROADCAST）依赖本线程派发消息。
-            while (GetMessage(out var msg, IntPtr.Zero, 0, 0) > 0)
+            while (NativeMethods.GetMessage(out var msg, IntPtr.Zero, 0, 0) > 0)
             {
                 if (msg.message == WM_QUIT) break;
-                _ = TranslateMessage(ref msg);
-                _ = DispatchMessage(ref msg);
+                _ = NativeMethods.TranslateMessage(ref msg);
+                _ = NativeMethods.DispatchMessage(ref msg);
             }
         }
         finally
         {
             if (_hwnd != IntPtr.Zero)
             {
-                _ = DestroyWindow(_hwnd);
+                _ = NativeMethods.DestroyWindow(_hwnd);
                 _hwnd = IntPtr.Zero;
             }
             if (_userDataHandle != IntPtr.Zero)
@@ -155,7 +156,7 @@ internal sealed class PowerBroadcastHook : IDisposable
     /// <summary>窗口类过程：从 GWLP_USERDATA 取回实例分发；不存在则走默认过程（WM_NCCREATE 等）。</summary>
     private static IntPtr StaticWndProcCore(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam)
     {
-        IntPtr ptr = GetWindowLongPtr(hWnd, GWLP_USERDATA);
+        IntPtr ptr = NativeMethods.GetWindowLongPtr(hWnd, GWLP_USERDATA);
         if (ptr == IntPtr.Zero)
         {
             return DefWindowProc(hWnd, msg, wParam, lParam);
@@ -172,20 +173,6 @@ internal sealed class PowerBroadcastHook : IDisposable
     }
 
     // ---------------- P/Invoke ----------------
-
-    [StructLayout(LayoutKind.Sequential)]
-    private struct POINT { public int X; public int Y; }
-
-    [StructLayout(LayoutKind.Sequential)]
-    private struct MSG
-    {
-        public IntPtr hwnd;
-        public uint message;
-        public IntPtr wParam;
-        public IntPtr lParam;
-        public uint time;
-        public POINT pt;
-    }
 
     [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
     private struct WNDCLASSEX
@@ -210,33 +197,7 @@ internal sealed class PowerBroadcastHook : IDisposable
     [DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
     private static extern ushort RegisterClassEx(ref WNDCLASSEX lpWndClass);
 
-    [DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
-    private static extern IntPtr CreateWindowExW(
-        uint dwExStyle, string lpClassName, string lpWindowName,
-        uint dwStyle, int x, int y, int nWidth, int nHeight,
-        IntPtr hWndParent, IntPtr hMenu, IntPtr hInstance, IntPtr lpParam);
-
-    [DllImport("user32.dll", SetLastError = true)]
-    private static extern bool DestroyWindow(IntPtr hWnd);
-
     [DllImport("user32.dll", SetLastError = true)]
     private static extern IntPtr DefWindowProc(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
 
-    [DllImport("user32.dll", SetLastError = true)]
-    private static extern IntPtr GetWindowLongPtr(IntPtr hWnd, int nIndex);
-
-    [DllImport("user32.dll", SetLastError = true)]
-    private static extern IntPtr SetWindowLongPtr(IntPtr hWnd, int nIndex, IntPtr dwNewLong);
-
-    [DllImport("user32.dll", SetLastError = true)]
-    private static extern int GetMessage(out MSG lpMsg, IntPtr hWnd, uint wMsgFilterMin, uint wMsgFilterMax);
-
-    [DllImport("user32.dll", SetLastError = true)]
-    private static extern bool TranslateMessage(ref MSG lpMsg);
-
-    [DllImport("user32.dll", SetLastError = true)]
-    private static extern IntPtr DispatchMessage(ref MSG lpMsg);
-
-    [DllImport("user32.dll", SetLastError = true)]
-    private static extern bool PostMessage(IntPtr hWnd, uint Msg, IntPtr wParam, IntPtr lParam);
 }

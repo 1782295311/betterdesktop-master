@@ -27,4 +27,7 @@
     <PackageReference Include="TinyPinyin.Net" Version="1.0.2" />
   </ItemGroup>
 
+  <ItemGroup>
+    <ProjectReference Include="..\..\api\BetterDesktop.Api.csproj" />
+  </ItemGroup>
 </Project>

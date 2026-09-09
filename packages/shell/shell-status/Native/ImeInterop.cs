@@ -1,4 +1,4 @@
-﻿// BetterDesktop.Shell.Status — 输入法状态 P/Invoke 收口：
+// BetterDesktop.Shell.Status — 输入法状态 P/Invoke 收口：
 //   - GetKeyboardLayoutNameW 读取当前键盘布局名（如 "00000804"=中文）
 //   - ImmGetDefaultIMEWnd 取默认 IME 窗口（验证是否有激活的 IME 能力）
 

@@ -178,9 +178,18 @@ public static class AudioInterop
                 return new AudioEndpointStatus(0, false, false);
             }
 
-            _ = volume.GetMasterVolumeLevelScalar(out var level);
-            _ = volume.GetMute(out var muted);
-            return new AudioEndpointStatus(level, muted, true);
+            try
+            {
+                _ = volume.GetMasterVolumeLevelScalar(out var level);
+                _ = volume.GetMute(out var muted);
+                return new AudioEndpointStatus(level, muted, true);
+            }
+            finally
+            {
+                // F5/V6（7437 纪律 3）：GetObjectForIUnknown 建的 RCW 持有独立 COM 引用，
+                // 必须显式释放——只 Release 原始指针会让 RCW 的引用延迟到 GC 才释放。
+                _ = Marshal.ReleaseComObject(volume);
+            }
         }
         finally
         {

@@ -1,4 +1,4 @@
-﻿// BetterDesktop.Shell.ContextMenus — @dll,-id 资源串解析（M1 管理器显示链）
+// BetterDesktop.Shell.ContextMenus — @dll,-id 资源串解析（M1 管理器显示链）
 // 技术力：72-右键菜单/shell-resource-ref-parse——SHLoadIndirectString 失败=空串，调用方兜底键名。
 
 using System;

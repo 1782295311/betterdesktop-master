@@ -9,6 +9,16 @@ using BetterDesktop.Shell.AppSource.Models;
 
 namespace BetterDesktop.Shell.AppSource.Services;
 
+// ── 本文件方法级白话索引（应用枚举总服务，白话 → 方法）──
+//   "扫开始菜单快捷方式"            → ScanStartMenu（目录遍历 ScanDirectory）
+//   "扫已安装桌面程序（注册表卸载键）" → ScanInstalledApps（exe 解析 ResolveInstalledExecutable、系统组件排除 IsSystemComponentKey）
+//   "扫微软商店应用"                → ScanStoreApps；Apps 文件夹来源 AppsFolderSource
+//   "新安装应用角标"                → GetNewlyInstalledApps / MarkAppsSeen（已读集合 LoadSeen/SaveSeen 持久化）
+//   "由文件路径反查应用项"          → ResolveFromPath；缓存失效 InvalidateCache
+//   "各类过滤判定（文档/系统工具/可执行/排除名）" → IsDocumentTarget / IsSystemTool / IsLikelyExecutable / IsExcludedName
+//   "稳定应用 ID 生成"              → CreateStableId；开始菜单目录变化监听 OnStartMenuChanged
+// ────────────────────────────────────
+
 /// <summary>
 /// 应用来源服务实现：扫描开始菜单、已安装程序，注册表解析。
 /// 不涉及 UI 渲染或固定逻辑。

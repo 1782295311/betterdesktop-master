@@ -1,5 +1,7 @@
+using System;
 using System.Collections.Generic;
 using System.Runtime.InteropServices;
+using BetterDesktop.Shell.Core.Native;
 
 namespace BetterDesktop.Shell.Taskbar.Native;
 
@@ -7,6 +9,7 @@ namespace BetterDesktop.Shell.Taskbar.Native;
 /// 枚举原生任务栏窗口句柄。
 /// 核心路径原样搬运 TranslucentTB：主任务栏类名 <c>Shell_TrayWnd</c>，
 /// 副任务栏（多显示器）类名 <c>Shell_Secondary_TrayWnd</c>。
+/// P/Invoke 声明已收口到 shell-core/Native（NativeMethods）。
 /// </summary>
 public static class TaskbarWindowFinder
 {
@@ -20,7 +23,7 @@ public static class TaskbarWindowFinder
         var handle = GCHandle.Alloc(list);
         try
         {
-            EnumWindows(EnumProc, GCHandle.ToIntPtr(handle));
+            NativeMethods.EnumWindows(EnumProc, GCHandle.ToIntPtr(handle));
         }
         finally
         {
@@ -33,7 +36,7 @@ public static class TaskbarWindowFinder
     {
         var list = (List<IntPtr>)GCHandle.FromIntPtr(lParam).Target!;
         var sb = new System.Text.StringBuilder(256);
-        if (GetClassName(hwnd, sb, sb.Capacity) > 0)
+        if (NativeMethods.GetClassName(hwnd, sb, sb.Capacity) > 0)
         {
             var className = sb.ToString();
             if (className == PrimaryTaskbarClass || className == SecondaryTaskbarClass)
@@ -51,19 +54,11 @@ public static class TaskbarWindowFinder
         foreach (var h in all)
         {
             var sb = new System.Text.StringBuilder(256);
-            if (GetClassName(h, sb, sb.Capacity) > 0 && sb.ToString() == PrimaryTaskbarClass)
+            if (NativeMethods.GetClassName(h, sb, sb.Capacity) > 0 && sb.ToString() == PrimaryTaskbarClass)
             {
                 result.Add(h);
             }
         }
         return result;
     }
-
-    [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
-    private static extern int GetClassName(IntPtr hWnd, System.Text.StringBuilder lpString, int nMaxCount);
-
-    [DllImport("user32.dll")]
-    private static extern bool EnumWindows(EnumWindowsProc lpEnumFunc, IntPtr lParam);
-
-    private delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
 }

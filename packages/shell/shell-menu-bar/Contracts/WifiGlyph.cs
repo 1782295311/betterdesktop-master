@@ -145,7 +145,10 @@ internal static class WifiGlyph
         {
             canvas.Children.Add(new Line
             {
-                X1 = x, Y1 = 13, X2 = x, Y2 = 15.6,
+                X1 = x,
+                Y1 = 13,
+                X2 = x,
+                Y2 = 15.6,
                 Stroke = brush,
                 StrokeThickness = StrokeWidth,
                 StrokeStartLineCap = PenLineCap.Round,
@@ -156,7 +159,10 @@ internal static class WifiGlyph
         // 网线
         canvas.Children.Add(new Line
         {
-            X1 = 12, Y1 = 15.6, X2 = 12, Y2 = 21,
+            X1 = 12,
+            Y1 = 15.6,
+            X2 = 12,
+            Y2 = 21,
             Stroke = brush,
             StrokeThickness = StrokeWidth,
             StrokeStartLineCap = PenLineCap.Round,

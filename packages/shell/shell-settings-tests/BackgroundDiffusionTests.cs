@@ -4,6 +4,8 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
 using System.Windows.Threading;
+using BetterDesktop.Kernel.Contracts;
+using BetterDesktop.Kernel.Core;
 using BetterDesktop.Shell.Core.Surface;
 using BetterDesktop.Shell.Settings.Sections;
 using BetterDesktop.Shell.Settings.Services;
@@ -71,13 +73,14 @@ public class BackgroundDiffusionTests : IDisposable
         }
     }
 
-    /// <summary>纯代码 ShellWindow 子类（无 XAML）—— 模拟 Dock/AppGrabber/Launchpad/NewAppsNotification 这类
+    /// <summary>纯代码 ShellWindow 子类（无 XAML）—— 模拟 Dock/应用提取器/NewAppsNotification 这类
     /// "纯代码构造 + ChromeBorder 手动接入" 的窗口，证明 Background 同步对所有 ShellWindow 路径都生效。</summary>
     private sealed class CodeOnlyWindow : ShellWindow
     {
-        public CodeOnlyWindow(IAppearanceService? appearance)
+        public CodeOnlyWindow(IAppearanceService? appearance, IEventBus? events = null)
         {
             AppearanceService = appearance;
+            Events = events;
             Width = 200;
             Height = 100;
             var root = new Border { Background = Brushes.Transparent, Padding = new Thickness(8) };
@@ -234,15 +237,16 @@ public class BackgroundDiffusionTests : IDisposable
         {
             try
             {
-                var settings = new SettingsService();
-                var appearance = new AppearanceService(settings);
+                var context = new CordisContext();
+                var settings = new SettingsService(context);
+                var appearance = new AppearanceService(settings, context);
                 appearance.Initialize();
 
                 var registry = new SettingsSectionRegistry();
                 registry.Register(new SystemSection());
                 registry.Register(new ThemeSection());
-                var xamlWin = new SettingsWindow(registry, settings, appearance);
-                var codeWin = new CodeOnlyWindow(appearance);
+                var xamlWin = new SettingsWindow(registry, settings, appearance, events: context.Events);
+                var codeWin = new CodeOnlyWindow(appearance, context.Events);
 
                 xamlWin.Show();
                 codeWin.Show();

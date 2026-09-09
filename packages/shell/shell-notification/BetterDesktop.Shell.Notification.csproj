@@ -18,4 +18,7 @@
     <ProjectReference Include="..\shell-pinning\BetterDesktop.Shell.Pinning.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <ProjectReference Include="..\..\api\BetterDesktop.Api.csproj" />
+  </ItemGroup>
 </Project>

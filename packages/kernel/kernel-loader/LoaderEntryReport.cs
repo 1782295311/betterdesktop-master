@@ -18,7 +18,10 @@ public enum LoaderEntryStatus
     UnknownFactory,
 
     /// <summary>加载失败（插件进入 Failed 状态）。</summary>
-    Failed
+    Failed,
+
+    /// <summary>依赖未满足，停在 Pending 等待服务提供后内核重启。</summary>
+    Pending
 }
 
 /// <summary>单个条目的装配报告。</summary>

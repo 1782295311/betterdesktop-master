@@ -14,6 +14,16 @@ using BetterDesktop.Shell.StartMenu.Services;
 
 namespace BetterDesktop.Shell.StartMenu.Windows.Layouts;
 
+// ── 本文件方法级白话索引（Win11 风格开始菜单布局，白话 → 方法）──
+//   "构建整个 Win11 布局"                → BuildLayout
+//   "刷新固定/所有应用条目"              → RefreshItems
+//   "把搜索结果渲染到布局"              → RenderResults
+//   "最近使用栏（芯片条）"              → BuildRecentBar / PopulateRecentBar / CreateRecentChip
+//   "异步加载应用图标"                  → LoadIconAsync
+//   B7 缺陷点：行/悬停宿主的 MouseLeftButtonUp 应走 ActivateOrLaunch（L186/L199 已改 AttachNative，L179/L192 待核）。
+//   其他布局对照：Win10Layout/Win7Layout/ClassicLayout/AllAppsLayout（同目录，同一 IStartMenuLayoutProvider 契约）。
+// ────────────────────────────────────
+
 /// <summary>
 /// Win11 样式布局：复用 Win7 经典两栏基础布局，仅在顶部追加一条「最近应用」功能栏
 /// （这是它相对 Win7 唯一多出的东西）。左栏程序（固定/最近/所有程序树）+ 右栏用户/系统链接/电源
@@ -21,7 +31,7 @@ namespace BetterDesktop.Shell.StartMenu.Windows.Layouts;
 /// </summary>
 public sealed class Win11Layout : IStartMenuLayoutProvider, IStartMenuLayoutHost
 {
-    private StartMenuService? _service;
+    private IStartMenuDataService? _service;
     private StartMenuPalette _palette = null!;
     private Win7Layout? _inner;          // 内部 Win7 两栏布局（承载搜索/系统链接/电源）
     private FrameworkElement? _recentHost; // 最近应用栏（搜索时折叠）
@@ -36,7 +46,7 @@ public sealed class Win11Layout : IStartMenuLayoutProvider, IStartMenuLayoutHost
     public ListBox ResultsList => _inner?.ResultsList ?? throw new InvalidOperationException("布局尚未构建");
 
     /// <inheritdoc />
-    public FrameworkElement BuildLayout(StartMenuService service)
+    public FrameworkElement BuildLayout(IStartMenuDataService service)
     {
         _service = service;
         _palette = StartMenuPalette.From(service.ThemeTokens);
@@ -176,27 +186,22 @@ public sealed class Win11Layout : IStartMenuLayoutProvider, IStartMenuLayoutHost
         Grid.SetColumn(name, 1);
         row.Children.Add(name);
 
-        row.MouseLeftButtonUp += (_, _) =>
-        {
-            _service?.ActivateOrLaunch(app);
-            _service?.Hide();
-        };
-        if (_service is not null)
-        {
-            MenuSurface.Attach(row, () => AppItemActions.BuildItems(app, _service!), _service?.Menus);
-        }
-
+        // B7 修复：左键启动与原生右键菜单只在外层 hoverHost 订阅一层。
+        // 原先内层 row 与外层 hoverHost 同时订阅，WPF 路由事件冒泡导致一次点击执行两次
+        // ActivateOrLaunch（非单实例应用被启动两个实例）、右键菜单弹两次。row 填满 hoverHost，
+        // 事件必然冒泡到外层，故内层不再订阅；外层 handler 置 Handled 阻断继续冒泡。
         var hoverHost = new Border { CornerRadius = new CornerRadius(6), Background = _palette.Tile11, Child = row };
         hoverHost.MouseEnter += (_, _) => hoverHost.Background = _palette.RowHover;
         hoverHost.MouseLeave += (_, _) => hoverHost.Background = _palette.Tile11;
-        hoverHost.MouseLeftButtonUp += (_, _) =>
+        hoverHost.MouseLeftButtonUp += (_, e) =>
         {
             _service?.ActivateOrLaunch(app);
             _service?.Hide();
+            e.Handled = true;
         };
         if (_service is not null)
         {
-            MenuSurface.Attach(hoverHost, () => AppItemActions.BuildItems(app, _service!), _service?.Menus);
+            AppItemActions.AttachNative(hoverHost, app);
         }
 
         _ = LoadIconAsync(app, icon);

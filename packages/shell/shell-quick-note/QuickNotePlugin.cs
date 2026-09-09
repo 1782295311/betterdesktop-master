@@ -17,6 +17,12 @@ using BetterDesktop.Shell.Settings.Contracts;
 
 namespace BetterDesktop.Shell.QuickNote;
 
+// ============================================================
+// 【白话导航 · 便签域】凭白话需求定位到精确文件：
+//   "便签窗口本体（新建/编辑/外观）" → QuickNoteWindow.cs
+//   "便签的启动入口/单实例"          → QuickNoteLauncher.cs
+// ============================================================
+
 /// <summary>快速笔记插件：由扩展中心开关（extensions.quick-note.enabled）驱动启停的常驻浮窗。</summary>
 public sealed class QuickNotePlugin : IPlugin
 {
@@ -28,7 +34,6 @@ public sealed class QuickNotePlugin : IPlugin
     private IVibrancyService? _vibrancy;
     private QuickNoteLauncher? _launcher;
     private QuickNoteWindow? _note;
-    private bool _subscribed;
 
     private const string EnabledKey = "extensions.quick-note.enabled";
     private const string TextKey = "extensions.quick-note.text";
@@ -42,8 +47,14 @@ public sealed class QuickNotePlugin : IPlugin
 
         if (_settings is not null)
         {
-            _settings.Changed += OnSettingsChanged;
-            _subscribed = true;
+            // 违规1修复：跨程序集裸 event → IEventBus，Effect 托管生命周期
+            context.Effect(() => context.Events.On<SettingsChangedEventArgs>(
+                ShellEvents.SettingsChanged,
+                (e, _) =>
+                {
+                    OnSettingsChanged(e);
+                    return Task.CompletedTask;
+                }));
             // 启动即按持久化意图决定浮窗是否存在。
             // **默认关闭**：外部扩展是可选能力，不该一上来就在桌面加东西
             // （此前默认 true，表现为"没开过扩展中心，桌面却多出一个笔记图标"）。
@@ -60,12 +71,6 @@ public sealed class QuickNotePlugin : IPlugin
 
     public Task UnloadAsync(CancellationToken cancellationToken = default)
     {
-        if (_subscribed && _settings is not null)
-        {
-            _settings.Changed -= OnSettingsChanged;
-        }
-        _subscribed = false;
-
         RunOnUi(() =>
         {
             _note?.Close();
@@ -76,7 +81,7 @@ public sealed class QuickNotePlugin : IPlugin
         return Task.CompletedTask;
     }
 
-    private void OnSettingsChanged(object? sender, SettingsChangedEventArgs e)
+    private void OnSettingsChanged(SettingsChangedEventArgs e)
     {
         if (!string.Equals(e.Key, EnabledKey, StringComparison.Ordinal))
         {

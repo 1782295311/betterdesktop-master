@@ -15,6 +15,9 @@ namespace BetterDesktop.Shell.MenuBar.Windows;
 /// <summary>重命名小面板：输入新名称，确定回调（Enter 确定 / Esc 取消）。</summary>
 internal sealed class RenameDialog : MenuBarPopupWindow
 {
+    // 含名称输入框：禁用 WS_EX_NOACTIVATE，否则点击后窗口不获焦点、键盘输入落不进 TextBox。
+    protected override bool UseNoActivateWindowStyle => false;
+
     private const double DefaultWidth = 260;
 
     private readonly string _currentName;

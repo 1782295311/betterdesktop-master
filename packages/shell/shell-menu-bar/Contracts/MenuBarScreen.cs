@@ -17,32 +17,22 @@ using System;
 using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Media;
+using BetterDesktop.Shell.Core.Native;
+using BetterDesktop.Shell.Core.Windows;
 
 namespace BetterDesktop.Shell.MenuBar.Contracts;
 
 /// <summary>屏幕几何与 DPI 换算工具（全部以 WPF 逻辑单位为准）。</summary>
 internal static class MenuBarScreen
 {
-    private const uint MonDefaultToNearest = 0x00000002;
-
     /// <summary>
     /// 把 <c>Visual.PointToScreen</c> 得到的**物理像素**坐标换算为**逻辑单位**。
     /// 换算失败（未挂 PresentationSource / headless）时原样返回，保证不抛。
+    /// 实现已上提 shell-core/Windows/PopupPositioningService.ToScreenDipFromPhysical（P0-2/B1 收口）。
     /// </summary>
     public static Point ToLogical(Visual visual, Point physicalPoint)
     {
-        try
-        {
-            var source = PresentationSource.FromVisual(visual);
-            var transform = source?.CompositionTarget?.TransformFromDevice;
-            // TransformFromDevice 是 Matrix?（可空 struct），必须取值后再 Transform
-            return transform is { } m ? m.Transform(physicalPoint) : physicalPoint;
-        }
-        catch
-        {
-            // headless / 预览工厂场景：无 PresentationSource，原样返回（不改变既有行为）
-            return physicalPoint;
-        }
+        return PopupPositioningService.ToScreenDipFromPhysical(physicalPoint, visual);
     }
 
     /// <summary>
@@ -53,13 +43,13 @@ internal static class MenuBarScreen
     {
         try
         {
-            var pt = new NativePoint { X = (int)Math.Round(physicalPoint.X), Y = (int)Math.Round(physicalPoint.Y) };
-            var hMonitor = MonitorFromPoint(pt, MonDefaultToNearest);
+            var pt = new NativeMethods.POINT { X = (int)Math.Round(physicalPoint.X), Y = (int)Math.Round(physicalPoint.Y) };
+            var hMonitor = NativeMethods.MonitorFromPoint(pt, NativeMethods.MONITOR_DEFAULTTONEAREST);
             if (hMonitor != IntPtr.Zero)
             {
-                var mi = new MonitorInfo();
-                mi.cbSize = Marshal.SizeOf(typeof(MonitorInfo));
-                if (GetMonitorInfo(hMonitor, ref mi))
+                var mi = new NativeMethods.MONITORINFO();
+                mi.cbSize = Marshal.SizeOf(typeof(NativeMethods.MONITORINFO));
+                if (NativeMethods.GetMonitorInfo(hMonitor, ref mi))
                 {
                     // rcWork 是物理像素；用该显示器自身的 DPI 换算到逻辑单位
                     var scale = GetScaleForPoint(pt);
@@ -85,7 +75,7 @@ internal static class MenuBarScreen
     /// <summary>取指定**物理点**所在显示器的 DPI 缩放系数（1.0 = 100%）。取不到时回落 1.0。</summary>
     public static double GetScale(Point physicalPoint)
     {
-        return GetScaleForPoint(new NativePoint
+        return GetScaleForPoint(new NativeMethods.POINT
         {
             X = (int)Math.Round(physicalPoint.X),
             Y = (int)Math.Round(physicalPoint.Y)
@@ -93,13 +83,14 @@ internal static class MenuBarScreen
     }
 
     /// <summary>取指定物理点所在显示器的 DPI 缩放系数（1.0 = 100%）。</summary>
-    private static double GetScaleForPoint(NativePoint pt)
+    private static double GetScaleForPoint(NativeMethods.POINT pt)
     {
         // ShCore.GetDpiForMonitor 在 Win8.1+ 可用；失败一律按 1.0 处理（与原行为一致）。
         try
         {
-            var hMonitor = MonitorFromPoint(pt, MonDefaultToNearest);
-            if (hMonitor != IntPtr.Zero && GetDpiForMonitor(hMonitor, DpiType.Effective, out uint dpiX, out _) == 0 && dpiX > 0)
+            var hMonitor = NativeMethods.MonitorFromPoint(pt, NativeMethods.MONITOR_DEFAULTTONEAREST);
+            if (hMonitor != IntPtr.Zero
+                && NativeMethods.GetDpiForMonitor(hMonitor, NativeMethods.MDT_EFFECTIVE_DPI, out uint dpiX, out _) == 0 && dpiX > 0)
             {
                 return dpiX / 96.0;
             }
@@ -110,49 +101,5 @@ internal static class MenuBarScreen
         }
 
         return 1.0;
-    }
-
-    private const int S_OK = 0;
-
-    [DllImport("user32.dll", SetLastError = true)]
-    private static extern IntPtr MonitorFromPoint(NativePoint pt, uint dwFlags);
-
-    [DllImport("user32.dll", CharSet = CharSet.Auto, SetLastError = true)]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool GetMonitorInfo(IntPtr hMonitor, ref MonitorInfo lpmi);
-
-    [DllImport("Shcore.dll", SetLastError = true)]
-    private static extern int GetDpiForMonitor(IntPtr hmonitor, DpiType dpiType, out uint dpiX, out uint dpiY);
-
-    private enum DpiType
-    {
-        Effective = 0,
-        Angular = 1,
-        Raw = 2,
-    }
-
-    [StructLayout(LayoutKind.Sequential)]
-    private struct NativePoint
-    {
-        public int X;
-        public int Y;
-    }
-
-    [StructLayout(LayoutKind.Sequential)]
-    private struct Rect32
-    {
-        public int Left;
-        public int Top;
-        public int Right;
-        public int Bottom;
-    }
-
-    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Auto)]
-    private struct MonitorInfo
-    {
-        public int cbSize;
-        public Rect32 rcMonitor;
-        public Rect32 rcWork;
-        public uint dwFlags;
     }
 }

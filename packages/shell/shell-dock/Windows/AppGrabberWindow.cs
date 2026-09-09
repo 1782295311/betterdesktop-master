@@ -1,6 +1,6 @@
 // BetterDesktop.Shell.Dock — 应用提取器窗口（真正的 AppGrabber）
 // 对齐 MyDockFinder AppGrabberWindow 参照形态：干净模式（开始菜单+已安装）/ 全程序（磁盘盘点）双模式，
-// 筛选（全部/已固定/未固定）、排序（字母/按文件夹分组）、图标网格、搜索防抖、
+// 筛选（全部/已固定/未固定）、排序（字母/按文件夹分组 + 批量排序 dock 固定区）、图标网格、搜索防抖、
 // 右键启动/固定/移除/打开目录/卸载，PinnedChanged 实时联动固定态。
 // 前身 AppSourceWindow（扁平全程序列表）已删除——它只是 ScanAllPrograms 的只读视图，
 // 不承担"提取器"职责（无模式/无筛选/无分组/无卸载）。
@@ -25,9 +25,23 @@ using BetterDesktop.Shell.Dock.Services;
 
 namespace BetterDesktop.Shell.Dock.Windows;
 
+// ── 本文件方法级白话索引（应用提取器窗口，按功能分组找）──
+//   "整体内容/搜索栏/分段工具条"        → BuildContent / UpdateSearchChrome / MakeToolbarGroup / MakeSegment
+//   "加载应用列表 / 过滤 / 固定态"      → ReloadAsync / ApplyFilter / RefreshPinnedIds / ClearFilters
+//   "列表渲染（分块/分批防卡顿）"       → RenderViewAsync / AppendBatch / AppendChunkedAsync
+//   "图标分批加载（避免一次性卡死）"    → StartStagedIconLoad / StagedIconLoadAsync / LoadIconInto
+//   "单个应用卡片/右键菜单/启动"        → MakeItem / ShowItemMenu / Launch / OpenContainingDirectory / RunUninstaller
+//   "应用分组（新建/取名）"             → PromptNewGroup / GetFolderName（分组存储 AppGroupStore）
+//   "批量排序模式"                      → ToggleBatchOrder / OnBatchItemClicked / RefreshBatchBadges / ApplyBatchOrderCore / RenderBatchViewAsync / ExitBatchOrder
+//   "忙态/状态文案"                     → SetBusy / UpdateStatus
+// ────────────────────────────────────
+
 /// <summary>应用提取器：双模式全量盘点 + 筛选/分组 + 图标网格 + 固定管理。</summary>
 internal sealed class AppGrabberWindow : ShellWindow
 {
+    /// <summary>管理窗口打开即激活（基类约定"管理窗口重写为 true"；重构回归修复——备份副本 stage1-pre-clean 中有此覆写）。</summary>
+    protected override bool DefaultShowActivated => true;
+
     private const string ModeGroupName = "grabber.mode";
     private const string FilterGroupName = "grabber.filter";
     private const string SortGroupName = "grabber.sort";
@@ -41,9 +55,23 @@ internal sealed class AppGrabberWindow : ShellWindow
     private readonly IDockAppsService _apps;
     private readonly IDockIconService _icons;
     private readonly AppGroupStore _groups = new();
-    private readonly IMenuService? _menus;
 
     private TextBox? _searchBox;
+    private Border? _searchContainer;
+    private TextBlock? _searchPlaceholder;
+    private Button? _clearSearchButton;
+    private RadioButton? _filterAllRadio;
+    private RadioButton? _filterPinnedRadio;
+    private RadioButton? _filterUnpinnedRadio;
+
+    // 批量排序（Dock 固定区，参照 MyDockFinder AppGrabber 批排序语义）：
+    // 进入后按当前固定顺序展示，点击图标依次编号，全部编号完成自动提交 Reorder。
+    private Button? _batchOrderButton;
+    private bool _batchOrdering;
+    private int _preBatchFilterMode;
+    private int _batchNext = 1;
+    private readonly Dictionary<DockItemId, int> _batchLabels = new();
+    private readonly Dictionary<DockItemId, Border> _batchControls = new();
     private TextBlock? _status;
     private ContentControl? _listHost;
     private RadioButton? _modeClean;
@@ -68,13 +96,11 @@ internal sealed class AppGrabberWindow : ShellWindow
         IDockAppsService apps,
         IDockIconService icons,
         IVibrancyService vibrancy,
-        IAppearanceService? appearance,
-        IMenuService? menus = null)
+        IAppearanceService? appearance)
         : base(appearance, vibrancy)
     {
         _apps = apps;
         _icons = icons;
-        _menus = menus;
         _apps.PinnedChanged += OnPinnedChanged;
 
         if (CanSetProperty("Title")) Title = "应用提取器";
@@ -113,7 +139,7 @@ internal sealed class AppGrabberWindow : ShellWindow
 
     private FrameworkElement BuildContent()
     {
-        var root = new Grid { Margin = new Thickness(10) };
+        var root = new Grid { Margin = new Thickness(14) };
         for (var i = 0; i < 5; i++)
         {
             root.RowDefinitions.Add(new RowDefinition
@@ -122,78 +148,178 @@ internal sealed class AppGrabberWindow : ShellWindow
             });
         }
 
-        // 行 0：标题
-        root.Children.Add(new TextBlock
+        // 行 0：标题行（标题 + 操作提示 + 关闭按钮）
+        var header = new Grid { Margin = new Thickness(2, 0, 2, 10) };
+        header.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        header.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        header.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        header.Children.Add(new TextBlock
         {
             Text = "应用提取器",
             FontSize = 15,
             FontWeight = FontWeights.SemiBold,
-            Margin = new Thickness(2, 0, 0, 8)
+            VerticalAlignment = VerticalAlignment.Center
         });
+        var hint = new TextBlock
+        {
+            Text = "双击启动 · 右键固定 / 分组 / 卸载",
+            FontSize = 11,
+            VerticalAlignment = VerticalAlignment.Center
+        };
+        SetThemeBinding(hint, TextBlock.ForegroundProperty, "ThemeMutedForeground");
+        Grid.SetColumn(hint, 1);
+        header.Children.Add(hint);
 
-        // 行 1：搜索框（150ms 防抖，Background 优先级合并中间态）
+        // 关闭按钮：右上角。提取器是独立无边框窗口（无系统标题栏），必须自备关闭入口。
+        var closeButton = new Button
+        {
+            Content = "✕",
+            FontSize = 11,
+            Width = 22,
+            Height = 22,
+            Cursor = Cursors.Hand,
+            BorderThickness = new Thickness(0),
+            Background = Brushes.Transparent,
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(8, 0, 0, 0),
+            ToolTip = "关闭"
+        };
+        SetThemeBinding(closeButton, Control.ForegroundProperty, "ThemeMutedForeground");
+        closeButton.Click += (_, _) => Close();
+        Grid.SetColumn(closeButton, 2);
+        header.Children.Add(closeButton);
+
+        Grid.SetRow(header, 0);
+        root.Children.Add(header);
+
+        // 行 1：搜索框（圆角输入容器 + 放大镜 + 占位提示 + 清除按钮；150ms 防抖行为不变）
         _searchBox = new TextBox
         {
             FontSize = 13,
-            Margin = new Thickness(0, 0, 0, 8),
+            BorderThickness = new Thickness(0),
+            Background = Brushes.Transparent,
             VerticalContentAlignment = VerticalAlignment.Center
         };
         _searchBox.TextChanged += (_, _) =>
         {
             _lastFilterAt = DateTime.UtcNow;
+            UpdateSearchChrome();
             Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Background, ApplyFilter);
         };
-        Grid.SetRow(_searchBox, 1);
-        root.Children.Add(_searchBox);
+        _searchBox.GotKeyboardFocus += (_, _) => _searchContainer?.SetResourceReference(Border.BorderBrushProperty, "AccentBrush");
+        _searchBox.LostKeyboardFocus += (_, _) => _searchContainer?.SetResourceReference(Border.BorderBrushProperty, "ControlBorder");
 
-        // 行 2：模式 / 筛选 / 排序 工具条
-        var toolbar = new StackPanel { Orientation = Orientation.Vertical, Margin = new Thickness(0, 0, 0, 6) };
+        _searchPlaceholder = new TextBlock
+        {
+            Text = "搜索应用（支持拼音 / 首字母，如 微信 / wx）",
+            FontSize = 12.5,
+            VerticalAlignment = VerticalAlignment.Center,
+            IsHitTestVisible = false,
+            Margin = new Thickness(6, 0, 0, 0)
+        };
+        SetThemeBinding(_searchPlaceholder, TextBlock.ForegroundProperty, "ThemeMutedForeground");
 
-        var modeRow = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 4) };
-        _modeClean = MakeRadio(ModeGroupName, "干净模式（开始菜单/已安装）", true, (_, _) =>
+        var magnifier = new System.Windows.Shapes.Path
+        {
+            Width = 14,
+            Height = 14,
+            Stretch = Stretch.None,
+            StrokeThickness = 1.6,
+            VerticalAlignment = VerticalAlignment.Center,
+            Data = Geometry.Parse("M 11.2 6.6 A 4.6 4.6 0 1 1 2 6.6 A 4.6 4.6 0 1 1 11.2 6.6 Z M 10.2 10.2 L 13.2 13.2")
+        };
+        SetThemeBinding(magnifier, System.Windows.Shapes.Shape.StrokeProperty, "ThemeMutedForeground");
+
+        _clearSearchButton = new Button
+        {
+            Content = "✕",
+            FontSize = 11,
+            Width = 22,
+            Height = 22,
+            Cursor = Cursors.Hand,
+            BorderThickness = new Thickness(0),
+            Background = Brushes.Transparent,
+            VerticalAlignment = VerticalAlignment.Center,
+            Visibility = Visibility.Collapsed,
+            ToolTip = "清除搜索"
+        };
+        SetThemeBinding(_clearSearchButton, Control.ForegroundProperty, "ThemeMutedForeground");
+        _clearSearchButton.Click += (_, _) =>
+        {
+            _searchBox.Clear();
+            _searchBox.Focus();
+        };
+
+        var searchDock = new DockPanel();
+        DockPanel.SetDock(magnifier, System.Windows.Controls.Dock.Left);
+        searchDock.Children.Add(magnifier);
+        DockPanel.SetDock(_clearSearchButton, System.Windows.Controls.Dock.Right);
+        searchDock.Children.Add(_clearSearchButton);
+        searchDock.Children.Add(_searchBox);
+
+        _searchContainer = new Border
+        {
+            CornerRadius = new CornerRadius(8),
+            Padding = new Thickness(10, 6, 8, 6),
+            BorderThickness = new Thickness(1),
+            Child = searchDock
+        };
+        SetThemeBinding(_searchContainer, Border.BackgroundProperty, "ControlBackground");
+        SetThemeBinding(_searchContainer, Border.BorderBrushProperty, "ControlBorder");
+        Grid.SetRow(_searchContainer, 1);
+        root.Children.Add(_searchContainer);
+
+        // 行 2：工具条（分段控件：模式 / 筛选 / 排序 + 新建分组）
+        _modeClean = MakeSegment(ModeGroupName, "干净模式", true, (_, _) =>
         {
             if (!_allProgramsMode) return;
             _allProgramsMode = false;
             _ = ReloadAsync();
         });
-        _modeAll = MakeRadio(ModeGroupName, "全程序", false, (_, _) =>
+        _modeAll = MakeSegment(ModeGroupName, "全程序", false, (_, _) =>
         {
             if (_allProgramsMode) return;
             _allProgramsMode = true;
             _ = ReloadAsync();
         });
-        modeRow.Children.Add(_modeClean);
-        modeRow.Children.Add(_modeAll);
+        var filterAll = MakeSegment(FilterGroupName, "全部", true, (_, _) => { _filterMode = 0; ApplyFilter(); });
+        _filterAllRadio = filterAll;
+        var filterPinned = MakeSegment(FilterGroupName, "已固定", false, (_, _) => { _filterMode = 1; ApplyFilter(); });
+        _filterPinnedRadio = filterPinned;
+        var filterUnpinned = MakeSegment(FilterGroupName, "未固定", false, (_, _) => { _filterMode = 2; ApplyFilter(); });
+        _filterUnpinnedRadio = filterUnpinned;
+        var sortAlpha = MakeSegment(SortGroupName, "字母", true, (_, _) => { _groupByFolder = false; ApplyFilter(); });
+        var sortGroup = MakeSegment(SortGroupName, "按文件夹分组", false, (_, _) => { _groupByFolder = true; ApplyFilter(); });
 
-        var filterRow = new StackPanel { Orientation = Orientation.Horizontal };
-        var filterLabel = new TextBlock { Text = "筛选：", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 4, 0), FontSize = 12 };
-        var filterAll = MakeRadio(FilterGroupName, "全部", true, (_, _) => { _filterMode = 0; ApplyFilter(); });
-        var filterPinned = MakeRadio(FilterGroupName, "已固定", false, (_, _) => { _filterMode = 1; ApplyFilter(); });
-        var filterUnpinned = MakeRadio(FilterGroupName, "未固定", false, (_, _) => { _filterMode = 2; ApplyFilter(); });
-        var sortLabel = new TextBlock { Text = "排序：", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(16, 0, 4, 0), FontSize = 12 };
-        var sortAlpha = MakeRadio(SortGroupName, "字母", true, (_, _) => { _groupByFolder = false; ApplyFilter(); });
-        var sortGroup = MakeRadio(SortGroupName, "按文件夹分组", false, (_, _) => { _groupByFolder = true; ApplyFilter(); });
-        filterRow.Children.Add(filterLabel);
-        filterRow.Children.Add(filterAll);
-        filterRow.Children.Add(filterPinned);
-        filterRow.Children.Add(filterUnpinned);
-        filterRow.Children.Add(sortLabel);
-        filterRow.Children.Add(sortAlpha);
-        filterRow.Children.Add(sortGroup);
-
-        // 自定义分组（506 范式）：新建空组入口；移入成员经条目右键"移动到分组"
         var newGroupButton = new Button
         {
             Content = "新建分组…",
             FontSize = 12,
-            Padding = new Thickness(10, 2, 10, 2),
-            Margin = new Thickness(8, 0, 0, 0)
+            Padding = new Thickness(10, 3, 10, 3),
+            Margin = new Thickness(12, 0, 0, 0),
+            VerticalAlignment = VerticalAlignment.Center
         };
         newGroupButton.Click += (_, _) => PromptNewGroup(null);
-        filterRow.Children.Add(newGroupButton);
 
-        toolbar.Children.Add(modeRow);
-        toolbar.Children.Add(filterRow);
+        // 批量排序（Dock 固定区）：按期望顺序点击固定图标依次编号，全部编号后自动应用
+        var batchOrderButton = new Button
+        {
+            Content = "批量排序",
+            FontSize = 12,
+            Padding = new Thickness(10, 3, 10, 3),
+            Margin = new Thickness(8, 0, 0, 0),
+            VerticalAlignment = VerticalAlignment.Center,
+            ToolTip = "给 Dock 固定区排序：按期望顺序点击固定图标（1,2,3…），全部编号后自动应用；再次点击「退出排序」放弃"
+        };
+        batchOrderButton.Click += (_, _) => ToggleBatchOrder();
+        _batchOrderButton = batchOrderButton;
+
+        var toolbar = new WrapPanel { Orientation = Orientation.Horizontal };
+        toolbar.Children.Add(MakeToolbarGroup("模式", _modeClean, _modeAll));
+        toolbar.Children.Add(MakeToolbarGroup("筛选", filterAll, filterPinned, filterUnpinned));
+        toolbar.Children.Add(MakeToolbarGroup("排序", sortAlpha, sortGroup));
+        toolbar.Children.Add(newGroupButton);
+        toolbar.Children.Add(batchOrderButton);
         Grid.SetRow(toolbar, 2);
         root.Children.Add(toolbar);
 
@@ -217,25 +343,125 @@ internal sealed class AppGrabberWindow : ShellWindow
             Text = "正在扫描…",
             FontSize = 11,
             Opacity = 0.7,
-            Margin = new Thickness(2, 6, 0, 0)
+            Margin = new Thickness(2, 8, 0, 0)
         };
+        SetThemeBinding(_status, TextBlock.ForegroundProperty, "ThemeMutedForeground");
         Grid.SetRow(_status, 4);
         root.Children.Add(_status);
 
+        UpdateSearchChrome();
         _ = ReloadAsync();
         return root;
     }
 
-    private static RadioButton MakeRadio(string groupName, string text, bool isChecked, RoutedEventHandler onCheck)
+    /// <summary>搜索框联动外观：占位提示与清除按钮随输入内容显隐。</summary>
+    private void UpdateSearchChrome()
+    {
+        if (_searchBox is null)
+        {
+            return;
+        }
+
+        var empty = string.IsNullOrEmpty(_searchBox.Text);
+        if (_searchPlaceholder is not null)
+        {
+            _searchPlaceholder.Visibility = empty ? Visibility.Visible : Visibility.Collapsed;
+        }
+
+        if (_clearSearchButton is not null)
+        {
+            _clearSearchButton.Visibility = empty ? Visibility.Collapsed : Visibility.Visible;
+        }
+    }
+
+    /// <summary>工具条分组：muted 小标签 + 圆角轨道容器（ControlTrack）+ 内含同组分段按钮。</summary>
+    private FrameworkElement MakeToolbarGroup(string label, params UIElement[] segments)
+    {
+        var panel = new StackPanel { Orientation = Orientation.Horizontal };
+        foreach (var segment in segments)
+        {
+            panel.Children.Add(segment);
+        }
+
+        var track = new Border
+        {
+            CornerRadius = new CornerRadius(8),
+            Padding = new Thickness(2),
+            Child = panel,
+            VerticalAlignment = VerticalAlignment.Center
+        };
+        SetThemeBinding(track, Border.BackgroundProperty, "ControlTrack");
+
+        var labelText = new TextBlock
+        {
+            Text = label,
+            FontSize = 11,
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(0, 0, 6, 0)
+        };
+        SetThemeBinding(labelText, TextBlock.ForegroundProperty, "ThemeMutedForeground");
+
+        var group = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(0, 0, 14, 0)
+        };
+        group.Children.Add(labelText);
+        group.Children.Add(track);
+        return group;
+    }
+
+    private static ControlTemplate? _segmentTemplate;
+
+    /// <summary>分段按钮模板：默认透明、悬停浅起、选中浮起（macOS 分段控件范式）。
+    /// 主题令牌经 XamlReader.Parse 的 {DynamicResource} 引用（模板工厂直传 DynamicResource 已知不可行）。</summary>
+    private static ControlTemplate SegmentTemplate
+    {
+        get
+        {
+            if (_segmentTemplate is not null)
+            {
+                return _segmentTemplate;
+            }
+
+            const string xaml = """
+                <ControlTemplate xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                                 xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                                 TargetType="RadioButton">
+                  <Border x:Name="Bd" CornerRadius="6" Background="Transparent" Padding="10,4" SnapsToDevicePixels="True">
+                    <ContentPresenter x:Name="Cp" VerticalAlignment="Center"
+                                      TextElement.FontSize="12"
+                                      TextElement.Foreground="{DynamicResource ThemeMutedForeground}"/>
+                  </Border>
+                  <ControlTemplate.Triggers>
+                    <Trigger Property="IsMouseOver" Value="True">
+                      <Setter TargetName="Bd" Property="Background" Value="{DynamicResource ControlBackgroundHover}"/>
+                      <Setter TargetName="Cp" Property="TextElement.Foreground" Value="{DynamicResource ThemeForeground}"/>
+                    </Trigger>
+                    <Trigger Property="IsChecked" Value="True">
+                      <Setter TargetName="Bd" Property="Background" Value="{DynamicResource ControlBackground}"/>
+                      <Setter TargetName="Cp" Property="TextElement.Foreground" Value="{DynamicResource ThemeForeground}"/>
+                      <Setter TargetName="Cp" Property="TextElement.FontWeight" Value="SemiBold"/>
+                    </Trigger>
+                  </ControlTemplate.Triggers>
+                </ControlTemplate>
+                """;
+            _segmentTemplate = (ControlTemplate)System.Windows.Markup.XamlReader.Parse(xaml);
+            return _segmentTemplate;
+        }
+    }
+
+    private static RadioButton MakeSegment(string groupName, string text, bool isChecked, RoutedEventHandler onCheck)
     {
         var rb = new RadioButton
         {
             Content = text,
-            IsChecked = isChecked,
+            IsChecked = isChecked, // 先赋值再订阅：初值不触发 onCheck（与原 MakeRadio 行为一致）
             GroupName = groupName, // 同名组互斥（模式/筛选/排序三组各自独立）
-            Margin = new Thickness(0, 0, 14, 0),
-            FontSize = 12,
-            VerticalContentAlignment = VerticalAlignment.Center
+            Margin = new Thickness(1),
+            Template = SegmentTemplate,
+            VerticalAlignment = VerticalAlignment.Center
         };
         rb.Checked += onCheck;
         return rb;
@@ -337,6 +563,13 @@ internal sealed class AppGrabberWindow : ShellWindow
             return;
         }
 
+        // 批量排序模式独占视图：按 Dock 当前固定顺序展示 + 序号点选
+        if (_batchOrdering)
+        {
+            _ = RenderBatchViewAsync();
+            return;
+        }
+
         var kw = _searchBox.Text.Trim();
         IEnumerable<DockItemData> view = _all;
         if (!string.IsNullOrEmpty(kw))
@@ -396,6 +629,7 @@ internal sealed class AppGrabberWindow : ShellWindow
 
         _containers.Clear();
         _pendingIcons.Clear();
+        _batchControls.Clear();
         _renderedCount = 0;
 
         var scroller = MakeScroller();
@@ -403,13 +637,48 @@ internal sealed class AppGrabberWindow : ShellWindow
 
         if (list.Count == 0)
         {
-            scroller.Content = new TextBlock
+            // 508-空态不置死角：给出原因线索与可执行的下一步（清除筛选回全部列表）。
+            var emptyPanel = new StackPanel
             {
-                Text = _all.Count == 0 ? "未扫描到程序" : "无匹配结果",
-                Opacity = 0.6,
                 HorizontalAlignment = HorizontalAlignment.Center,
-                Margin = new Thickness(0, 40, 0, 0)
+                Margin = new Thickness(0, 46, 0, 0)
             };
+            emptyPanel.Children.Add(new TextBlock
+            {
+                Text = _all.Count == 0 ? "未扫描到程序" : "没有匹配的应用",
+                FontSize = 13,
+                TextAlignment = TextAlignment.Center,
+                Opacity = 0.75,
+                HorizontalAlignment = HorizontalAlignment.Center
+            });
+
+            if (_all.Count > 0 && !_batchOrdering)
+            {
+                var hint = new TextBlock
+                {
+                    Text = "试试换个关键词或调整筛选条件",
+                    FontSize = 11,
+                    TextAlignment = TextAlignment.Center,
+                    HorizontalAlignment = HorizontalAlignment.Center,
+                    Margin = new Thickness(0, 6, 0, 0)
+                };
+                SetThemeBinding(hint, TextBlock.ForegroundProperty, "ThemeMutedForeground");
+                emptyPanel.Children.Add(hint);
+
+                var clearButton = new Button
+                {
+                    Content = "清除筛选",
+                    FontSize = 12,
+                    Padding = new Thickness(14, 3, 14, 3),
+                    Margin = new Thickness(0, 12, 0, 0),
+                    HorizontalAlignment = HorizontalAlignment.Center,
+                    Cursor = Cursors.Hand
+                };
+                clearButton.Click += (_, _) => ClearFilters();
+                emptyPanel.Children.Add(clearButton);
+            }
+
+            scroller.Content = emptyPanel;
             UpdateStatus(0);
             return;
         }
@@ -601,6 +870,12 @@ internal sealed class AppGrabberWindow : ShellWindow
             return;
         }
 
+        if (_batchOrdering)
+        {
+            _status.Text = $"排序模式：已编号 {_batchLabels.Count} / 共 {_pinnedIds.Count} —— 按期望顺序点击图标，全部编号后自动应用；「退出排序」放弃";
+            return;
+        }
+
         _status.Text = _allProgramsMode
             ? $"全程序：可见 {visibleCount} / 共 {_all.Count} · 已固定 {_pinnedIds.Count}（双击启动，右键更多）"
             : $"干净模式：可见 {visibleCount} / 共 {_all.Count} · 已固定 {_pinnedIds.Count}（双击启动，右键更多）";
@@ -654,17 +929,36 @@ internal sealed class AppGrabberWindow : ShellWindow
             HorizontalAlignment = HorizontalAlignment.Center
         };
 
-        // 固定角标（右上 8px 圆点）：钉/拔只翻 Visibility，不重建条目
+        // 固定角标（右上 8px 圆点，主题主色）：钉/拔只翻 Visibility，不重建条目
         var pinDot = new System.Windows.Shapes.Ellipse
         {
             Width = 8,
             Height = 8,
-            Fill = new SolidColorBrush(Color.FromRgb(0x3b, 0x82, 0xf6)),
             HorizontalAlignment = HorizontalAlignment.Right,
             VerticalAlignment = VerticalAlignment.Top,
             Margin = new Thickness(0, 2, 2, 0),
             Visibility = isPinned ? Visibility.Visible : Visibility.Collapsed
         };
+        SetThemeBinding(pinDot, System.Windows.Shapes.Shape.FillProperty, "AccentBrush");
+
+        // 批量排序序号徽标（左上角圆号牌，仅排序模式可见；IsHitTestVisible=false 不挡点选）
+        var batchBadge = new Border
+        {
+            Width = 18,
+            Height = 18,
+            CornerRadius = new CornerRadius(9),
+            HorizontalAlignment = HorizontalAlignment.Left,
+            VerticalAlignment = VerticalAlignment.Top,
+            IsHitTestVisible = false,
+            Visibility = Visibility.Collapsed,
+            Child = new TextBlock
+            {
+                FontSize = 11,
+                Foreground = Brushes.White,
+                TextAlignment = TextAlignment.Center
+            }
+        };
+        SetThemeBinding(batchBadge, Border.BackgroundProperty, "AccentBrush");
 
         var body = new Grid { Width = 88 };
         body.Children.Add(new StackPanel
@@ -673,6 +967,7 @@ internal sealed class AppGrabberWindow : ShellWindow
             Children = { icon, name }
         });
         body.Children.Add(pinDot);
+        body.Children.Add(batchBadge);
 
         var border = new Border
         {
@@ -688,21 +983,55 @@ internal sealed class AppGrabberWindow : ShellWindow
         // 悬浮高亮：显式半透明灰（不引主题令牌——"CardHoverBackground"未在主题表核实，禁止编造）
         var hoverBrush = new SolidColorBrush(Color.FromArgb(0x28, 0x80, 0x80, 0x80));
         border.MouseEnter += (_, _) => border.Background = hoverBrush;
-        border.MouseLeave += (_, _) => border.Background = Brushes.Transparent;
+        border.MouseLeave += (_, _) =>
+        {
+            border.Background = Brushes.Transparent;
+            border.Opacity = 1;
+        };
         border.MouseLeftButtonDown += (_, e) =>
         {
+            border.Opacity = 0.7; // 按下反馈
+            if (_batchOrdering)
+            {
+                return; // 排序模式：单击编号接管，不触发启动
+            }
+
             if (e.ClickCount == 2)
             {
                 Launch(app);
             }
         };
+        border.MouseLeftButtonUp += (_, _) =>
+        {
+            border.Opacity = 1;
+            if (_batchOrdering)
+            {
+                OnBatchItemClicked(app.Id);
+            }
+        };
         border.MouseRightButtonUp += (_, e) =>
         {
             e.Handled = true;
-            ShowItemMenu(app, border);
+            if (!_batchOrdering)
+            {
+                ShowItemMenu(app, border); // 排序模式下不弹条目菜单，避免中途改动固定集合
+            }
         };
 
         _containers[app.Id] = border;
+        if (_batchOrdering)
+        {
+            _batchControls[app.Id] = batchBadge;
+            if (_batchLabels.TryGetValue(app.Id, out var labeled))
+            {
+                batchBadge.Visibility = Visibility.Visible;
+                if (batchBadge.Child is TextBlock batchText)
+                {
+                    batchText.Text = labeled.ToString();
+                }
+            }
+        }
+
         return border;
     }
 
@@ -792,7 +1121,8 @@ internal sealed class AppGrabberWindow : ShellWindow
         {
             items.Add(new()
             {
-                Id = "grab.remove", Text = "从 Dock 移除",
+                Id = "grab.remove",
+                Text = "从 Dock 移除",
                 Command = () => { _apps.RemoveById(app.Id); _apps.Save(); },
             });
         }
@@ -800,7 +1130,8 @@ internal sealed class AppGrabberWindow : ShellWindow
         {
             items.Add(new()
             {
-                Id = "grab.pin", Text = "固定到 Dock",
+                Id = "grab.pin",
+                Text = "固定到 Dock",
                 Command = () =>
                 {
                     _apps.AddByPath(string.IsNullOrWhiteSpace(app.ShortcutPath) ? app.TargetPath : app.ShortcutPath);
@@ -817,7 +1148,8 @@ internal sealed class AppGrabberWindow : ShellWindow
         {
             items.Add(new()
             {
-                Id = "grab.ungroup", Text = $"从「{currentGroup}」移出",
+                Id = "grab.ungroup",
+                Text = $"从「{currentGroup}」移出",
                 Command = () => { _groups.RemoveFromGroup(app.Id); ApplyFilter(); },
             });
         }
@@ -833,7 +1165,8 @@ internal sealed class AppGrabberWindow : ShellWindow
             var captured = groupName;
             moveChildren.Add(new()
             {
-                Id = $"grab.moveto.{captured}", Text = captured,
+                Id = $"grab.moveto.{captured}",
+                Text = captured,
                 Command = () => { _groups.MoveToGroup(app.Id, captured); ApplyFilter(); },
             });
         }
@@ -846,7 +1179,7 @@ internal sealed class AppGrabberWindow : ShellWindow
             items.Add(new() { Id = "grab.uninstall", Text = "卸载…", Command = () => RunUninstaller(app.UninstallCommand) });
         }
 
-        _ = _menus?.ShowAsync(items, MenuSurface.AtCursor(this));
+        DockMenuPopup.ShowAtCursor(items.Cast<object>().ToList(), this);
     }
 
     /// <summary>弹输入框建分组；assign 非空时把该应用移入新分组（工具条入口传 null 仅建空组）。</summary>
@@ -916,6 +1249,243 @@ internal sealed class AppGrabberWindow : ShellWindow
         }
 
         ApplyFilter();
+    }
+
+    /// <summary>清除搜索关键词与筛选（回到全部/字母视图），从空态一键恢复。</summary>
+    private void ClearFilters()
+    {
+        _filterMode = 0;
+        if (_filterAllRadio is not null)
+        {
+            _filterAllRadio.IsChecked = true; // 已选中时不触发事件，由末尾 ApplyFilter 兜底
+        }
+
+        if (_searchBox is not null)
+        {
+            _searchBox.Text = string.Empty; // 触发 TextChanged → UpdateSearchChrome + ApplyFilter
+        }
+
+        ApplyFilter();
+    }
+
+    // ---------------------------------------------------------------- 批量排序（Dock 固定区）
+
+    /// <summary>进入/退出批量排序模式（参照 MyDockFinder AppGrabber 批排序语义）。</summary>
+    private void ToggleBatchOrder()
+    {
+        if (_batchOrdering)
+        {
+            ExitBatchOrder(apply: false);
+            ApplyFilter();
+            return;
+        }
+
+        if (_pinnedIds.Count == 0)
+        {
+            if (_status is not null)
+            {
+                _status.Text = "暂无固定应用，先在列表中固定几个应用再排序";
+            }
+
+            return;
+        }
+
+        _batchOrdering = true;
+        _batchLabels.Clear();
+        _batchControls.Clear();
+        _batchNext = 1;
+        _preBatchFilterMode = _filterMode;
+
+        // 强制切到「已固定」视图——排序对象就是 Dock 固定区
+        _filterMode = 1;
+        if (_filterPinnedRadio is not null)
+        {
+            _filterPinnedRadio.IsChecked = true; // 触发 Checked → ApplyFilter → 批量排序视图
+        }
+        else
+        {
+            ApplyFilter();
+        }
+
+        if (_batchOrderButton is not null)
+        {
+            _batchOrderButton.Content = "退出排序";
+        }
+    }
+
+    /// <summary>退出批量排序。apply=true 按已编号顺序提交（全部编号自动应用走这里），false 丢弃进度。</summary>
+    private void ExitBatchOrder(bool apply)
+    {
+        _batchOrdering = false;
+        if (apply && _batchLabels.Count > 0)
+        {
+            ApplyBatchOrderCore();
+        }
+
+        _batchLabels.Clear();
+        _batchControls.Clear();
+        _batchNext = 1;
+
+        // 恢复进入前的筛选视图
+        _filterMode = _preBatchFilterMode;
+        var radio = _filterMode switch
+        {
+            1 => _filterPinnedRadio,
+            2 => _filterUnpinnedRadio,
+            _ => _filterAllRadio
+        };
+        if (radio is not null)
+        {
+            radio.IsChecked = true; // 已选中时不触发事件，由调用方 ApplyFilter 兜底
+        }
+
+        if (_batchOrderButton is not null)
+        {
+            _batchOrderButton.Content = "批量排序";
+        }
+    }
+
+    /// <summary>排序模式点击一个固定图标：未编号则打下一个序号，已编号则撤销并前移后续编号；
+    /// 全部固定项都编号完成后自动提交顺序。</summary>
+    private void OnBatchItemClicked(DockItemId id)
+    {
+        if (!_batchOrdering)
+        {
+            return;
+        }
+
+        if (_batchLabels.TryGetValue(id, out var existing))
+        {
+            _batchLabels.Remove(id);
+            if (_batchControls.TryGetValue(id, out var badge))
+            {
+                badge.Visibility = Visibility.Collapsed;
+            }
+
+            foreach (var kvp in _batchLabels.Where(k => k.Value > existing).ToList())
+            {
+                _batchLabels[kvp.Key] = kvp.Value - 1;
+            }
+
+            _batchNext = _batchLabels.Count + 1;
+            RefreshBatchBadges();
+            UpdateStatus(_batchLabels.Count);
+            return;
+        }
+
+        var n = _batchNext++;
+        _batchLabels[id] = n;
+        if (_batchControls.TryGetValue(id, out var target))
+        {
+            target.Visibility = Visibility.Visible;
+            if (target.Child is TextBlock text)
+            {
+                text.Text = n.ToString();
+            }
+        }
+
+        UpdateStatus(_batchLabels.Count);
+
+        if (_pinnedIds.Count > 0 && _batchLabels.Count == _pinnedIds.Count)
+        {
+            ExitBatchOrder(apply: true);
+            ApplyFilter();
+        }
+    }
+
+    /// <summary>把已渲染控件上的序号徽标按当前编号刷新（重渲染后回填）。</summary>
+    private void RefreshBatchBadges()
+    {
+        foreach (var pair in _batchControls)
+        {
+            if (_batchLabels.TryGetValue(pair.Key, out var n))
+            {
+                pair.Value.Visibility = Visibility.Visible;
+                if (pair.Value.Child is TextBlock text)
+                {
+                    text.Text = n.ToString();
+                }
+            }
+        }
+    }
+
+    /// <summary>按编号顺序提交 Dock 固定区重排并持久化。</summary>
+    private void ApplyBatchOrderCore()
+    {
+        try
+        {
+            var order = _batchLabels.OrderBy(kvp => kvp.Value).Select(kvp => kvp.Key).ToList();
+            _apps.Reorder(order);
+            _apps.Save();
+        }
+        catch
+        {
+            // 重排提交失败不阻断（M10）
+        }
+    }
+
+    /// <summary>
+    /// 批量排序视图：按 Dock 当前固定顺序展示（顺序即点选参照），搜索仍可用缩小点选范围；
+    /// 被搜索滤掉的项无法编号，因此有过滤时不会自动应用（需无过滤点满全部）。
+    /// </summary>
+    private async Task RenderBatchViewAsync()
+    {
+        if (_listHost is null)
+        {
+            return;
+        }
+
+        _renderCts?.Cancel();
+        var cts = new CancellationTokenSource();
+        _renderCts = cts;
+        var token = cts.Token;
+
+        _containers.Clear();
+        _pendingIcons.Clear();
+        _batchControls.Clear();
+        _renderedCount = 0;
+
+        var scroller = MakeScroller();
+        _listHost.Content = scroller;
+
+        var kw = _searchBox?.Text.Trim();
+        IEnumerable<DockItemData> items = _apps.Pinned;
+        if (!string.IsNullOrEmpty(kw))
+        {
+            items = items.Where(a => PinyinMatcher.Matches(a.Name, kw));
+        }
+
+        var list = items.ToList();
+        if (list.Count == 0)
+        {
+            scroller.Content = new TextBlock
+            {
+                Text = "没有已固定应用",
+                Opacity = 0.6,
+                HorizontalAlignment = HorizontalAlignment.Center,
+                Margin = new Thickness(0, 40, 0, 0)
+            };
+            UpdateStatus(0);
+            return;
+        }
+
+        try
+        {
+            var panel = new WrapPanel { Orientation = Orientation.Horizontal };
+            scroller.Content = panel;
+            await AppendChunkedAsync(panel, list, token);
+            if (token.IsCancellationRequested)
+            {
+                return;
+            }
+
+            RefreshBatchBadges();
+            StartStagedIconLoad();
+        }
+        catch (OperationCanceledException)
+        {
+            // 被新渲染帧取代：静默
+        }
     }
 
     private void Launch(DockItemData app)
@@ -999,6 +1569,13 @@ internal sealed class AppGrabberWindow : ShellWindow
             }
 
             RefreshPinnedIds();
+            if (_batchOrdering)
+            {
+                // 排序期间固定集合被外部改动（dock 侧拖动/增删）：重渲染排序视图
+                ApplyFilter();
+                return;
+            }
+
             foreach (var (id, element) in _containers)
             {
                 var pinned = _pinnedIds.Contains(id);

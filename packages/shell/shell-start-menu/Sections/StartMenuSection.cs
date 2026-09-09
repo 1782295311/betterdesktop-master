@@ -7,6 +7,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
 using BetterDesktop.Shell.Settings.Contracts;
+using BetterDesktop.Shell.Settings.Surface;
 using BetterDesktop.Shell.StartMenu.Contracts;
 using BetterDesktop.Shell.StartMenu.Services;
 
@@ -29,14 +30,7 @@ public sealed class StartMenuSection : ISettingsSection
         var svc = StartMenuServiceBridge.TryGet();
         var panel = new StackPanel { Orientation = Orientation.Vertical };
 
-        panel.Children.Add(new TextBlock
-        {
-            Text = "开始菜单",
-            FontSize = 24,
-            FontWeight = FontWeights.SemiBold,
-            Foreground = tokens.Foreground,
-            Margin = new Thickness(0, 0, 0, 4)
-        });
+        // 页面标题统一由窗口标题栏承载，此处不再重复渲染大标题。
         panel.Children.Add(new TextBlock
         {
             Text = "纯自绘开始菜单，可选 Win7 / Win10 / Win11 三套样式，背景与配色完全跟随「设置 → 外观」主题；入口在 Dock 左端开始图标，也可按 Win 键唤出。",
@@ -235,18 +229,7 @@ public sealed class StartMenuSection : ISettingsSection
         Margin = new Thickness(0, 0, 0, 6)
     };
 
-    private static Border GroupCard(IThemeTokens tokens)
-    {
-        var body = new StackPanel { Margin = new Thickness(16, 14, 16, 14) };
-        var inner = new Border { CornerRadius = new CornerRadius(9), Child = body };
-        return new Border
-        {
-            Margin = new Thickness(0, 0, 0, 16),
-            CornerRadius = new CornerRadius(10),
-            Background = Brushes.Transparent,
-            Child = inner
-        };
-    }
+    private static Border GroupCard(IThemeTokens tokens) => SettingsUi.CreateCard();
 
     private static StackPanel CardBody(Border card) => (StackPanel)((Border)card.Child!).Child!;
 

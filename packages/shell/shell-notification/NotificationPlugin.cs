@@ -12,6 +12,12 @@ using BetterDesktop.Shell.Pinning.Contracts;
 
 namespace BetterDesktop.Shell.Notification;
 
+// ============================================================
+// 【白话导航 · 通知域】凭白话需求定位到精确文件：
+//   "发通知 / 通知服务"            → Services/NotificationService.cs（INotificationService）
+//   "新安装应用的提示窗"           → Windows/NewAppsNotificationWindow.cs
+// ============================================================
+
 /// <summary>
 /// 新装应用通知插件。
 /// 订阅 <see cref="IAppSourceService.AppSourceChanged"/>，检测到新装应用后右下角弹窗（一键固定/忽略）。

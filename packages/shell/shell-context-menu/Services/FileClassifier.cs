@@ -1,8 +1,9 @@
-using Microsoft.Win32;
 using System.Collections.Concurrent;
 using System.IO;
+using BetterDesktop.Kernel.Core;
 using BetterDesktop.Shell.AppSource.Services;
 using BetterDesktop.Shell.ContextMenus.Contracts;
+using Microsoft.Win32;
 
 namespace BetterDesktop.Shell.ContextMenus.Services;
 
@@ -17,44 +18,93 @@ public sealed class FileClassifier : IFileClassifier
     /// <summary>已知扩展名 → 类别（命中率高的常用表；未命中走关联探测）。</summary>
     private static readonly Dictionary<string, FileKind> KnownExtensions = new(StringComparer.OrdinalIgnoreCase)
     {
-        [".exe"] = FileKind.Executable, [".bat"] = FileKind.Executable, [".cmd"] = FileKind.Executable,
-        [".com"] = FileKind.Executable, [".msc"] = FileKind.Executable, [".appref-ms"] = FileKind.Executable,
+        [".exe"] = FileKind.Executable,
+        [".bat"] = FileKind.Executable,
+        [".cmd"] = FileKind.Executable,
+        [".com"] = FileKind.Executable,
+        [".msc"] = FileKind.Executable,
+        [".appref-ms"] = FileKind.Executable,
 
-        [".doc"] = FileKind.WordDocument, [".docx"] = FileKind.WordDocument, [".docm"] = FileKind.WordDocument,
-        [".rtf"] = FileKind.WordDocument, [".odt"] = FileKind.WordDocument, [".wps"] = FileKind.WordDocument,
+        [".doc"] = FileKind.WordDocument,
+        [".docx"] = FileKind.WordDocument,
+        [".docm"] = FileKind.WordDocument,
+        [".rtf"] = FileKind.WordDocument,
+        [".odt"] = FileKind.WordDocument,
+        [".wps"] = FileKind.WordDocument,
 
-        [".xls"] = FileKind.ExcelWorkbook, [".xlsx"] = FileKind.ExcelWorkbook,
-        [".xlsm"] = FileKind.ExcelWorkbook, [".csv"] = FileKind.ExcelWorkbook, [".et"] = FileKind.ExcelWorkbook,
+        [".xls"] = FileKind.ExcelWorkbook,
+        [".xlsx"] = FileKind.ExcelWorkbook,
+        [".xlsm"] = FileKind.ExcelWorkbook,
+        [".csv"] = FileKind.ExcelWorkbook,
+        [".et"] = FileKind.ExcelWorkbook,
 
-        [".ppt"] = FileKind.Presentation, [".pptx"] = FileKind.Presentation,
-        [".pps"] = FileKind.Presentation, [".dps"] = FileKind.Presentation,
+        [".ppt"] = FileKind.Presentation,
+        [".pptx"] = FileKind.Presentation,
+        [".pps"] = FileKind.Presentation,
+        [".dps"] = FileKind.Presentation,
 
-        [".zip"] = FileKind.Archive, [".rar"] = FileKind.Archive, [".7z"] = FileKind.Archive,
-        [".tar"] = FileKind.Archive, [".gz"] = FileKind.Archive, [".cab"] = FileKind.Archive,
+        [".zip"] = FileKind.Archive,
+        [".rar"] = FileKind.Archive,
+        [".7z"] = FileKind.Archive,
+        [".tar"] = FileKind.Archive,
+        [".gz"] = FileKind.Archive,
+        [".cab"] = FileKind.Archive,
 
-        [".png"] = FileKind.Image, [".jpg"] = FileKind.Image, [".jpeg"] = FileKind.Image,
-        [".bmp"] = FileKind.Image, [".gif"] = FileKind.Image, [".webp"] = FileKind.Image,
-        [".ico"] = FileKind.Image, [".tif"] = FileKind.Image, [".tiff"] = FileKind.Image,
+        [".png"] = FileKind.Image,
+        [".jpg"] = FileKind.Image,
+        [".jpeg"] = FileKind.Image,
+        [".bmp"] = FileKind.Image,
+        [".gif"] = FileKind.Image,
+        [".webp"] = FileKind.Image,
+        [".ico"] = FileKind.Image,
+        [".tif"] = FileKind.Image,
+        [".tiff"] = FileKind.Image,
 
-        [".mp4"] = FileKind.Video, [".mkv"] = FileKind.Video, [".avi"] = FileKind.Video,
-        [".mov"] = FileKind.Video, [".wmv"] = FileKind.Video, [".flv"] = FileKind.Video, [".webm"] = FileKind.Video,
+        [".mp4"] = FileKind.Video,
+        [".mkv"] = FileKind.Video,
+        [".avi"] = FileKind.Video,
+        [".mov"] = FileKind.Video,
+        [".wmv"] = FileKind.Video,
+        [".flv"] = FileKind.Video,
+        [".webm"] = FileKind.Video,
 
-        [".mp3"] = FileKind.Audio, [".wav"] = FileKind.Audio, [".flac"] = FileKind.Audio,
-        [".m4a"] = FileKind.Audio, [".ogg"] = FileKind.Audio, [".ape"] = FileKind.Audio,
+        [".mp3"] = FileKind.Audio,
+        [".wav"] = FileKind.Audio,
+        [".flac"] = FileKind.Audio,
+        [".m4a"] = FileKind.Audio,
+        [".ogg"] = FileKind.Audio,
+        [".ape"] = FileKind.Audio,
 
-        [".cs"] = FileKind.SourceCode, [".js"] = FileKind.SourceCode, [".ts"] = FileKind.SourceCode,
-        [".py"] = FileKind.SourceCode, [".java"] = FileKind.SourceCode, [".cpp"] = FileKind.SourceCode,
-        [".c"] = FileKind.SourceCode, [".h"] = FileKind.SourceCode, [".go"] = FileKind.SourceCode,
-        [".rs"] = FileKind.SourceCode, [".html"] = FileKind.SourceCode, [".css"] = FileKind.SourceCode,
+        [".cs"] = FileKind.SourceCode,
+        [".js"] = FileKind.SourceCode,
+        [".ts"] = FileKind.SourceCode,
+        [".py"] = FileKind.SourceCode,
+        [".java"] = FileKind.SourceCode,
+        [".cpp"] = FileKind.SourceCode,
+        [".c"] = FileKind.SourceCode,
+        [".h"] = FileKind.SourceCode,
+        [".go"] = FileKind.SourceCode,
+        [".rs"] = FileKind.SourceCode,
+        [".html"] = FileKind.SourceCode,
+        [".css"] = FileKind.SourceCode,
         [".sql"] = FileKind.SourceCode,
 
-        [".ini"] = FileKind.Config, [".json"] = FileKind.Config, [".xml"] = FileKind.Config,
-        [".yaml"] = FileKind.Config, [".yml"] = FileKind.Config, [".toml"] = FileKind.Config,
-        [".config"] = FileKind.Config, [".cfg"] = FileKind.Config,
+        [".ini"] = FileKind.Config,
+        [".json"] = FileKind.Config,
+        [".xml"] = FileKind.Config,
+        [".yaml"] = FileKind.Config,
+        [".yml"] = FileKind.Config,
+        [".toml"] = FileKind.Config,
+        [".config"] = FileKind.Config,
+        [".cfg"] = FileKind.Config,
 
-        [".txt"] = FileKind.Document, [".log"] = FileKind.Document, [".md"] = FileKind.Document,
+        [".txt"] = FileKind.Document,
+        [".log"] = FileKind.Document,
+        [".md"] = FileKind.Document,
 
-        [".dll"] = FileKind.SystemFile, [".sys"] = FileKind.SystemFile, [".msi"] = FileKind.SystemFile,
+        [".dll"] = FileKind.SystemFile,
+        [".sys"] = FileKind.SystemFile,
+        [".msi"] = FileKind.SystemFile,
     };
 
     private const string ShortcutExt = ".lnk";
@@ -65,7 +115,9 @@ public sealed class FileClassifier : IFileClassifier
     // 关联探测缓存：ext → HKCR\<ext> 是否存在（进程级；HKCU UserChoice M2 换 Assoc API）
     private readonly ConcurrentDictionary<string, bool> _associationCache = new(StringComparer.OrdinalIgnoreCase);
 
-    public FileIdentity Classify(string path)
+    public FileIdentity Classify(string path) => Classify(path, depth: 0);
+
+    private FileIdentity Classify(string path, int depth)
     {
         if (string.IsNullOrWhiteSpace(path))
             return new FileIdentity(FileKind.Unknown, FileCapabilities.None, false, false, path ?? string.Empty);
@@ -91,9 +143,13 @@ public sealed class FileClassifier : IFileClassifier
         }
 
         // 4) 快捷方式：解析目标并继承能力（目标失效 → 降级 Unknown，计划定版）
+        //    （S2-2：大小写无关——此前 is 模式序数比较，".LNK" 不命中降级成普通文件）
         var ext = Path.GetExtension(path);
-        if (ext is ShortcutExt or UrlShortcutExt)
-            return ClassifyShortcut(path);
+        if (string.Equals(ext, ShortcutExt, StringComparison.OrdinalIgnoreCase)
+            || string.Equals(ext, UrlShortcutExt, StringComparison.OrdinalIgnoreCase))
+        {
+            return ClassifyShortcut(path, depth);
+        }
 
         // 5) 文件：只读/隐藏属性
         var (readOnly, isHidden) = ReadAttributes(path);
@@ -135,7 +191,7 @@ public sealed class FileClassifier : IFileClassifier
         if (paths.Count == 1)
             return Classify(paths[0]);
 
-        var identities = paths.Select(Classify).ToList();
+        var identities = paths.Select(p => Classify(p)).ToList();
         var caps = identities.Aggregate(identities[0].Caps, (acc, i) => acc & i.Caps);
         var kind = identities.All(i => i.Kind == identities[0].Kind) ? identities[0].Kind : FileKind.File;
         return new FileIdentity(
@@ -146,18 +202,28 @@ public sealed class FileClassifier : IFileClassifier
             paths[0]);
     }
 
-    /// <summary>快捷方式：解析目标 → 目标身份能力 + OpenFileLocation（exe 目标追加 RunAsAdmin）。</summary>
-    private FileIdentity ClassifyShortcut(string path)
+    /// <summary>
+    /// 快捷方式：解析目标 → 目标身份能力 + OpenFileLocation（exe 目标追加 RunAsAdmin）。
+    /// 【S2-1 生死线】depth 上限护栏：互指快捷方式（A.lnk→B.lnk→A.lnk）曾无限递归 StackOverflow
+    /// （不可捕获，宿主崩溃）——超限降级 UnknownShortcut；自指单层同样终止。
+    /// </summary>
+    private FileIdentity ClassifyShortcut(string path, int depth)
     {
         var (readOnly, isHidden) = ReadAttributes(path);
+        if (depth > 5)
+        {
+            DiagnosticLog.Trace("shell.contextmenu", $"快捷方式链过深（>5），降级: {path}");
+            return UnknownShortcut(path, readOnly, isHidden);
+        }
         try
         {
             var (_, targetPath, _) = ShellLinkResolver.Resolve(path);
             if (string.IsNullOrEmpty(targetPath))
                 return UnknownShortcut(path, readOnly, isHidden);
 
-            var target = File.Exists(targetPath)
-                ? Classify(targetPath)
+            // S2-3：目标可为文件夹（File.Exists 判目录恒 false → 此前被误降级丢 Folder 能力）
+            var target = File.Exists(targetPath) || Directory.Exists(targetPath)
+                ? Classify(targetPath, depth + 1)
                 : new FileIdentity(FileKind.Unknown, FileCapabilities.None, false, false, targetPath);
 
             if (target.Kind == FileKind.Unknown)

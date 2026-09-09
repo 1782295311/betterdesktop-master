@@ -4,6 +4,7 @@ using System.Windows.Controls.Primitives;
 using System.Windows.Media;
 using BetterDesktop.Shell.Core.Surface;
 using BetterDesktop.Shell.Settings.Contracts;
+using BetterDesktop.Shell.Settings.Surface;
 using BetterDesktop.Shell.Taskbar.Contracts;
 using BetterDesktop.Shell.Taskbar.Services;
 
@@ -29,14 +30,7 @@ public sealed class TaskbarAppearanceSection : ISettingsSection
         var svc = TaskbarServiceBridge.TryGet();
         var panel = new StackPanel { Orientation = Orientation.Vertical };
 
-        panel.Children.Add(new TextBlock
-        {
-            Text = "任务栏外观",
-            FontSize = 24,
-            FontWeight = FontWeights.SemiBold,
-            Foreground = tokens.Foreground,
-            Margin = new Thickness(0, 0, 0, 4)
-        });
+        // 页面标题统一由窗口标题栏承载，此处不再重复渲染大标题。
         panel.Children.Add(new TextBlock
         {
             Text = "选择任务栏样式与颜色，改动即时生效；退出本程序后自动还原为系统默认。",
@@ -277,18 +271,7 @@ public sealed class TaskbarAppearanceSection : ISettingsSection
         Margin = new Thickness(0, 0, 0, 6)
     };
 
-    private static Border GroupCard(IThemeTokens tokens)
-    {
-        var body = new StackPanel { Margin = new Thickness(16, 14, 16, 14) };
-        var inner = new Border { CornerRadius = new CornerRadius(9), Child = body };
-        return new Border
-        {
-            Margin = new Thickness(0, 0, 0, 16),
-            CornerRadius = new CornerRadius(10),
-            Background = Brushes.Transparent,
-            Child = inner
-        };
-    }
+    private static Border GroupCard(IThemeTokens tokens) => SettingsUi.CreateCard();
 
     private static StackPanel CardBody(Border card) => (StackPanel)((Border)card.Child!).Child!;
 

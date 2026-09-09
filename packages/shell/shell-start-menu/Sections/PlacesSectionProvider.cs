@@ -21,7 +21,7 @@ public sealed class PlacesSectionProvider : IStartMenuSectionProvider
     public string Name => "places";
 
     /// <inheritdoc />
-    public FrameworkElement BuildSection(StartMenuService service)
+    public FrameworkElement BuildSection(IStartMenuDataService service)
     {
         var panel = new StackPanel { Margin = new Thickness(0, 0, 0, 12) };
         if (!service.Settings.Get("startmenu.show-places", true))

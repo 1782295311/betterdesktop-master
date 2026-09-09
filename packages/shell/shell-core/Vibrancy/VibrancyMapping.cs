@@ -22,7 +22,7 @@ public static class VibrancyMapping
     ///   - Acrylic    → VibrancyMode.Acrylic（DWM 系统亚克力，自带暗色调，偏暗/可读）
     ///   - None       → VibrancyMode.None（关闭一切 DWM 磨砂，普通透明窗——dock「清晰」档专用）
     /// 注意：Transparent 必须保持 BlurBehind 语义，它是 appearance.material 默认值，
-    /// 所有走基类 ApplyWindowMaterial 的窗口（设置/AppGrabber/Launchpad 等）都依赖它获得默认毛玻璃；
+    /// 所有走基类 ApplyWindowMaterial 的窗口（设置/应用提取器等）都依赖它获得默认毛玻璃；
     /// 把它误映射成 None 会导致全局窗口失去磨砂（回归）。「真·无磨砂」用独立的 None 枚举表达。
     /// （圆角参数不再参与映射，统一走系统默认圆角。）
     /// </summary>

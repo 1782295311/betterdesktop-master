@@ -1,0 +1,87 @@
+# cordis.yml — 声明式插件树（ADR-002 loader 落地）
+# 迁移期保序：条目顺序与原 Bootstrap.cs 硬编码 context.Plugin() 顺序完全一致。
+# 时序敏感依赖由各插件 [Inject] 声明 + 内核 Pending/restart 机制保障，
+# 此处顺序仅为迁移期行为等价，后续可按需调整（Inject 完整时顺序不敏感）。
+#
+# 字段：id（稳定标识，诊断用）/ name（宿主 Factories 字典键）/ enabled（缺省 true）
+
+plugins:
+  # 1. 电源管理（最先加载，立刻降优先级 + 放行系统休眠）
+  - id: power-management
+    name: power-management
+
+  # 2. 基础服务：定时器
+  - id: timer
+    name: timer
+
+  # 3. 基础服务：亚克力/模糊
+  - id: vibrancy
+    name: vibrancy
+
+  # 4. 系统状态采集（CPU/内存/电池/音量/网络等），必须早于 UI 消费插件
+  - id: status
+    name: status
+
+  # 5. 应用数据来源（Provide IAppSourceService/IAppIconService），必须早于 Dock
+  - id: app-source
+    name: app-source
+
+  # 6. 运行中窗口/应用追踪（Provide IWindowTrackerService），必须早于 Dock
+  - id: window-tracker
+    name: window-tracker
+
+  # 7. 通用固定/收藏服务（Provide IPinningService），必须早于 Dock
+  - id: pinning
+    name: pinning
+
+  # 8. 搜索服务（开始菜单搜索），依赖 AppSource + WindowTracker
+  - id: search
+    name: search
+
+  # 9. 最近项服务（最近程序/文档/跳转列表）
+  - id: recent
+    name: recent
+
+  # 10. Dock 插件（窗口层，依赖 AppSource/WindowTracker/Pinning）
+  - id: dock
+    name: dock
+
+  # 11. 设置中心（Provide ISettingsWindowService，注册设置分区）
+  - id: settings
+    name: settings
+
+  # 12. 新装应用通知（右下角弹窗，依赖 IAppearanceService）
+  - id: notification
+    name: notification
+
+  # 13. 任务栏外观控制（透明/模糊/亚克力，依赖 ISettingsSectionRegistry）
+  - id: taskbar-appearance
+    name: taskbar-appearance
+
+  # 14. 开始菜单（依赖 Settings/AppSource/Vibrancy/Appearance）
+  - id: start-menu
+    name: start-menu
+
+  # 15. 统一右键菜单（五区块骨架，必须先于 desktop）
+  - id: context-menu
+    name: context-menu
+
+  # 16. 文档转换（转换矩阵 + 引擎注册表 + 压缩/解压）
+  - id: convert
+    name: convert
+
+  # 17. 自绘桌面（全屏壁纸 + 文件夹浏览器，必须早于 menu-bar）
+  - id: desktop
+    name: desktop
+
+  # 18. 日历（农历/节假日/节气/天气，Provide ICalendarService，必须早于 menu-bar）
+  - id: calendar
+    name: calendar
+
+  # 19. 顶部菜单栏（右区状态条 + 各面板，依赖 status/vibrancy/appearance）
+  - id: menu-bar
+    name: menu-bar
+
+  # 20. 快速笔记（扩展中心开关驱动的常驻浮窗）
+  - id: quick-note
+    name: quick-note

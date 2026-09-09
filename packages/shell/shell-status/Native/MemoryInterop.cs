@@ -1,4 +1,4 @@
-﻿// BetterDesktop.Shell.Status — 内存状态 P/Invoke 收口：GlobalMemoryStatusEx。
+// BetterDesktop.Shell.Status — 内存状态 P/Invoke 收口：GlobalMemoryStatusEx。
 // 结论验证点：结构体 ABI 布局（dwLength 必须预填）、dwMemoryLoad 为整百分比。
 
 using System.Runtime.InteropServices;

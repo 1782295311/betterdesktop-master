@@ -1,4 +1,4 @@
-﻿// BetterDesktop.Shell.MenuBar — 控制中心独立弹出面板（macOS Ventura 视觉：连接区条目 + 模块卡片）
+// BetterDesktop.Shell.MenuBar — 控制中心独立弹出面板（macOS Ventura 视觉：连接区条目 + 模块卡片）
 //
 // 布局：
 //   顶部：连接区 —— 6 行纵向条目（macOS 控制中心风格，2026-08-30 第五轮重设计）
@@ -32,13 +32,22 @@ using System.Windows.Shapes;
 using System.Windows.Threading;
 using BetterDesktop.Shell.Core.Surface;
 using BetterDesktop.Shell.Core.Vibrancy;
-using BetterDesktop.Shell.Status.Contracts;
-using BetterDesktop.Shell.Status.Native;
 using BetterDesktop.Shell.MenuBar.Contracts;
 using BetterDesktop.Shell.MenuBar.Services;
+using BetterDesktop.Shell.Status.Contracts;
+using BetterDesktop.Shell.Status.Native;
 using Windows.Devices.Radios;
 
 namespace BetterDesktop.Shell.MenuBar.Windows;
+
+// ── 本文件方法级白话索引（控制中心面板，白话 → 方法）──
+//   "面板整体/快捷开关列表"         → BuildContent / BuildToggleList
+//   "一个开关磁贴行"                → MakeToggleRow / AddRow；点击 OnTileLeftClick/OnTileRightClick，切换 ToggleTileAsync
+//   "刷新磁贴开关状态"              → RefreshTileStatesAsync / RefreshTileStateAsync / FindFeature
+//   "磁贴视觉（高亮/图标圈/悬停）"  → ApplyTileVisual / ApplyIconCircleVisual / ApplySummaryForeground / AttachTileHover
+//   "模块卡片（亮度/音量/网络等）"  → BuildModuleCard / BuildCardHeader / CreateCardValue
+//   各快捷开关背后的系统能力在 shell-status / shell-core；面板基类 MenuBarPopupWindow。
+// ────────────────────────────────────
 
 /// <summary>
 /// 控制中心独立面板（macOS 风格：开关网格 + 模块化圆角卡片）。
@@ -180,7 +189,6 @@ internal sealed class ControlCenterWindow : MenuBarPopupWindow
         AddRow(panel, "蓝牙", ControlCenterIcon.Bluetooth, accentOn: true);
         AddRow(panel, "热点", ControlCenterIcon.Hotspot, accentOn: false);
         AddRow(panel, "专注助手", ControlCenterIcon.Focus, accentOn: false);
-        AddRow(panel, "台前调度", ControlCenterIcon.StageManager, accentOn: false);
         AddRow(panel, "投影", ControlCenterIcon.Project, accentOn: false);
 
         return panel;

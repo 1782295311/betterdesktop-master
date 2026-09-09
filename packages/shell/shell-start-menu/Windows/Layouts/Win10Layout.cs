@@ -15,6 +15,14 @@ using BetterDesktop.Shell.StartMenu.Services;
 
 namespace BetterDesktop.Shell.StartMenu.Windows.Layouts;
 
+// ── 本文件方法级白话索引（Win10 风格开始菜单布局，白话 → 方法）──
+//   "整体/顶栏/主体/左侧栏"         → BuildLayout / BuildTopBar / BuildBody / BuildRail（侧栏按钮 BuildRailButton、展开 ToggleRail）
+//   "所有应用字母分组 + 字母速查"   → BuildListColumn / BuildAlphabetGroups / BuildAlphabetOverlay / ScrollToLetter
+//   "磁贴区（应用磁贴/文件夹磁贴/返回磁贴）" → BuildTilesColumn / RenderTiles / BuildAppTile / BuildFolderTile / BuildBackTile
+//   "磁贴拖拽：重排/合并成文件夹/拖入文件夹" → AttachDragSource / AttachDropTarget / Reorder / MergeIntoFolder / AddToFolder / IndexOfItem
+//   其他布局对照：Win11Layout/Win7Layout/ClassicLayout/AllAppsLayout（同目录，同一 IStartMenuLayoutProvider 契约）。
+// ────────────────────────────────────
+
 /// <summary>
 /// Win10 样式布局（复刻 Win10 开始菜单三栏，CLASSIC_LAYOUTS.md 规格）：
 /// 三栏＝[左侧窄边栏 rail（48px，可展开为 200px）] + [中间应用列表 ~260px（最常用+字母分组）] + [右侧磁贴区（强调扁平磁贴）]。
@@ -24,7 +32,7 @@ namespace BetterDesktop.Shell.StartMenu.Windows.Layouts;
 /// </summary>
 public sealed class Win10Layout : IStartMenuLayoutProvider, IStartMenuLayoutHost
 {
-    private StartMenuService? _service;
+    private IStartMenuDataService? _service;
     private StartMenuPalette _palette = null!;
     private StackPanel? _groupsPanel;   // 中间应用列表（最常用 + 字母分组）
     private FrameworkElement? _railColumn;    // 左侧窄边栏
@@ -49,7 +57,7 @@ public sealed class Win10Layout : IStartMenuLayoutProvider, IStartMenuLayoutHost
     public ListBox ResultsList { get; private set; } = null!;
 
     /// <inheritdoc />
-    public FrameworkElement BuildLayout(StartMenuService service)
+    public FrameworkElement BuildLayout(IStartMenuDataService service)
     {
         _service = service;
         _palette = StartMenuPalette.From(service.ThemeTokens);
@@ -555,7 +563,7 @@ public sealed class Win10Layout : IStartMenuLayoutProvider, IStartMenuLayoutHost
         };
         if (_service is not null)
         {
-            MenuSurface.Attach(tile, () => AppItemActions.BuildItems(app, _service!), _service?.Menus);
+            AppItemActions.AttachNative(tile, app);
         }
 
         // 仅主网格支持拖拽重排/建夹；文件夹钻取视图只读，避免跨层复杂编排。
@@ -943,7 +951,7 @@ public sealed class Win10Layout : IStartMenuLayoutProvider, IStartMenuLayoutHost
             PowerItem("start.power.shutdown", "关机", () => _ = PowerCommands.Shutdown()),
             PowerItem("start.power.lock", "锁定", () => _ = PowerCommands.Lock()),
         };
-        _ = _service?.Menus?.ShowAsync(items, MenuSurface.BelowOf(placementTarget));
+        StartMenuPopup.ShowBelow(items, placementTarget);
     }
 
     private static MenuItemDef PowerItem(string id, string text, Action action) => new()
@@ -1012,9 +1020,9 @@ public sealed class Win10Layout : IStartMenuLayoutProvider, IStartMenuLayoutHost
 
             var item = new ListBoxItem { Content = label, Tag = result, Cursor = Cursors.Hand };
             item.MouseLeftButtonUp += (_, _) => ExecuteResult(result);
-            if (result.AppItem is not null && _service is not null)
+            if (result.AppItem is not null)
             {
-                MenuSurface.Attach(item, () => AppItemActions.BuildItems(result.AppItem, _service!), _service?.Menus);
+                AppItemActions.AttachNative(item, result.AppItem);
             }
 
             ResultsList.Items.Add(item);
@@ -1071,7 +1079,7 @@ public sealed class Win10Layout : IStartMenuLayoutProvider, IStartMenuLayoutHost
 /// <summary>
 /// Live Tile 轮播器（规格长尾功能）：单例静态调度器，定期把已注册的每个磁贴帧对
 /// （图标面 A / 字母强调面 B）错落切换，形成涟漪式轮播。布局重建时经 <see cref="Register"/>
-/// 整体替换条目，旧帧引用随之释放，不累积泄漏；条目为空时 tick 直接跳过（近零开销）。
+/// 整体替换条目，旧帧引用随之释放，不累积泄漏；条目为空时停止计时器（C12 修复，不再空转）。
 /// </summary>
 internal static class LiveTileCarousel
 {
@@ -1095,7 +1103,13 @@ internal static class LiveTileCarousel
     public static void Register(IReadOnlyList<(FrameworkElement A, FrameworkElement B)> entries)
     {
         _entries = entries ?? Array.Empty<(FrameworkElement A, FrameworkElement B)>();
-        if (_entries.Count > 0 && !_timer.IsEnabled)
+        // C12 修复：条目清空时停止计时器，不再 2.4s 空 tick（贴合「仅在有条目时运行」的注释意图）。
+        if (_entries.Count == 0)
+        {
+            if (_timer.IsEnabled) _timer.Stop();
+            return;
+        }
+        if (!_timer.IsEnabled)
         {
             _timer.Start();
         }

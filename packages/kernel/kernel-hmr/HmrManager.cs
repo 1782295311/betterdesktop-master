@@ -6,6 +6,16 @@ using BetterDesktop.Kernel.Core;
 
 namespace BetterDesktop.Kernel.Hmr;
 
+// ── 本文件方法级白话索引（内核热重载管理器 HMR，白话 → 方法）──
+//   "HMR 总开关"                     → Enable / Disable
+//   "加载/卸载/重载单个插件、重载全部" → LoadPluginAsync / UnloadPluginAsync / ReloadPluginAsync / ReloadAllPluginsAsync
+//   "查插件状态/运行时信息"          → GetPluginStatus / GetPluginRuntimeInfos
+//   "资源治理（注册/注销被治理对象、更新配额）" → RegisterSubject / UnregisterSubject / GetResourceSubjects / UpdateGovernorOptions
+//   "装载内核 / 回滚 / 生命周期事件"  → LoadCoreAsync / UnloadCoreAsync / RollbackAsync / EmitAsync
+//   "托管表存取 / 版本快照（回滚比对）" → GetOrCreateManaged / TryGetManaged / SnapshotLoadedVersions
+//   并发模型：_gate 保护字典、_operationGate 串行化装载；插件句柄见 PluginHandle，上下文见 CordisContext。
+// ────────────────────────────────────
+
 /// <summary>HMR 热重载管理器：双 ALC 切换 + 旧状态迁移 + 失败回滚 + 内存治理接入。</summary>
 public sealed class HmrManager : IHmrManager, IDisposable
 {
@@ -114,12 +124,12 @@ public sealed class HmrManager : IHmrManager, IDisposable
             catch (Exception ex)
             {
                 lock (_gate)
-            {
-                managed.Status = PluginReloadStatus.Failed;
-                managed.MarkFailure();
-                managed.LastError = ex.Message;
-                managed.LastTransitionUtc = DateTimeOffset.UtcNow;
-            }
+                {
+                    managed.Status = PluginReloadStatus.Failed;
+                    managed.MarkFailure();
+                    managed.LastError = ex.Message;
+                    managed.LastTransitionUtc = DateTimeOffset.UtcNow;
+                }
                 _context.Logger.Error($"插件 {manifest.Id} 加载失败：{ex}");
                 await EmitAsync(new PluginLifecycleEvent(manifest.Id, manifest.Version.ToString(), PluginLifecycleKind.Rejected, ex.Message)).ConfigureAwait(false);
                 return new PluginLoadResult(manifest.Id, false, PluginReloadStatus.Failed, ex.Message);

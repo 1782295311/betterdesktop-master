@@ -15,6 +15,15 @@ using BetterDesktop.Shell.StartMenu.Services;
 
 namespace BetterDesktop.Shell.StartMenu.Windows.Layouts;
 
+// ── 本文件方法级白话索引（Win7 风格开始菜单布局，白话 → 方法）──
+//   "整体/左列（固定+最近程序行）"  → BuildLayout / BuildLeftColumn / AddPinned / AddRecent / CreateEntryRow
+//   "底部搜索框"                    → BuildSearchBox
+//   "右列（用户头像/功能链接/电源）" → PrepareRightColumn / BuildUserHeader / BuildWin7FunctionList / AddSystemLink / BuildPowerFooter / ShowPowerMenu
+//   "所有程序树（文件夹/叶子/键盘激活）" → ToggleAllPrograms / PopulateTree / BuildFolderNode / BuildLeafNode(BuildLeafIcon) / OnTreeKeyDown / ActivateSelected
+//   "搜索结果渲染"                  → RenderResults；滚轮辅助 ScrollList
+//   其他布局对照：Win10Layout/Win11Layout/ClassicLayout/AllAppsLayout（同目录，同一契约）。
+// ────────────────────────────────────
+
 /// <summary>
 /// Win7 样式布局（复刻 Win7 Aero 开始菜单经典两栏，CLASSIC_LAYOUTS.md 规格）：
 /// 左栏自上而下＝[固定程序区 + 最近使用程序 + "所有程序"树切换] + 底部搜索框；
@@ -23,7 +32,7 @@ namespace BetterDesktop.Shell.StartMenu.Windows.Layouts;
 /// </summary>
 public sealed class Win7Layout : IStartMenuLayoutProvider, IStartMenuLayoutHost
 {
-    private StartMenuService? _service;
+    private IStartMenuDataService? _service;
     private StartMenuPalette _palette = null!;
 
     // 左栏两视图容器（home 列表 <-> tree 树）互斥切换。
@@ -43,7 +52,7 @@ public sealed class Win7Layout : IStartMenuLayoutProvider, IStartMenuLayoutHost
     public ListBox ResultsList { get; private set; } = null!;
 
     /// <inheritdoc />
-    public FrameworkElement BuildLayout(StartMenuService service)
+    public FrameworkElement BuildLayout(IStartMenuDataService service)
     {
         _service = service;
         _palette = StartMenuPalette.From(service.ThemeTokens);
@@ -287,7 +296,7 @@ public sealed class Win7Layout : IStartMenuLayoutProvider, IStartMenuLayoutHost
         };
         if (_service is not null)
         {
-            MenuSurface.Attach(row, () => AppItemActions.BuildItems(app, _service!), _service?.Menus);
+            AppItemActions.AttachNative(row, app);
         }
 
         var host = new Border { CornerRadius = new CornerRadius(3), Child = row };
@@ -543,7 +552,7 @@ public sealed class Win7Layout : IStartMenuLayoutProvider, IStartMenuLayoutHost
             PowerItem("start.power.sleep", "睡眠", () => _ = PowerCommands.Sleep()),
             PowerItem("start.power.shutdown", "关机", () => _ = PowerCommands.Shutdown()),
         };
-        _ = _service?.Menus?.ShowAsync(items, MenuSurface.BelowOf(placementTarget));
+        StartMenuPopup.ShowBelow(items, placementTarget);
     }
 
     private static MenuItemDef PowerItem(string id, string text, Action action) => new()
@@ -654,7 +663,7 @@ public sealed class Win7Layout : IStartMenuLayoutProvider, IStartMenuLayoutHost
         };
         if (_service is not null)
         {
-            MenuSurface.Attach(leaf, () => AppItemActions.BuildItems(app, _service!), _service?.Menus);
+            AppItemActions.AttachNative(leaf, app);
         }
 
         return leaf;
@@ -781,9 +790,9 @@ public sealed class Win7Layout : IStartMenuLayoutProvider, IStartMenuLayoutHost
 
             var item = new ListBoxItem { Content = row, Tag = result, Cursor = Cursors.Hand };
             item.MouseLeftButtonUp += (_, _) => ExecuteResult(result);
-            if (result.AppItem is not null && _service is not null)
+            if (result.AppItem is not null)
             {
-                MenuSurface.Attach(item, () => AppItemActions.BuildItems(result.AppItem, _service!), _service?.Menus);
+                AppItemActions.AttachNative(item, result.AppItem);
             }
 
             ResultsList.Items.Add(item);

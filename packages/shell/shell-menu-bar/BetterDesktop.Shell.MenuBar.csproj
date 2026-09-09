@@ -39,5 +39,13 @@
     <!-- 左区文件夹工具条：IDesktopBrowser（自绘桌面浏览器契约，位置/下载/文档联动 + 文件操作）。 -->
     <ProjectReference Include="..\shell-desktop\BetterDesktop.Shell.Desktop.csproj" />
   </ItemGroup>
+  <ItemGroup>
 
+    <ProjectReference Include="..\shell-calendar\BetterDesktop.Shell.Calendar.csproj" />
+    <ProjectReference Include="..\shell-pinning\BetterDesktop.Shell.Pinning.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\api\BetterDesktop.Api.csproj" />
+  </ItemGroup>
 </Project>

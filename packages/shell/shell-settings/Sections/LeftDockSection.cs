@@ -4,6 +4,7 @@ using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Media;
 using BetterDesktop.Shell.Settings.Contracts;
+using BetterDesktop.Shell.Settings.Surface;
 using Microsoft.Win32;
 
 namespace BetterDesktop.Shell.Settings.Sections;
@@ -192,18 +193,7 @@ public sealed class LeftDockSection : ISettingsSection
 
     // ===== 共享 UI helper（与 ThemeSection 同风格，Section 自包含） =====
 
-    private static Border GroupCard(IThemeTokens tokens)
-    {
-        var body = new StackPanel { Margin = new Thickness(16, 14, 16, 14) };
-        var inner = new Border { CornerRadius = new CornerRadius(9), Child = body };
-        return new Border
-        {
-            Margin = new Thickness(0, 0, 0, 16),
-            CornerRadius = new CornerRadius(10),
-            Background = Brushes.Transparent,
-            Child = inner
-        };
-    }
+    private static Border GroupCard(IThemeTokens tokens) => SettingsUi.CreateCard();
 
     private static StackPanel CardBody(Border card) => (StackPanel)((Border)card.Child!).Child!;
 
@@ -227,9 +217,9 @@ public sealed class LeftDockSection : ISettingsSection
             FontSize = 13,
             Foreground = tokens.Foreground
         };
-        DockPanel.SetDock(text, Dock.Left);
+        DockPanel.SetDock(text, System.Windows.Controls.Dock.Left);
         row.Children.Add(text);
-        DockPanel.SetDock(control, Dock.Left);
+        DockPanel.SetDock(control, System.Windows.Controls.Dock.Left);
         row.Children.Add(control);
         return row;
     }
@@ -246,7 +236,7 @@ public sealed class LeftDockSection : ISettingsSection
             FontSize = 13,
             Foreground = tokens.Foreground
         };
-        DockPanel.SetDock(text, Dock.Left);
+        DockPanel.SetDock(text, System.Windows.Controls.Dock.Left);
 
         var valueText = new TextBlock
         {
@@ -294,12 +284,12 @@ public sealed class LeftDockSection : ISettingsSection
         };
 
         var right = new DockPanel { LastChildFill = false };
-        DockPanel.SetDock(valueText, Dock.Right);
+        DockPanel.SetDock(valueText, System.Windows.Controls.Dock.Right);
         right.Children.Add(valueText);
-        DockPanel.SetDock(slider, Dock.Left);
+        DockPanel.SetDock(slider, System.Windows.Controls.Dock.Left);
         right.Children.Add(slider);
 
-        DockPanel.SetDock(right, Dock.Right);
+        DockPanel.SetDock(right, System.Windows.Controls.Dock.Right);
         row.Children.Add(text);
         row.Children.Add(right);
         return row;

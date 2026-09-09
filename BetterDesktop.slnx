@@ -1,6 +1,11 @@
-<Solution>
+﻿<Solution>
   <Folder Name="/packages/" />
   <Folder Name="/packages/kernel/" />
+  <Folder Name="/packages/api/">
+    <Project Path="packages/api/BetterDesktop.Api.csproj">
+      <Platform Project="x64" />
+    </Project>
+  </Folder>
   <Folder Name="/packages/kernel/kernel-loader-tests/">
     <Project Path="packages/kernel/kernel-loader-tests/BetterDesktop.Kernel.Loader.Tests.csproj">
       <Platform Project="x64" />
@@ -43,11 +48,6 @@
     </Project>
   </Folder>
   <Folder Name="/packages/shell/" />
-  <Folder Name="/packages/shell/shell-plugin-sdk/">
-    <Project Path="packages/shell/shell-plugin-sdk/BetterDesktop.Shell.PluginSdk.csproj">
-      <Platform Project="x64" />
-    </Project>
-  </Folder>
   <Folder Name="/packages/shell/shell-core-tests/">
     <Project Path="packages/shell/shell-core-tests/BetterDesktop.Shell.Core.Tests.csproj">
       <Platform Project="x64" />
@@ -108,13 +108,23 @@
       <Platform Project="x64" />
     </Project>
   </Folder>
+  <Folder Name="/packages/shell/shell-music/">
+    <Project Path="packages/shell/shell-music/BetterDesktop.Shell.Music.csproj">
+      <Platform Project="x64" />
+    </Project>
+  </Folder>
+  <Folder Name="/tools/GdiAudit/">
+    <Project Path="tools/GdiAudit/GdiAudit.csproj">
+      <Platform Project="x64" />
+    </Project>
+  </Folder>
   <Folder Name="/packages/shell/shell-settings-tests/">
     <Project Path="packages/shell/shell-settings-tests/BetterDesktop.Shell.Settings.Tests.csproj">
       <Platform Project="x64" />
     </Project>
   </Folder>
-  <Folder Name="/packages/shell/Taskbar/">
-    <Project Path="packages/shell/Taskbar/BetterDesktop.Shell.Taskbar.csproj">
+  <Folder Name="/packages/shell/shell-taskbar/">
+    <Project Path="packages/shell/shell-taskbar/BetterDesktop.Shell.Taskbar.csproj">
       <Platform Project="x64" />
     </Project>
   </Folder>
@@ -163,6 +173,17 @@
       <Platform Project="x64" />
     </Project>
   </Folder>
+  <Folder Name="/packages/shell/shell-calendar/">
+    <Project Path="packages/shell/shell-calendar/BetterDesktop.Shell.Calendar.csproj">
+      <Platform Project="x64" />
+    </Project>
+  </Folder>
+  <Folder Name="/packages/shell/shell-calendar-tests/">
+    <Project Path="packages/shell/shell-calendar-tests/BetterDesktop.Shell.Calendar.Tests.csproj">
+      <Platform Project="x64" />
+    </Project>
+  </Folder>
+
   <Folder Name="/packages/shell/shell-quick-note/">
     <Project Path="packages/shell/shell-quick-note/BetterDesktop.Shell.QuickNote.csproj">
       <Platform Project="x64" />
@@ -175,6 +196,11 @@
   </Folder>
   <Folder Name="/packages/shell/shell-convert/">
     <Project Path="packages/shell/shell-convert/BetterDesktop.Shell.Convert.csproj">
+      <Platform Project="x64" />
+    </Project>
+  </Folder>
+  <Folder Name="/packages/shell/shell-convert-tests/">
+    <Project Path="packages/shell/shell-convert-tests/BetterDesktop.Shell.Convert.Tests.csproj">
       <Platform Project="x64" />
     </Project>
   </Folder>

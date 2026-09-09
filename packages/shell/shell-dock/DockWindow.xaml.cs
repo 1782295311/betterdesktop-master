@@ -14,25 +14,38 @@ using System.Windows.Media.Animation;
 using System.Windows.Media.Imaging;
 using System.Windows.Shapes;
 using System.Windows.Threading;
+using BetterDesktop.Kernel.Contracts;
 using BetterDesktop.Shell.AppSource.Contracts;
 using BetterDesktop.Shell.AppSource.Services;
 using BetterDesktop.Shell.ContextMenus.Contracts;
 using BetterDesktop.Shell.ContextMenus.Services;
+using BetterDesktop.Shell.Core;
 using BetterDesktop.Shell.Core.Animation;
+using BetterDesktop.Shell.Core.Native;
 using BetterDesktop.Shell.Core.Surface;
 using BetterDesktop.Shell.Core.Vibrancy;
-using BetterDesktop.Shell.Dock.Native;
 using BetterDesktop.Shell.Dock.Models;
+using BetterDesktop.Shell.Dock.Native;
 using BetterDesktop.Shell.Dock.Services;
 using BetterDesktop.Shell.Dock.Windows;
 using BetterDesktop.Shell.Settings.Contracts;
 using BetterDesktop.Shell.WindowTracker;
 using BetterDesktop.Shell.WindowTracker.Native;
 using BetterDesktop.Shell.WindowTracker.Thumbnail;
-using ShellLinkResolver = BetterDesktop.Shell.AppSource.Services.ShellLinkResolver;
 using Path = System.IO.Path;
+using ShellLinkResolver = BetterDesktop.Shell.AppSource.Services.ShellLinkResolver;
 
 namespace BetterDesktop.Shell.Dock;
+
+// ── 本文件方法级白话索引（Dock 主窗口，2600 行按功能分组找）──
+//   "Dock 显示/隐藏、自动隐藏、唤出带"   → SetDockVisible / OnAutoHideTick / IsCursorNearSummonBand / IsCursorOverDock / ApplyTickInterval
+//   "Dock 材质/背景/主题令牌"            → ApplyDockMaterial / SyncRootBackground / BindTheme / ThemeBrush / DoVisualSettingsRebuild
+//   "系统入口面板（此电脑/回收站/控制面板）" → RebuildSystemPanel；系统图标 GetSystemIcon/GetShellIconByClsid/GetStockIcon；回收站高亮 UpdateRecycleDropRect/UpdateRecycleHoverHighlight
+//   "开始按钮面板 / Win+X 降级菜单"      → RebuildStartPanel / CreateStartFlag / ShowStartContextMenu / _showFallbackStartContextMenu
+//   "启动程序/打开 URI/管理员 PowerShell" → LaunchUri / LaunchFile / RunShell / LaunchPowerShellAdmin / ShowSystemEntryMenu
+//   "组件开关即时生效"                  → SetComponentEnabled
+//   贴边协商在 DockWindow.AppBar.cs；右键菜单在 Services/DockMenuPopup.cs；布局数据在 Services/DockLayoutService.cs。
+// ────────────────────────────────────
 
 /// <summary>
 /// Dock 窗口：左右分区（固定应用 / 运行中应用）。
@@ -49,9 +62,14 @@ public partial class DockWindow : ShellWindow
     // dock 悬浮胶囊：尺寸由图标数量/停靠位置决定（SizeToContent 驱动），resize 会破坏布局，钉死不可缩放。
     protected override ResizeMode DefaultResizeMode => ResizeMode.NoResize;
 
-    // 平时不置顶：dock 显示在窗口下层，不盖在窗口上；
-    // 鼠标贴底部热区或悬停 dock 时经 SetDockVisible(topmost:true) 临时置顶。
-    protected override bool DefaultTopmost => false;
+    // 【2026-09-06 定案】dock 常驻置顶层，**层级等同系统任务栏**：
+    // 之前平时不置顶（想"不盖在窗口上"），但由此带来两个硬伤——
+    // ① 悬停缩略图 peek 抬起预览目标时，被抬起的窗口会把 dock 盖掉（用户实测："两个置顶打架"）；
+    // ② SetDockVisible(topmost:true) 的临时提权只在自动隐藏开启的 tick 分支里执行，
+    //    自动隐藏关闭时走不到那一步，dock 永远拿不到置顶。
+    // dock 只占底部一条且已注册底部 AppBar（工作区上移），常驻置顶不会挡住任何实际内容，
+    // 这正是系统任务栏的行为（任务栏同样是 topmost 且盖住窗口底部）。
+    protected override bool DefaultTopmost => true;
 
     private readonly IDockAppsService _dockAppsService;
     private readonly IDockIconService _dockIconService;
@@ -62,8 +80,10 @@ public partial class DockWindow : ShellWindow
     private readonly DockPlugin? _dockPlugin;
     private readonly ISettingsService? _settings;
     private readonly DockVisualSettings? _visual;
-    private readonly IMenuService? _menus;
     private readonly IFileClassifier? _classifier;
+
+    /// <summary>Dock 项菜单模板（2026-09-05 收口：dock 自管，不再注册到中央菜单服务）。</summary>
+    private readonly DockItemTemplate? _dockItemTemplate;
 
     private readonly List<(DockItemData Item, Ellipse Dot)> _pinnedDots = new();
     private readonly DispatcherTimer _refreshTimer = new()
@@ -100,6 +120,9 @@ public partial class DockWindow : ShellWindow
     private bool _isDockVisible = true;
     private bool _autoHideEnabled;
     private bool _topmostBoosted;
+    private readonly IEventBus? _events;
+    private IDisposable? _settingsSub;
+    private IDisposable? _appearanceSub;
 
     public DockWindow(
         IVibrancyService vibrancy,
@@ -113,8 +136,8 @@ public partial class DockWindow : ShellWindow
         ISettingsService? settings = null,
         IAppearanceService? appearance = null,
         DockVisualSettings? visual = null,
-        IMenuService? menus = null,
-        IFileClassifier? classifier = null)
+        IFileClassifier? classifier = null,
+        IEventBus? events = null)
     {
         VibrancyService = vibrancy;
         // 全局外观服务（主题圆角/描边/字号）：交给基类统一驱动，Dock 窗口与设置窗口观感一致。
@@ -128,8 +151,17 @@ public partial class DockWindow : ShellWindow
         _dockPlugin = dockPlugin;
         _settings = settings;
         _visual = visual;
-        _menus = menus;
         _classifier = classifier;
+        _events = events;
+        Events = events;
+
+        // 2026-09-05 收口：dock 图标菜单由 dock 自管（模板 + 自有弹层渲染），不再依赖中央 IMenuService。
+        // 模板无条件创建（【13:47 真机实证】shell.dock 先于 context-menu 装配，classifier 恒 null，
+        // 门控导致 template=null 菜单全失）；File 能力区按 identity 可空降级。
+        _dockItemTemplate = new DockItemTemplate(dockAppsService);
+        _dockItemTemplate.Launch = InvokeLaunch;
+        _dockItemTemplate.ShowAppGrabber = InvokeShowAppGrabber;
+        _dockItemTemplate.ToggleStartMenu = () => _dockPlugin?.ToggleStartMenu();
 
         // 注意：不在 Window 根级设置 RenderTransform 做滑动动画。
         // 分层透明窗口 + DWM 圆角下做 RenderTransform 位移动画会错位、累积偏移，
@@ -153,6 +185,13 @@ public partial class DockWindow : ShellWindow
         _sunSyncTimer.Tick += OnSunSyncTick;
         _sunSyncTimer.Start();
 
+        // 回收站悬停高亮（2026-09-07）：桌面拖动悬停到 dock 回收站时，150ms 轮询 kernel 共享标志
+        // 并点亮回收站图标（红框红底）。dock 是顶层窗口、盖在自绘桌面之上，拖动图标被它挡住，
+        // 高亮让用户仍能确认"拖到了回收站"，松手即移入回收站。
+        _recycleHoverTimer.Tick += (_, _) => UpdateRecycleHoverHighlight();
+        _recycleHoverTimer.Start();
+        Closed += (_, _) => _recycleHoverTimer.Stop();
+
         // 首次亮相保留期后启用自动隐藏（与 dock 规格一致：保留约 1800ms）。
         var dwell = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(1800) };
         dwell.Tick += (_, _) =>
@@ -174,19 +213,23 @@ public partial class DockWindow : ShellWindow
             };
         }
 
-        // 订阅设置变更：系统功能图标（此电脑/网络/回收站/控制面板）的显示开关实时生效。
-        if (_settings is not null)
+        // 订阅设置变更：系统功能图标显隐实时生效（违规1修复：裸 event → IEventBus）
+        if (_settings is not null && _events is not null)
         {
-            _settings.Changed += OnSettingsChangedForSystemPanel;
-            Closed += (_, _) =>
-            {
-                if (_settings is not null) _settings.Changed -= OnSettingsChangedForSystemPanel;
-            };
+            _settingsSub = _events.On<SettingsChangedEventArgs>(
+                ShellEvents.SettingsChanged,
+                (e, _) =>
+                {
+                    OnSettingsChangedForSystemPanel(e);
+                    return Task.CompletedTask;
+                });
+            Closed += (_, _) => _settingsSub?.Dispose();
+            Closed += (_, _) => BetterDesktop.Kernel.Core.DockDropTargets.ClearDockRecycleBinRect();
         }
     }
 
     /// <summary>系统功能开关变化：重建系统功能区（合并到消息循环，避免后台线程直碰可视树）。</summary>
-    private void OnSettingsChangedForSystemPanel(object? sender, SettingsChangedEventArgs e)
+    private void OnSettingsChangedForSystemPanel(SettingsChangedEventArgs e)
     {
         var key = e.Key;
         if (key is null || !key.StartsWith("dock.system", StringComparison.Ordinal))
@@ -277,63 +320,86 @@ public partial class DockWindow : ShellWindow
     }
 
     /// <summary>供配置变更时重新应用 dock 材质（重写 ApplyWindowMaterial 后，基类 MaterialChanged 路径不再覆盖 dock）。</summary>
-    private void ApplyDockMaterial() => ApplyWindowMaterial();
+    private void ApplyDockMaterial()
+    {
+        // 隐藏态不重建材质：否则改一次材质设置就把已淡出的 dock 背景点亮，原地留一块玻璃。
+        // 显现（SetDockVisible(true)）时会走 SetMaterialSuspended(false) 按最新设置恢复。
+        if (IsMaterialSuspended)
+        {
+            return;
+        }
+        ApplyWindowMaterial();
+    }
 
     protected override void OnLoadedCore()
     {
         DebugLog.Trace("Dock", "OnLoadedCore 开始");
         try
         {
-        // 初始：恢复用户固定列表。
-        // 注意：不自动用开始菜单填充——左区固定应用仅由用户显式固定（应用管理中心 / 拖放），
-        // 避免出现"不知道从哪里来"的应用。
-        _dockAppsService.Load();
-        DebugLog.Trace("Dock", $"OnLoadedCore Load 完成 pinned={_dockAppsService.Pinned.Count}");
+            // 初始：恢复用户固定列表。
+            // 注意：不自动用开始菜单填充——左区固定应用仅由用户显式固定（应用管理中心 / 拖放），
+            // 避免出现"不知道从哪里来"的应用。
+            _dockAppsService.Load();
+            DebugLog.Trace("Dock", $"OnLoadedCore Load 完成 pinned={_dockAppsService.Pinned.Count}");
 
-        // 订阅固定列表变更，来自应用管理中心/拖拽的改动在此即时重建
-        _dockAppsService.PinnedChanged += OnPinnedChanged;
-        Closed += (_, _) => _dockAppsService.PinnedChanged -= OnPinnedChanged;
+            // 订阅固定列表变更，来自应用管理中心/拖拽的改动在此即时重建
+            _dockAppsService.PinnedChanged += OnPinnedChanged;
+            Closed += (_, _) => _dockAppsService.PinnedChanged -= OnPinnedChanged;
 
-        RebuildPinnedPanel();
-        DebugLog.Trace("Dock", "OnLoadedCore RebuildPinnedPanel 完成");
+            // 窗口退出即收掉预览浮层：浮层 Closed 会还原被临时置顶（peek）的窗口，
+            // 避免 dock 退出后把某个应用窗口永久留在最前。
+            Closed += (_, _) => CloseFlyout();
 
-        // Dock 左端「开始」图标：自绘旗标 + 倒影 + 名称标签，随开始菜单视觉配置重建。
-        RebuildStartPanel();
+            RebuildPinnedPanel();
+            DebugLog.Trace("Dock", "OnLoadedCore RebuildPinnedPanel 完成");
 
-        RefreshAll();
-        DebugLog.Trace("Dock", "OnLoadedCore RefreshAll 完成");
+            // Dock 左端「开始」图标：自绘旗标 + 倒影 + 名称标签，随开始菜单视觉配置重建。
+            RebuildStartPanel();
 
-        // 系统功能区：此电脑/网络/回收站/控制面板（按设置显隐）。
-        RebuildSystemPanel();
+            RefreshAll();
+            DebugLog.Trace("Dock", "OnLoadedCore RefreshAll 完成");
 
-        // 根 Border 背景：有激活皮肤时透出皮肤图，无皮肤时改为透明，
-        // 让 DWM 毛玻璃(Acrylic/BlurBehind)主导视觉，避免叠灰 tint 显得不透明。
-        SyncRootBackground();
-        if (AppearanceService is not null)
-            AppearanceService.Changed += OnAppearanceChangedForBackground;
+            // 系统功能区：此电脑/网络/回收站/控制面板（按设置显隐）。
+            RebuildSystemPanel();
 
-        _refreshTimer.Start();
-
-        // 布局完成后：定位(SizeToContent 下 Actual 尺寸才就绪) + 渐隐蒙层
-        // （此时 ActualWidth / ExtentWidth 才有效）
-        Dispatcher.BeginInvoke(() =>
-        {
-            DebugLog.Trace("Dock", "布局定位 BeginInvoke 进入");
-            try
+            // 根 Border 背景：有激活皮肤时透出皮肤图，无皮肤时改为透明，
+            // 让 DWM 毛玻璃(Acrylic/BlurBehind)主导视觉，避免叠灰 tint 显得不透明。
+            SyncRootBackground();
+            if (AppearanceService is not null && _events is not null)
             {
-                SyncAppBarPosition();
-                DebugLog.Trace("Dock", "布局定位 PositionToBottomCenter 完成");
-                UpdateEdgeFade();
-                DebugLog.Trace("Dock", "布局定位 UpdateEdgeFade 完成");
+                _appearanceSub = _events.On<AppearanceChangedArgs>(
+                    ShellEvents.AppearanceChanged,
+                    (e, _) =>
+                    {
+                        OnAppearanceChangedForBackground(e);
+                        return Task.CompletedTask;
+                    });
+                Closed += (_, _) => _appearanceSub?.Dispose();
             }
-            catch (Exception ex)
+
+            _refreshTimer.Start();
+
+            // 布局完成后：定位(SizeToContent 下 Actual 尺寸才就绪) + 渐隐蒙层
+            // （此时 ActualWidth / ExtentWidth 才有效）
+            Dispatcher.BeginInvoke(() =>
             {
-                DebugLog.Trace("Dock", $"布局定位异常：{ex.GetType().Name}: {ex.Message}");
-                throw;
-            }
-            DebugLog.Trace("Dock", "OnLoadedCore 布局定位完成");
-        });
-        DebugLog.Trace("Dock", "OnLoadedCore 完成");
+                DebugLog.Trace("Dock", "布局定位 BeginInvoke 进入");
+                try
+                {
+                    SyncAppBarPosition();
+                    UpdateRecycleDropRect(); // 首次布局完成：上报回收站屏幕矩形
+                    DebugLog.Trace("Dock", "布局定位 PositionToBottomCenter 完成");
+                    UpdateEdgeFade();
+                    DebugLog.Trace("Dock", "布局定位 UpdateEdgeFade 完成");
+                }
+                catch (Exception ex)
+                {
+                    DebugLog.Trace("Dock", $"布局定位异常：{ex.GetType().Name}: {ex.Message}");
+                    throw;
+                }
+                DebugLog.Trace("Dock", "OnLoadedCore 布局定位完成");
+            });
+            DebugLog.Trace("Dock", "OnLoadedCore 完成");
         }
         catch (Exception ex)
         {
@@ -352,7 +418,7 @@ public partial class DockWindow : ShellWindow
             RootBorder.Background = Brushes.Transparent;
     }
 
-    private void OnAppearanceChangedForBackground(object? sender, AppearanceChangedArgs e)
+    private void OnAppearanceChangedForBackground(AppearanceChangedArgs e)
     {
         if (e.SkinChanged) SyncRootBackground();
     }
@@ -390,18 +456,21 @@ public partial class DockWindow : ShellWindow
                 return;
             }
 
-            if (!_autoHideEnabled)
-            {
-                return;
-            }
-
             var cursor = GetCursorScreenPoint();
 
-            // 悬停 dock 上：绝不隐藏且置顶可交互
-            if (IsCursorOverDock(cursor))
+            // 悬停 dock 上 / 预览浮层上：绝不隐藏且置顶可交互。
+            // ⚠️ 本判定必须排在 `!_autoHideEnabled` **之前**：自动隐藏关闭时同样要保证
+            // 「鼠标在 dock 上 → dock 在最上」，否则 peek 抬起预览目标时会把 dock 盖掉
+            // （此前正是自动隐藏关闭的用户永远走到 return，dock 拿不到置顶 → 与 peek 打架）。
+            if (IsCursorOverDock(cursor) || IsPointerOverPreviewOrIcon(cursor))
             {
                 ApplyTickInterval(statePending: false, cursorNearDock: true);
                 SetDockVisible(true, topmost: true);
+                return;
+            }
+
+            if (!_autoHideEnabled)
+            {
                 return;
             }
 
@@ -425,10 +494,11 @@ public partial class DockWindow : ShellWindow
                 return;
             }
 
-            // 用户活跃 → 常驻显示，但**不置顶**（在窗口下层，不盖在窗口上；
-            // 需要时鼠标贴底边热区或悬停 dock 即临时置顶）
+            // 用户活跃 → 常驻显示。层级恒为置顶（等同系统任务栏）：
+            // dock 只占底部一条且已注册底部 AppBar（工作区上移），不会挡住有效内容；
+            // 但若降为不置顶，peek 抬起的预览目标会盖掉 dock。
             ApplyTickInterval(statePending: false, cursorNearDock: IsCursorNearSummonBand(cursor));
-            SetDockVisible(true, topmost: false);
+            SetDockVisible(true, topmost: true);
         }
         catch
         {
@@ -472,7 +542,11 @@ public partial class DockWindow : ShellWindow
             && lx >= Left - bandX && lx <= Left + ActualWidth + bandX;
     }
 
-    private void SetDockVisible(bool visible, bool topmost = false)
+    /// <param name="topmost">
+    /// 默认 **true**：dock 层级恒等同系统任务栏（见 <see cref="DefaultTopmost"/>）。
+    /// 传 false 只在「隐藏」路径出现（隐藏态层级无意义，唤出时会重新置顶）。
+    /// </param>
+    private void SetDockVisible(bool visible, bool topmost = true)
     {
         // 健壮状态机：以窗口实际 IsVisible 为准（字段可能因启动时序/外部 Hide 失同步）。
         var actuallyVisible = IsVisible;
@@ -486,11 +560,14 @@ public partial class DockWindow : ShellWindow
         if (visible)
         {
             DebugLog.Trace("Dock", $"SetDockVisible -> Show (topmost={topmost})");
-            // 先定层级再显示：置顶态（热区/悬停唤出）与常驻态（窗口下层）分别正确落位。
+            // 先定层级再显示。常驻态与悬停态层级一致（都置顶），不会出现"唤出时降层"的抖动。
             Topmost = topmost;
             Show();
             EnsureAppBar();
             SyncAppBarPosition();
+            // 显现：先恢复材质（DWM 毛玻璃）再淡入，避免"先看到透明条再长出背景"的错位观感。
+            // 恢复走虚方法，dock 自己的材质策略（clear→无磨砂 / 其它→BlurBehind）原样生效。
+            SetMaterialSuspended(false);
             // 淡入（Opacity 0 -> 1），不触碰窗口定位。
             _animation.CreateFadeInAnimation(this, TimeSpan.FromMilliseconds(220))?.Begin();
         }
@@ -501,14 +578,48 @@ public partial class DockWindow : ShellWindow
             var fade = _animation.CreateFadeOutAnimation(this, TimeSpan.FromMilliseconds(220));
             if (fade is not null)
             {
-                fade.Completed += (_, _) => { Hide(); ReleaseAppBar(); };
+                // 淡出收尾才挂起材质：整段淡出过程背景随内容一起消失，不会"内容先没、玻璃后没"。
+                fade.Completed += (_, _) =>
+                {
+                    SetMaterialSuspended(true);
+                    Hide();
+                    ReleaseAppBar();
+                };
                 fade.Begin();
             }
             else
             {
+                SetMaterialSuspended(true);
                 Hide();
                 ReleaseAppBar();
             }
+        }
+    }
+
+    /// <summary>组件开关（2026-09-07）：shell.dock 关闭时停自动隐藏 tick 并隐藏，开启时恢复 tick 并显示。
+    /// 防止「隐藏 Dock」后被 OnAutoHideTick 每拍（≤250ms）无条件 SetDockVisible(true) 拉回。
+    /// 停 tick 的同时释放 AppBar 条带（SetDockVisible(false) 内含），dock 彻底退出底部占用。</summary>
+    public void SetComponentEnabled(bool enabled)
+    {
+        try
+        {
+            if (enabled)
+            {
+                if (!_autoHideTimer.IsEnabled)
+                {
+                    _autoHideTimer.Start();
+                }
+                SetDockVisible(true, topmost: true);
+            }
+            else
+            {
+                _autoHideTimer.Stop();
+                SetDockVisible(false, topmost: false);
+            }
+        }
+        catch
+        {
+            // 组件开关异常不阻断宿主（窗口状态保持原样）
         }
     }
 
@@ -531,8 +642,8 @@ public partial class DockWindow : ShellWindow
     /// <summary>系统级用户空闲毫秒数（最后一次鼠标/键盘输入至今；GetLastInputInfo）。</summary>
     private static double GetSystemIdleMs()
     {
-        var info = new LASTINPUTINFO { cbSize = (uint)Marshal.SizeOf<LASTINPUTINFO>() };
-        return GetLastInputInfo(ref info)
+        var info = new NativeMethods.LASTINPUTINFO { cbSize = (uint)Marshal.SizeOf<NativeMethods.LASTINPUTINFO>() };
+        return NativeMethods.GetLastInputInfo(ref info)
             ? unchecked(Environment.TickCount - (int)info.dwTime)
             : 0; // 检测失败按"刚有输入"处理 → 不隐藏（宁可常驻不可误隐）
     }
@@ -544,13 +655,9 @@ public partial class DockWindow : ShellWindow
         public uint dwTime;
     }
 
-    [DllImport("user32.dll")]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool GetLastInputInfo(ref LASTINPUTINFO plii);
-
     private static Point GetCursorScreenPoint()
     {
-        if (GetCursorPos(out var pt))
+        if (NativeMethods.GetCursorPos(out var pt))
         {
             return new Point(pt.X, pt.Y);
         }
@@ -564,12 +671,19 @@ public partial class DockWindow : ShellWindow
         public int Y;
     }
 
-    [DllImport("user32.dll")]
-    private static extern bool GetCursorPos(out POINT lpPoint);
+    /// <summary>屏幕矩形（物理像素，与 GetCursorPos 同域），用于预览存续的几何命中判定。</summary>
+    [StructLayout(LayoutKind.Sequential)]
+    private struct RECT
+    {
+        public int Left;
+        public int Top;
+        public int Right;
+        public int Bottom;
+    }
 
     // ---- 系统功能区（此电脑/网络/回收站/控制面板）----
 
-    // 图标主路径：SHParseDisplayName(CLSID) → PIDL → SHGetFileInfo(SHGFI_PIDL)，
+    // 图标主路径：NativeMethods.SHParseDisplayName(CLSID) → PIDL → SHGetFileInfo(SHGFI_PIDL)，
     // 走 Shell 命名空间提取图标，与桌面/资源管理器中的系统图标样式完全一致（含当前主题）。
     // 兜底：SHGetStockIconInfo（系统 stock 图标）——PIDL 提取失败时保证仍能显示。
     private const uint ShgfiIcon = 0x00000100;
@@ -590,14 +704,8 @@ public partial class DockWindow : ShellWindow
         public string szTypeName;
     }
 
-    [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
-    private static extern int SHParseDisplayName(string pszName, IntPtr pbc, out IntPtr ppidl, uint sfgaoIn, out uint psfgaoOut);
-
     [DllImport("shell32.dll", EntryPoint = "SHGetFileInfo")]
     private static extern IntPtr SHGetFileInfoPidl(IntPtr pidl, uint dwFileAttributes, ref SHFILEINFO psfi, uint cbSizeFileInfo, uint uFlags);
-
-    [DllImport("ole32.dll")]
-    private static extern void CoTaskMemFree(IntPtr pv);
 
     [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
     private struct SHSTOCKICONINFO
@@ -613,17 +721,32 @@ public partial class DockWindow : ShellWindow
     [DllImport("shell32.dll")]
     private static extern int SHGetStockIconInfo(uint siid, uint uFlags, ref SHSTOCKICONINFO psii);
 
-    [DllImport("user32.dll")]
-    private static extern bool DestroyIcon(IntPtr hIcon);
+    // 系统功能条目：设置键 / 显示名 / Shell CLSID 或 exe 路径（图标提取 + 启动目标）/ 兜底 stock ID /
+    // 是否走 control.exe / 是否走任务管理器专用启动（单例激活 + 冷启动补置前）。
+    // 回收站拖放（2026-09-07）：桌面拖动图标到 dock 栏回收站松手 = 移入回收站。
+    // 布局后把回收站容器屏幕矩形写入 kernel 共享 DockDropTargets，桌面侧拖动时读取命中。
+    private Grid? _recycleBinContainer;
+    private readonly DispatcherTimer _recycleHoverTimer = new() { Interval = TimeSpan.FromMilliseconds(150) };
+    private bool _recycleBinHighlighted;
 
-    // 系统功能条目：设置键 / 显示名 / Shell CLSID（图标提取 + 启动目标）/ 兜底 stock ID / 是否走 control.exe。
-    private static readonly (string Key, string Name, string Clsid, uint FallbackStockId, bool IsControlPanel)[] SystemEntries =
+    private static readonly (string Key, string Name, string Clsid, uint FallbackStockId, bool IsControlPanel, bool IsTaskManager)[] SystemEntries =
     {
-        ("dock.systemComputer", "此电脑", "::{20D04FE0-3AEA-1069-A2D8-08002B30309D}", 15u, false),
-        ("dock.systemNetwork", "网络", "::{208D2C60-3AEA-1069-A2D8-08002B30309D}", 92u, false),
-        ("dock.systemRecycleBin", "回收站", "::{645FF040-5081-101B-9F08-00AA002F954E}", 8u, false),
-        ("dock.systemControlPanel", "控制面板", "::{26EE0668-A00A-44D7-9371-BEB064C98683}", 21u, true),
+        ("dock.systemComputer", "此电脑", "::{20D04FE0-3AEA-1069-A2D8-08002B30309D}", 15u, false, false),
+        ("dock.systemNetwork", "网络", "::{208D2C60-3AEA-1069-A2D8-08002B30309D}", 92u, false, false),
+        ("dock.systemRecycleBin", "回收站", "::{645FF040-5081-101B-9F08-00AA002F954E}", 8u, false, false),
+        ("dock.systemControlPanel", "控制面板", "::{26EE0668-A00A-44D7-9371-BEB064C98683}", 21u, true, false),
+        // 任务管理器（= Ctrl+Shift+Esc 打开的那个界面）：SHParseDisplayName 可直接吃 exe 路径，
+        // 因此图标仍走同一条 Shell 命名空间提取链路，无需特例。
+        ("dock.systemTaskManager", "任务管理器", TaskmgrPath, 1u /* SIID_APPLICATION 兜底 */, false, true),
     };
+
+    /// <summary>
+    /// Taskmgr.exe 绝对路径（System32）。
+    /// ⚠️ 不能只写 "taskmgr.exe" 靠 PATH 解析：进程启动的 PATH 可能被宿主/服务环境改动，
+    /// 且本 shell 常以非标准环境启动，裸名字会静默启动失败（"点了没反应"）。
+    /// </summary>
+    private static string TaskmgrPath =>
+        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "Taskmgr.exe");
 
     /// <summary>取系统图标（桌面同款）：先按 CLSID 经 Shell 命名空间提取，失败回退 stock 图标。失败返回 null。</summary>
     private static ImageSource? GetSystemIcon(string clsid, uint fallbackStockId)
@@ -643,7 +766,7 @@ public partial class DockWindow : ShellWindow
         IntPtr pidl = IntPtr.Zero;
         try
         {
-            if (SHParseDisplayName(clsid, IntPtr.Zero, out pidl, 0, out _) != 0 || pidl == IntPtr.Zero)
+            if (NativeMethods.SHParseDisplayName(clsid, IntPtr.Zero, out pidl, 0, out _) != 0 || pidl == IntPtr.Zero)
             {
                 return null;
             }
@@ -664,7 +787,7 @@ public partial class DockWindow : ShellWindow
             }
             finally
             {
-                DestroyIcon(info.hIcon);
+                NativeMethods.DestroyIcon(info.hIcon);
             }
         }
         catch
@@ -675,7 +798,7 @@ public partial class DockWindow : ShellWindow
         {
             if (pidl != IntPtr.Zero)
             {
-                CoTaskMemFree(pidl);
+                NativeMethods.CoTaskMemFree(pidl);
             }
         }
     }
@@ -701,7 +824,7 @@ public partial class DockWindow : ShellWindow
             }
             finally
             {
-                DestroyIcon(info.hIcon);
+                NativeMethods.DestroyIcon(info.hIcon);
             }
         }
         catch
@@ -799,10 +922,88 @@ public partial class DockWindow : ShellWindow
                 onClick: () => LaunchSystemEntry(captured),
                 onRightClick: () => ShowSystemEntryMenu(captured));
             SystemPanel.Children.Add(container);
+
+            if (string.Equals(entry.Key, "dock.systemRecycleBin", StringComparison.Ordinal))
+            {
+                _recycleBinContainer = container; // 供桌面"拖到回收站"命中检测
+            }
         }
 
         // 全部关闭或取不到图标时折叠整块（不留空白），与运行区 showRunning=false 联动由调用方处理。
         SystemPanel.Visibility = SystemPanel.Children.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
+        UpdateRecycleDropRect(); // 重建后回收站容器可能整体位移 → 重新上报屏幕矩形
+    }
+
+    /// <summary>
+    /// 把 dock 栏回收站容器在屏幕上的物理像素矩形写入 kernel 共享 DockDropTargets
+    /// （与 GetCursorPos 同域），供桌面拖动"拖到回收站松手 = 移入回收站"命中检测。
+    /// 容器不可见 / 布局异常时清空（桌面视为 dock 回收站不在场）。
+    /// </summary>
+    private void UpdateRecycleDropRect()
+    {
+        if (_recycleBinContainer is null || !_recycleBinContainer.IsVisible || !IsVisible)
+        {
+            BetterDesktop.Kernel.Core.DockDropTargets.ClearDockRecycleBinRect();
+            return;
+        }
+
+        try
+        {
+            var scale = PresentationSource.FromVisual(this)?.CompositionTarget?.TransformToDevice.M11 ?? 1.0;
+            if (scale <= 0)
+            {
+                scale = 1.0;
+            }
+
+            var rel = _recycleBinContainer.TransformToAncestor(this).Transform(new Point(0, 0));
+            var rect = new System.Drawing.Rectangle(
+                (int)((Left + rel.X) * scale),
+                (int)((Top + rel.Y) * scale),
+                (int)(_recycleBinContainer.ActualWidth * scale),
+                (int)(_recycleBinContainer.ActualHeight * scale));
+            if (rect.Width > 0 && rect.Height > 0)
+            {
+                BetterDesktop.Kernel.Core.DockDropTargets.DockRecycleBinScreenRect = rect;
+            }
+            else
+            {
+                BetterDesktop.Kernel.Core.DockDropTargets.ClearDockRecycleBinRect();
+            }
+        }
+        catch
+        {
+            // 容器已脱离可视树（TransformToAncestor 抛异常）：视为不在场（M10）
+            BetterDesktop.Kernel.Core.DockDropTargets.ClearDockRecycleBinRect();
+        }
+    }
+
+    /// <summary>
+    /// 回收站悬停高亮：读 kernel 共享 DockDropTargets.IsRecycleBinHovered（桌面拖动时写入），
+    /// 变化时给回收站容器加红框红底（与桌面回收站高亮同一套视觉），离开/松手恢复。
+    /// 状态防抖：无变化直接返回，样式只在实际切换时设置一次。
+    /// </summary>
+    private void UpdateRecycleHoverHighlight()
+    {
+        var hovered = BetterDesktop.Kernel.Core.DockDropTargets.IsRecycleBinHovered;
+        if (hovered == _recycleBinHighlighted)
+        {
+            return;
+        }
+
+        _recycleBinHighlighted = hovered;
+        if (_recycleBinContainer is null)
+        {
+            return;
+        }
+
+        if (hovered)
+        {
+            _recycleBinContainer.Background = new SolidColorBrush(Color.FromArgb(110, 0xE8, 0x4C, 0x3D));
+        }
+        else
+        {
+            _recycleBinContainer.Background = null;
+        }
     }
 
     /// <summary>
@@ -927,7 +1128,7 @@ public partial class DockWindow : ShellWindow
     }
 
     /// <summary>自绘复刻 Win+X 菜单（SendInput 失败时的降级路径，M9/M10）。
-    /// 呈现统一走 IMenuService 弹层（ShellWindow + 主题令牌，2026-09-02 右键菜单统一收口）。</summary>
+    /// 呈现走 dock 自管的 DockMenuPopup（WPF ContextMenu，2026-09-05 架构收口后不再经中央菜单管线）。</summary>
     private void _showFallbackStartContextMenu()
     {
         var items = new List<MenuItemDef>
@@ -958,7 +1159,7 @@ public partial class DockWindow : ShellWindow
             },
             WinX("winx.desktop", "桌面", () => _ = KeyboardInterop.ShowDesktop()),
         };
-        _ = _menus?.ShowAsync(items, MenuSurface.AtCursor(this));
+        DockMenuPopup.ShowAtCursor(items.Cast<object>().ToList(), this);
     }
 
     private static MenuItemDef WinX(string id, string text, Action onClick) => new()
@@ -1034,21 +1235,25 @@ public partial class DockWindow : ShellWindow
     }
 
     /// <summary>系统功能右键菜单：打开 / 从 Dock 隐藏（关闭对应设置开关，图标即时消失）。</summary>
-    private void ShowSystemEntryMenu((string Key, string Name, string Clsid, uint FallbackStockId, bool IsControlPanel) entry)
+    private void ShowSystemEntryMenu((string Key, string Name, string Clsid, uint FallbackStockId, bool IsControlPanel, bool IsTaskManager) entry)
     {
         var items = new List<MenuItemDef>
         {
             new() { Id = "sysentry.open", Text = "打开", Command = () => LaunchSystemEntry(entry) },
             new() { Id = "sysentry.hide", Text = $"隐藏「{entry.Name}」", Command = () => _settings?.Set(entry.Key, false) },
         };
-        _ = _menus?.ShowAsync(items, MenuSurface.AtCursor(this));
+        DockMenuPopup.ShowAtCursor(items.Cast<object>().ToList(), this);
     }
 
-    private static void LaunchSystemEntry((string Key, string Name, string Clsid, uint FallbackStockId, bool IsControlPanel) entry)
+    private void LaunchSystemEntry((string Key, string Name, string Clsid, uint FallbackStockId, bool IsControlPanel, bool IsTaskManager) entry)
     {
         try
         {
-            if (entry.IsControlPanel)
+            if (entry.IsTaskManager)
+            {
+                LaunchTaskManager();
+            }
+            else if (entry.IsControlPanel)
             {
                 Process.Start(new ProcessStartInfo { FileName = "control.exe", UseShellExecute = true });
             }
@@ -1066,6 +1271,46 @@ public partial class DockWindow : ShellWindow
         catch
         {
             // 启动失败静默忽略（ShellExecute 偶发失败不阻断 dock）。
+        }
+    }
+
+    /// <summary>
+    /// 打开任务管理器（Ctrl+Shift+Esc 打开的那个界面）。
+    /// 三条可靠性格律：
+    /// 1. **已运行 → 直接激活**：Taskmgr 是单例，二次启动只会被系统丢给已有实例，且不保证置前，
+    ///    在本 shell 环境下（原生任务栏被隐藏）常常"启动了却在后面看不见"。
+    /// 2. **用绝对路径启动**：不靠 PATH 解析裸名字（宿主环境 PATH 可能被改）。
+    /// 3. **激活一律延迟派发**：MouseUp 处理中鼠标仍被本线程捕获，SetForegroundWindow 会被静默拒绝。
+    /// </summary>
+    private void LaunchTaskManager()
+    {
+        var path = TaskmgrPath;
+        try
+        {
+            var running = RunningAppDetector.GetRunningWindows()
+                .FirstOrDefault(w => string.Equals(w.ExePath, path, StringComparison.OrdinalIgnoreCase));
+
+            if (running.Hwnd != IntPtr.Zero)
+            {
+                var hwnd = running.Hwnd;
+                Dispatcher.BeginInvoke(() => RunningAppDetector.ActivateWindow(hwnd), DispatcherPriority.Background);
+                return;
+            }
+
+            Process.Start(new ProcessStartInfo(path) { UseShellExecute = true });
+
+            // 冷启动：窗口出现有延迟，补一次激活，保证它真的来到前面（而不是躲在最大化窗口后面）。
+            var timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(700) };
+            timer.Tick += (_, _) =>
+            {
+                timer.Stop();
+                RunningAppDetector.ActivateFirstWindowOf(path);
+            };
+            timer.Start();
+        }
+        catch (Exception ex)
+        {
+            DebugLog.Trace("Dock", $"taskmgr launch failed: {ex.GetType().Name} {ex.Message}");
         }
     }
 
@@ -1176,7 +1421,12 @@ public partial class DockWindow : ShellWindow
                 iconImage,
                 onClick: () => LaunchApp(capturedItem),
                 onRightClick: () => ShowItemContextMenu(capturedItem, null),
-                onHover: () => ScheduleOpenPreview(capturedItem, GetItemScreenAnchor(container)));
+                onHover: () =>
+                {
+                    // 拖拽重排进行中不开悬停预览（拖动扫过其它图标时不再误弹）。
+                    if (_dragActive) return;
+                    ScheduleOpenPreview(capturedItem, GetItemScreenAnchor(container), container);
+                });
 
             // 图标项直接承载于容器，不再外包"描边+阴影卡片"。
             var card = new Border
@@ -1237,9 +1487,14 @@ public partial class DockWindow : ShellWindow
 
         container.PreviewMouseMove += (_, e) =>
         {
-            if (_dragCard is null || _dragActive)
+            if (_dragActive)
             {
-                if (_dragActive) ReorderVisualByMouse(e.GetPosition(PinnedPanel));
+                ReorderVisualByMouse(e.GetPosition(PinnedPanel));
+                return;
+            }
+
+            if (_dragCard is null)
+            {
                 return;
             }
 
@@ -1253,19 +1508,51 @@ public partial class DockWindow : ShellWindow
             _dragActive = true;
             // 进入拖拽：取消本次点击启动（置标记由 AttachItemInteractions 的 click 判定读取）。
             _suppressClick = true;
+            // 关键修复：捕获鼠标。此前未捕获——指针一离开被拖容器，容器就收不到后续
+            // MouseMove/MouseUp，重排停在原地、释放也收不到（手动排序"失灵"的根因）。
+            // 捕获后事件持续路由到本容器，可跨卡片/跨面板自由拖动。
+            container.CaptureMouse();
+            card.Opacity = 0.65; // 拖拽视觉反馈：被拖项半透明
         };
 
-        container.PreviewMouseLeftButtonUp += (_, _) =>
+        container.PreviewMouseLeftButtonUp += (_, _) => FinishReorderDrag(container, commit: true);
+        // 捕获被系统夺走（弹窗/切窗口等）：按当前视觉顺序提交，不丢排序。
+        container.LostMouseCapture += (_, _) => FinishReorderDrag(container, commit: true);
+    }
+
+    /// <summary>收尾拖拽重排：释放捕获、恢复外观、按视觉顺序提交持久化。幂等（重复调用无害）。</summary>
+    private void FinishReorderDrag(Grid container, bool commit)
+    {
+        if (_dragCard is null && !_dragActive)
         {
-            if (_dragActive && _dragCard is not null)
-            {
-                CommitReorder();
-            }
-            _dragCard = null;
-            _dragActive = false;
+            return;
+        }
+
+        var draggedCard = _dragCard;
+        var wasActive = _dragActive;
+        // 先清状态再释放捕获：LostMouseCapture 回调看到干净状态不会二次提交。
+        _dragCard = null;
+        _dragActive = false;
+        if (container.IsMouseCaptured)
+        {
+            container.ReleaseMouseCapture();
+        }
+
+        if (draggedCard is not null)
+        {
+            draggedCard.Opacity = 1;
+        }
+
+        if (wasActive && commit)
+        {
+            CommitReorder();
+        }
+
+        if (wasActive)
+        {
             // 延迟清除 suppress 标记，避免与 click 事件竞争（click 在 MouseUp 之后触发）。
             Dispatcher.BeginInvoke(() => _suppressClick = false);
-        };
+        }
     }
 
     /// <summary>拖拽中：根据鼠标 X 与被拖卡片在各兄弟卡片中的位置，实时插入到正确顺序。</summary>
@@ -1482,12 +1769,13 @@ public partial class DockWindow : ShellWindow
     }
 
 
-    /// <summary>Dock 项右键：统一菜单模板路径（M3——Scope=DockItem，模板/贡献者/能力过滤全管线）。</summary>
+    /// <summary>Dock 项右键：dock 自管（模板直调 + DockMenuPopup 渲染；2026-09-05 收口）。</summary>
     private void ShowItemContextMenu(DockItemData item, MouseButtonEventArgs? e)
     {
-        if (_menus is null)
+        DebugLog.Trace("Dock", $"Dock 项右键探针: item={item.Name} template={(_dockItemTemplate is null ? "null" : "ok")}");
+        if (_dockItemTemplate is null)
         {
-            return;
+            return; // 无分类器（能力过滤不可用）= 主体未申明菜单，交给系统/不弹
         }
 
         try
@@ -1502,7 +1790,7 @@ public partial class DockWindow : ShellWindow
             }
             else
             {
-                pos = MenuSurface.AtCursor(this);
+                pos = DockMenuPopup.AtCursor(this);
             }
 
             FileIdentity? identity = null;
@@ -1512,12 +1800,14 @@ public partial class DockWindow : ShellWindow
                 catch { /* 分类失败 = 无 File 区（M10） */ }
             }
 
-            _ = _menus.ShowAsync(new MenuRequest(
+            var builder = new DockMenuBuilder();
+            _dockItemTemplate.Build(builder, new MenuRequest(
                 MenuScope.DockItem,
                 item,
                 pos,
                 File: identity,
                 SelectedPaths: [targetPath ?? string.Empty]));
+            DockMenuPopup.Show(builder.Entries, pos);
         }
         catch (Exception ex)
         {
@@ -1525,13 +1815,21 @@ public partial class DockWindow : ShellWindow
         }
     }
 
-    /// <summary>打开应用提取器窗口（懒创建复用）。</summary>
+    /// <summary>打开应用提取器窗口（懒创建复用）。创建失败记诊断日志（此前被上游静默吞掉，窗口打不开无从排查）。</summary>
     private AppGrabberWindow? _appGrabberWindow;
     private void ShowAppGrabber()
     {
-        _appGrabberWindow ??= new AppGrabberWindow(_dockAppsService, _dockIconService, VibrancyService!, AppearanceService, _menus);
-        _appGrabberWindow.Show();
-        _appGrabberWindow.Activate();
+        try
+        {
+            _appGrabberWindow ??= new AppGrabberWindow(_dockAppsService, _dockIconService, VibrancyService!, AppearanceService);
+            _appGrabberWindow.Show();
+            _appGrabberWindow.Activate();
+            DebugLog.Trace("Dock", $"appgrabber shown hwnd ok items={_dockAppsService.Pinned.Count}");
+        }
+        catch (Exception ex)
+        {
+            DebugLog.Trace("Dock", $"appgrabber create/show FAILED: {ex.GetType().Name} {ex.Message}\n{ex.StackTrace}");
+        }
     }
 
     /// <summary>DockItemTemplate 启动注入点（含"已运行=激活"完整语义）。</summary>
@@ -1544,6 +1842,15 @@ public partial class DockWindow : ShellWindow
     {
         try
         {
+            // 路径自愈：固定快照的路径可能已失效（Edge/Chrome 等版本化目录应用自动更新后旧路径被清），
+            // 按名称反查已安装列表取最新路径——应用本体还在，点击必须仍能启动（用户实测 bug）。
+            // 自愈失败（应用真被卸载）保持原样走原逻辑（启动失败不崩溃）。
+            var refreshed = _dockAppsService.TryRefreshStalePath(item);
+            if (refreshed is not null)
+            {
+                item = refreshed;
+            }
+
             var path = !string.IsNullOrWhiteSpace(item.TargetPath)
                 ? item.TargetPath
                 : item.ShortcutPath;
@@ -1763,34 +2070,25 @@ public partial class DockWindow : ShellWindow
             // 将运行项同步进 DockService 运行时模型（统一由 IDockService 维护当前可见的运行集合）。
             SyncRunningIntoService(orderedItems);
 
-            // 无运行窗口：直接保证占位可见。空状态处理必须放在 keys 去重之前——
-            // 否则空集合与初始 _lastRunningKeys=[] 的 SequenceEqual 恒为 true 会提前 return，
-            // 占位（乃至整个运行区）永不渲染（「运行区不知所踪」历史根因）。
+            // 无运行窗口：**整个运行区直接隐藏，不留占位提示**（2026-09-06 用户明确：
+            // 不需要"无运行窗口"文案，也不留空位——dock 宽度由 SizeToContent 自动收窄）。
+            // 空状态处理仍须放在 keys 去重之前：空集合与初始 _lastRunningKeys=[] 的
+            // SequenceEqual 恒为 true 会提前 return，导致从空恢复后有运行项也不重建（历史根因）。
             if (orderedItems.Count == 0)
             {
-                // 已是占位则跳过重建，避免每秒 Clear+Add 抖动面板（用专属标志判定，不蹭去重键集合）。
-                if (_runningEmptyRendered && RunningPanel.Children.Count == 1)
+                // 已是空态则短路，避免每秒白做 Clear（用专属标志判定，不蹭去重键集合）。
+                if (_runningEmptyRendered)
                 {
                     return;
                 }
 
-                DebugLog.Trace("Running", "refresh 空状态 → 渲染「无运行窗口」占位");
+                DebugLog.Trace("Running", "refresh 空状态 → 隐藏运行区（无占位提示）");
                 _runningEmptyRendered = true;
                 _lastRunningKeys.Clear(); // 复位去重键：从空恢复后有运行项时 keys 必变化 → 触发重建
                 RunningPanel.Children.Clear();
-                Separator.Visibility = Visibility.Visible;
-                RunningScrollViewer.Visibility = Visibility.Visible;
-                // 空状态宽度贴合占位文字（不预留 6 个空位）。
-                RunningScrollViewer.Width = double.NaN;
-                var empty = new TextBlock
-                {
-                    Text = "（无运行窗口）",
-                    FontSize = 11,
-                    VerticalAlignment = VerticalAlignment.Center,
-                    Margin = new Thickness(8, 0, 8, 0)
-                };
-                BindTheme(empty, TextBlock.ForegroundProperty, "MutedForeground");
-                RunningPanel.Children.Add(empty);
+                // 分隔线与滚动区一并隐藏：只藏图标不藏分隔线会剩一条孤零零的竖线 + 空位。
+                Separator.Visibility = Visibility.Collapsed;
+                RunningScrollViewer.Visibility = Visibility.Collapsed;
                 UpdateEdgeFadeDeferred();
                 return;
             }
@@ -1879,7 +2177,7 @@ public partial class DockWindow : ShellWindow
                     container,
                     iconImage,
                     onClick: () => { }, // 空操作，点击已由 iconZone 处理
-                    onHover: () => ScheduleOpenPreview(capturedItem, GetItemScreenAnchor(container)));
+                    onHover: () => ScheduleOpenPreview(capturedItem, GetItemScreenAnchor(container), container));
 
                 // 鼠标离开运行项后延迟关闭预览（留出移动到预览层的时间）。
                 container.MouseLeave += (_, _) => ScheduleClosePreview();
@@ -1889,7 +2187,9 @@ public partial class DockWindow : ShellWindow
                 {
                     CornerRadius = new CornerRadius(10),
                     BorderThickness = new Thickness(0),
-                    Child = container
+                    Child = container,
+                    // 与固定区一致：卡片 Tag 记 Dock 项 Id，供预览存续判定在列表重建后重新锚定图标。
+                    Tag = item.Id
                 };
 
                 RunningPanel.Children.Add(card);
@@ -2047,16 +2347,48 @@ public partial class DockWindow : ShellWindow
     // 预览悬停开/关计时器，对齐 cairoshell 的 thumbTimer / closeThumbTimer：
     // - 打开延迟用系统 MouseHoverTime（更顺滑）；
     // - 关闭延迟：鼠标离开图标或预览窗后稍候，若仍不在任一之上才真正关闭，保证能停留并点击。
+    // 【2026-09-05 存续收口】关闭改由「光标看门狗」裁定：光标不在「来源图标 ∪ 浮层」上持续
+    // PreviewCloseGrace 即关闭。来源图标元素随悬停记录，是存续判定的另一半命中区。
     private DispatcherTimer? _previewOpenTimer;
     private DispatcherTimer? _previewCloseTimer;
+    private DispatcherTimer? _previewWatchdog;
     private DockItemData? _pendingPreviewItem;
+    private FrameworkElement? _pendingPreviewAnchor;
     private Point? _previewAnchorScreen;
+    // 已打开浮层的来源图标元素（命中区之一）；浮层关闭即清空。
+    private FrameworkElement? _previewAnchor;
+    // 来源图标的 Dock 项 Id：运行区每秒可能重建容器，图标元素失效后按 Id 重新定位新容器。
+    private DockItemId? _previewAnchorItemId;
+    // 光标持续离开命中区的起点（宽限期内回来不关闭）。
+    private DateTime? _previewOutsideSince;
 
     private static TimeSpan PreviewOpenDelay => SystemParameters.MouseHoverTime;
+    private static readonly TimeSpan PreviewCloseGrace = TimeSpan.FromMilliseconds(300);
+    private static readonly TimeSpan PreviewWatchdogInterval = TimeSpan.FromMilliseconds(120);
 
-    private void ScheduleOpenPreview(DockItemData item, Point anchorScreen)
+    private void ScheduleOpenPreview(DockItemData item, Point anchorScreen, FrameworkElement anchor)
     {
+        // 已在当前图标上展示预览：不再重启打开计时器。
+        // 否则「图标 → 浮层 → 回到图标」会重新计时，400ms 后销毁重建浮层（闪烁 + DWM 缩略图重注册），
+        // 与「悬停期间缩略图持续存在」的语义相悖。
+        // 按项 Id 而非元素引用比较：运行区重建后容器是新对象但仍是同一个应用。
+        if (_flyout is not null && _previewAnchorItemId == item.Id)
+        {
+            _previewOpenTimer?.Stop();
+            _previewOpenTimer = null;
+            _previewCloseTimer?.Stop();
+            _previewCloseTimer = null;
+            return;
+        }
+
+        // 切到另一个图标：立刻丢弃旧浮层（旧逻辑要等下一次打开计时，出现两个应用的缩略图并存）。
+        if (_flyout is not null)
+        {
+            CloseFlyout();
+        }
+
         _pendingPreviewItem = item;
+        _pendingPreviewAnchor = anchor;
         _previewAnchorScreen = anchorScreen;
         DebugLog.Trace("Preview", $"hover item={item.Name} exe={item.TargetPath ?? item.ShortcutPath}");
         // 进入图标：取消正在进行的关闭延迟（鼠标回来了），但绝不取消打开计时器。
@@ -2070,7 +2402,7 @@ public partial class DockWindow : ShellWindow
             _previewOpenTimer = null;
             if (_pendingPreviewItem is { } pending && _previewAnchorScreen is { } a)
             {
-                OpenRunningPreview(pending, a);
+                OpenRunningPreview(pending, a, _pendingPreviewAnchor);
             }
         };
         _previewOpenTimer.Start();
@@ -2118,7 +2450,7 @@ public partial class DockWindow : ShellWindow
         };
     }
 
-    private void OpenRunningPreview(DockItemData item, Point anchorScreen)
+    private void OpenRunningPreview(DockItemData item, Point anchorScreen, FrameworkElement? anchor)
     {
         var exe = !string.IsNullOrWhiteSpace(item.TargetPath) ? item.TargetPath : item.ShortcutPath;
         if (string.IsNullOrWhiteSpace(exe))
@@ -2136,12 +2468,191 @@ public partial class DockWindow : ShellWindow
         }
 
         CloseFlyout();
+        // 来源图标必须在关闭旧浮层之后写入（CloseFlyout 会清空 _previewAnchor）。
+        _previewAnchor = anchor;
+        _previewAnchorItemId = item.Id;
         // 预览窗自 shell-window-tracker 通用化（原 DockThumbWindow）；缩略图质量由本窗从设置读取后传入。
-        _flyout = new ThumbnailWindow(anchorScreen, windows, GetPreviewThumbnailQuality());
-        // 鼠标离开预览层时请求关闭；关闭延迟内若鼠标回到图标则取消（见 ScheduleDeferClose 的 IsMouseOver 判定）。
-        _flyout.PreviewMouseLeft += (_, _) => ScheduleDeferClose();
+        var flyout = new ThumbnailWindow(anchorScreen, windows, GetPreviewThumbnailQuality());
+        // Closed 可能晚于 Close() 返回（消息泵时序）：只有它仍是当前浮层时才停看门狗，
+        // 否则会把后开的浮层的看门狗误停 → 新缩略图永不自动关闭。
+        flyout.Closed += (_, _) =>
+        {
+            if (ReferenceEquals(_flyout, flyout))
+            {
+                StopPreviewWatchdog();
+            }
+        };
+        _flyout = flyout;
         _flyout.Show();
+        // 存续看门狗：光标离开「来源图标 ∪ 浮层」持续 PreviewCloseGrace 即关闭。
+        StartPreviewWatchdog();
         DebugLog.Trace("Preview", $"shown flyout handles={windows.Count}");
+    }
+
+    /// <summary>
+    /// 预览存续看门狗：只要光标不在来源图标或浮层上，浮层就必须消失（用户明确要求）。
+    /// 用光标坐标判定而非依赖 WPF 的 MouseLeave/IsMouseOver——分层透明窗在跨窗口移动、
+    /// 以及浮层被 peek 抬起的窗口遮挡重绘时，鼠标事件可能丢失，只靠事件会让缩略图"赖着不走"。
+    /// </summary>
+    private void StartPreviewWatchdog()
+    {
+        StopPreviewWatchdog();
+        _previewOutsideSince = null;
+        _previewWatchdog = new DispatcherTimer { Interval = PreviewWatchdogInterval };
+        _previewWatchdog.Tick += OnPreviewWatchdogTick;
+        _previewWatchdog.Start();
+    }
+
+    private void StopPreviewWatchdog()
+    {
+        if (_previewWatchdog is null)
+        {
+            return;
+        }
+
+        _previewWatchdog.Stop();
+        _previewWatchdog.Tick -= OnPreviewWatchdogTick;
+        _previewWatchdog = null;
+    }
+
+    private void OnPreviewWatchdogTick(object? sender, EventArgs e)
+    {
+        if (_flyout is null)
+        {
+            StopPreviewWatchdog();
+            return;
+        }
+
+        if (IsPointerOverPreviewOrIcon(GetCursorScreenPoint()))
+        {
+            _previewOutsideSince = null;
+            return;
+        }
+
+        // 宽限期：吸收「图标 → 浮层」之间 8px 空隙的穿越时间，避免中途被判离场。
+        var now = DateTime.UtcNow;
+        _previewOutsideSince ??= now;
+        if (now - _previewOutsideSince.Value >= PreviewCloseGrace)
+        {
+            DebugLog.Trace("Preview", "watchdog close (pointer left icon and flyout)");
+            CloseFlyout();
+        }
+    }
+
+    /// <summary>
+    /// 光标是否落在「预览浮层」或「来源图标」上（二者是浮层存续的唯一合法栖息地）。
+    /// 全部按物理像素比较：GetCursorPos / GetWindowRect 已是物理域，图标矩形由 WPF 逻辑域 × DPI 换算。
+    /// </summary>
+    private bool IsPointerOverPreviewOrIcon(Point cursorPhysical)
+    {
+        if (_flyout is null || double.IsNaN(cursorPhysical.X))
+        {
+            return false;
+        }
+
+        // 纯几何判定，不掺 WPF 的 IsMouseOver：分层透明窗在跨窗口移动/被抬起窗口遮挡重绘时
+        // 命中态可能滞留为真，一旦滞留浮层就永远不关（正是"缩略图赖着不走"的成因）。
+        // 1) 浮层窗口矩形（外扩 8px 容差：圆角边缘/边框 1px 抖动不误判）。
+        var flyoutHwnd = new WindowInteropHelper(_flyout).Handle;
+        if (flyoutHwnd != IntPtr.Zero &&
+            NativeMethods.GetWindowRect(flyoutHwnd, out var flyoutRect) &&
+            PointInPhysicalRect(flyoutRect, cursorPhysical, 8))
+        {
+            return true;
+        }
+
+        // 2) 来源图标矩形（外扩 6px 容差：图标缩放动画位移不误判）。
+        return TryGetPreviewIconRectPhysical(out var iconRect) &&
+               PointInPhysicalRect(iconRect, cursorPhysical, 6);
+    }
+
+    private static bool PointInPhysicalRect(NativeMethods.RECT rect, Point cursorPhysical, int tolerance)
+    {
+        return cursorPhysical.X >= rect.Left - tolerance &&
+               cursorPhysical.X <= rect.Right + tolerance &&
+               cursorPhysical.Y >= rect.Top - tolerance &&
+               cursorPhysical.Y <= rect.Bottom + tolerance;
+    }
+
+    /// <summary>
+    /// 已打开浮层的来源图标在屏幕上的物理像素矩形；图标已卸载/不可见时返回 false（视为不在场）。
+    /// </summary>
+    private bool TryGetPreviewIconRectPhysical(out NativeMethods.RECT rect)
+    {
+        rect = default;
+        var anchor = _previewAnchor;
+        if (anchor is null || !anchor.IsVisible)
+        {
+            // 运行区/固定区重建后旧容器已脱离可视树：按 Dock 项 Id 重新定位新容器，
+            // 否则一次重建就会让"光标还在图标上"被误判为离场 → 预览凭空消失。
+            anchor = FindItemContainer(_previewAnchorItemId);
+            if (anchor is not null)
+            {
+                _previewAnchor = anchor;
+            }
+        }
+
+        if (anchor is null)
+        {
+            return false;
+        }
+
+        try
+        {
+            var scale = PresentationSource.FromVisual(this)?.CompositionTarget?.TransformToDevice.M11 ?? 1.0;
+            if (scale <= 0)
+            {
+                scale = 1.0;
+            }
+
+            var rel = anchor.TransformToAncestor(this).Transform(new Point(0, 0));
+            rect = new NativeMethods.RECT
+            {
+                Left = (int)((Left + rel.X) * scale),
+                Top = (int)((Top + rel.Y) * scale),
+                Right = (int)((Left + rel.X + anchor.ActualWidth) * scale),
+                Bottom = (int)((Top + rel.Y + anchor.ActualHeight) * scale)
+            };
+            return rect.Right > rect.Left && rect.Bottom > rect.Top;
+        }
+        catch
+        {
+            // 容器已从可视树移除（TransformToAncestor 抛异常）：视为不在场。
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// 按 Dock 项 Id 在固定区/运行区里定位当前可见的图标容器（卡片 Border 的 Child）。
+    /// 列表重建后旧容器脱离可视树，靠它把预览重新锚定到新容器上。
+    /// </summary>
+    private FrameworkElement? FindItemContainer(DockItemId? itemId)
+    {
+        if (itemId is null)
+        {
+            return null;
+        }
+
+        foreach (var panel in new[] { PinnedPanel, RunningPanel })
+        {
+            if (panel is null)
+            {
+                continue;
+            }
+
+            foreach (var child in panel.Children)
+            {
+                if (child is Border { Tag: DockItemId id } border &&
+                    id == itemId.Value &&
+                    border.Child is FrameworkElement container &&
+                    container.IsVisible)
+                {
+                    return container;
+                }
+            }
+        }
+
+        return null;
     }
 
     // 预览关闭延迟：鼠标离开图标或预览窗后稍候，若焦点不在图标/预览任一之上才真正关。
@@ -2153,9 +2664,9 @@ public partial class DockWindow : ShellWindow
         {
             _previewCloseTimer?.Stop();
             _previewCloseTimer = null;
-            // 鼠标仍在预览窗上则不关闭（对齐 cairoshell 的 !IsMouseOver 判定）。
-            // 图标本身的 hover 会重新触发 ScheduleOpenPreview（已 stop 本关闭计时器），无需在此判断。
-            if (_flyout is { IsMouseOver: true })
+            // 鼠标仍在预览窗或来源图标上则不关闭（几何判定 + IsMouseOver 兜底，与看门狗同一判据）。
+            // 图标本身的 hover 会重新触发 ScheduleOpenPreview（已 stop 本关闭计时器）。
+            if (IsPointerOverPreviewOrIcon(GetCursorScreenPoint()))
             {
                 return;
             }
@@ -2208,11 +2719,14 @@ public partial class DockWindow : ShellWindow
 
         if (best.Hwnd != IntPtr.Zero)
         {
+            var target = best.Hwnd;
             // ⚠️ 不得在 MouseLeftButtonUp 处理中同步激活：此时鼠标仍被本线程捕获，
             // SetForegroundWindow 会被 Windows 静默拒绝（实测"matched=1 但窗口没反应"根因）。
             // 延迟到消息队列空闲（capture 已释放）再激活。
+            // 带 UIPI 回退：任务管理器等高完整性窗口无法被本进程直接唤醒时，
+            // 回退为重新 ShellExecute 该 exe，交给应用自己激活（详见 ActivateWindowOrRelaunch）。
             Dispatcher.BeginInvoke(
-                () => RunningAppDetector.ActivateWindow(best.Hwnd),
+                () => RunningAppDetector.ActivateWindowOrRelaunch(target, exe),
                 System.Windows.Threading.DispatcherPriority.Background);
         }
     }
@@ -2221,7 +2735,7 @@ public partial class DockWindow : ShellWindow
     {
         try
         {
-            if (!RunningAppDetector.IsWindowVisible(hwnd))
+            if (!NativeMethods.IsWindowVisible(hwnd))
             {
                 return false;
             }
@@ -2238,6 +2752,10 @@ public partial class DockWindow : ShellWindow
 
     private void CloseFlyout()
     {
+        StopPreviewWatchdog();
+        _previewOutsideSince = null;
+        _previewAnchor = null;
+        _previewAnchorItemId = null;
         _flyout?.Close();
         _flyout = null;
     }

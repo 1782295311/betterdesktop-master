@@ -79,6 +79,31 @@ bool FindTargetGuid(const WLAN_INTERFACE_INFO_LIST* list, bool requireConnected,
     }
     return false;
 }
+// SSID 是任意字节串（可能无 NUL）：优先按 UTF-8 严格解码（MB_ERR_INVALID_CHARS），
+// 非法字节序列时按 Latin-1 逐字节映射，与托管层 DecodeSsid 语义一致（W1：禁止逐字节 static_cast<wchar_t>）。
+void DecodeSsidToWide(const unsigned char* bytes, DWORD len, wchar_t* out, int outCch)
+{
+    if (!out || outCch <= 0) return;
+    out[0] = L'\0';
+    if (!bytes || len == 0) return;
+    if (len > static_cast<DWORD>(outCch) - 1)
+    {
+        len = static_cast<DWORD>(outCch) - 1;
+    }
+    while (len > 0 && bytes[len - 1] == 0) --len;
+    if (len == 0) return;
+    int wlen = ::MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS,
+        reinterpret_cast<const char*>(bytes), static_cast<int>(len), out, outCch - 1);
+    if (wlen <= 0)
+    {
+        for (DWORD i = 0; i < len; ++i)
+        {
+            out[i] = static_cast<wchar_t>(bytes[i]);
+        }
+        wlen = static_cast<int>(len);
+    }
+    out[wlen] = L'\0';
+}
 } // namespace
 
 extern "C" int __stdcall Wlan_ReadConnected(
@@ -87,7 +112,8 @@ extern "C" int __stdcall Wlan_ReadConnected(
     wchar_t* desc, int descCch,
     wchar_t* ipv4, int ipv4Cch,
     wchar_t* mac, int macCch,
-    unsigned long long* linkSpeedBps)
+    unsigned long long* linkSpeedBps,
+    int* signalQuality)
 {
     if (!connected)
     {
@@ -99,6 +125,7 @@ extern "C" int __stdcall Wlan_ReadConnected(
     if (ipv4 && ipv4Cch > 0) ipv4[0] = L'\0';
     if (mac && macCch > 0) mac[0] = L'\0';
     if (linkSpeedBps) *linkSpeedBps = 0;
+    if (signalQuality) *signalQuality = 0;
 
     HANDLE h = nullptr;
     HRESULT hr = OpenWlan(&h);
@@ -123,20 +150,19 @@ extern "C" int __stdcall Wlan_ReadConnected(
                 const auto& dot11 = asso.dot11Ssid;
                 if (dot11.uSSIDLength > 0 && ssid && ssidCch > 0)
                 {
-                    // SSID 是字节串（可能无 NUL），逐字节转 UTF-16。
-                    auto len = dot11.uSSIDLength > WLANCORE_MAX_SSID_CHARS - 1
-                                   ? WLANCORE_MAX_SSID_CHARS - 1
-                                   : dot11.uSSIDLength;
-                    for (DWORD i = 0; i < len; ++i)
-                    {
-                        ssid[i] = static_cast<wchar_t>(dot11.ucSSID[i]);
-                    }
-                    ssid[len] = L'\0';
+                    DecodeSsidToWide(dot11.ucSSID, dot11.uSSIDLength, ssid, ssidCch);
                 }
                 if (linkSpeedBps)
                 {
-                    // ulRxRate 单位：Kbps → bps。
-                    *linkSpeedBps = static_cast<unsigned long long>(asso.ulRxRate) * 1000ULL;
+                    // 修复（G2n）：与托管层 ReadConnectedSsidAndPhySpeed 统一取 ulTxRate（发送速率，
+                    // 与 Windows 设置显示口径一致）；旧实现取 ulRxRate，两条降级路径口径不一致。
+                    // 单位：Kbps → bps。
+                    *linkSpeedBps = static_cast<unsigned long long>(asso.ulTxRate) * 1000ULL;
+                }
+                if (signalQuality)
+                {
+                    // W2b：连接属性直读信号质量（0-100），主路径不再依赖托管层补充。
+                    *signalQuality = static_cast<int>(asso.wlanSignalQuality);
                 }
                 *connected = 1;
                 ::WlanFreeMemory(conn);
@@ -217,18 +243,23 @@ extern "C" int __stdcall Wlan_ReadConnected(
 }
 
 // 已扫描的附近网络快照（静态缓存）。用临界区保护，供 Collect 写、GetItem 读。
-static std::vector<WLAN_AVAILABLE_NETWORK> g_scanResults;
-static bool g_scanValid = false;
-static CRITICAL_SECTION g_scanLock;
-static bool g_scanLockInit = false;
-
-inline void EnsureScanLock()
+// 修复（S1）：旧实现用裸全局 flag 做 check-then-init，多线程并发首次进入会对同一
+// CRITICAL_SECTION 双重 InitializeCriticalSection（UB）。改为函数内 static 结构体，
+// 由 MSVC magic statics 保证跨线程恰好初始化一次（含析构 DeleteCriticalSection）。
+struct ScanSnapshot
 {
-    if (!g_scanLockInit)
-    {
-        InitializeCriticalSection(&g_scanLock);
-        g_scanLockInit = true;
-    }
+    CRITICAL_SECTION lock;
+    std::vector<WLAN_AVAILABLE_NETWORK> results;
+    bool valid = false;
+
+    ScanSnapshot() { ::InitializeCriticalSection(&lock); }
+    ~ScanSnapshot() { ::DeleteCriticalSection(&lock); }
+};
+
+ScanSnapshot& ScanState()
+{
+    static ScanSnapshot s;
+    return s;
 }
 
 // 触发扫描（异步，不阻塞）：仅向无线接口发出 WlanScan 请求后立即返回。
@@ -265,7 +296,8 @@ extern "C" int __stdcall Wlan_ScanCollect(int* networkCount)
 {
     if (!networkCount) return static_cast<int>(E_POINTER);
     *networkCount = 0;
-    EnsureScanLock();
+
+    ScanSnapshot& snap = ScanState();
 
     HANDLE h = nullptr;
     HRESULT hr = OpenWlan(&h);
@@ -286,17 +318,17 @@ extern "C" int __stdcall Wlan_ScanCollect(int* networkCount)
                 nullptr, &avail);
             if (shr == ERROR_SUCCESS && avail)
             {
-                EnterCriticalSection(&g_scanLock);
-                g_scanResults.clear();
+                EnterCriticalSection(&snap.lock);
+                snap.results.clear();
                 const auto* base = avail->Network;
-                g_scanResults.reserve(avail->dwNumberOfItems);
+                snap.results.reserve(avail->dwNumberOfItems);
                 for (DWORD i = 0; i < avail->dwNumberOfItems; ++i)
                 {
-                    g_scanResults.push_back(base[i]);
+                    snap.results.push_back(base[i]);
                 }
-                g_scanValid = true;
-                *networkCount = static_cast<int>(g_scanResults.size());
-                LeaveCriticalSection(&g_scanLock);
+                snap.valid = true;
+                *networkCount = static_cast<int>(snap.results.size());
+                LeaveCriticalSection(&snap.lock);
                 ::WlanFreeMemory(avail);
             }
         }
@@ -314,36 +346,30 @@ extern "C" int __stdcall Wlan_ScanGetItem(
     int* encrypted,
     int* is5G)
 {
-    EnsureScanLock();
+    ScanSnapshot& snap = ScanState();
+
+    // 修复（S2）：旧实现"第一段锁内校验 → 退锁 → 第二段锁内取用"，两段之间 Collect
+    // 可能 clear/缩短 vector，第二次下标取用越界（UB）。改为单次持锁完成校验+拷贝快照。
+    WLAN_AVAILABLE_NETWORK net{};
     {
-        EnterCriticalSection(&g_scanLock);
-        if (!g_scanValid || index < 0 || static_cast<size_t>(index) >= g_scanResults.size())
+        EnterCriticalSection(&snap.lock);
+        if (!snap.valid || index < 0 || static_cast<size_t>(index) >= snap.results.size())
         {
-            LeaveCriticalSection(&g_scanLock);
+            LeaveCriticalSection(&snap.lock);
             return static_cast<int>(E_BOUNDS);
         }
+        net = snap.results[static_cast<size_t>(index)];
+        LeaveCriticalSection(&snap.lock);
     }
+
     if (signalQuality) *signalQuality = 0;
     if (encrypted) *encrypted = 0;
     if (is5G) *is5G = 0;
 
-    WLAN_AVAILABLE_NETWORK net{};
-    EnterCriticalSection(&g_scanLock);
-    net = g_scanResults[static_cast<size_t>(index)];
-    LeaveCriticalSection(&g_scanLock);
-
     const auto& dot11 = net.dot11Ssid;
     if (ssid && ssidCch > 0)
     {
-        ssid[0] = L'\0';
-        auto len = dot11.uSSIDLength > static_cast<DWORD>(ssidCch) - 1
-                       ? static_cast<DWORD>(ssidCch) - 1
-                       : dot11.uSSIDLength;
-        for (DWORD i = 0; i < len; ++i)
-        {
-            ssid[i] = static_cast<wchar_t>(dot11.ucSSID[i]);
-        }
-        ssid[len] = L'\0';
+        DecodeSsidToWide(dot11.ucSSID, dot11.uSSIDLength, ssid, ssidCch);
     }
     if (signalQuality) *signalQuality = net.wlanSignalQuality;
     if (encrypted) *encrypted = (net.dot11DefaultAuthAlgorithm != DOT11_AUTH_ALGO_80211_OPEN ||

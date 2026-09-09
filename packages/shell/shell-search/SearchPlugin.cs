@@ -9,6 +9,15 @@ using BetterDesktop.Shell.Search.Services;
 
 namespace BetterDesktop.Shell.Search;
 
+// ============================================================
+// 【白话导航 · 搜索域】凭白话需求定位到精确文件：
+//   "开始菜单搜索的聚合入口"      → Services/StartMenuSearchService.cs（IStartMenuSearchService，合并各来源）
+//   "搜已安装程序"               → Services/ProgramSearchProvider.cs
+//   "搜文件"                     → Services/FileSearchProvider.cs
+//   "搜设置项"                   → Services/SettingsSearchProvider.cs
+//   "新增一个搜索来源"           → 实现 Contracts/ISearchResultProvider.cs（结果模型 Contracts/SearchResult.cs）
+// ============================================================
+
 /// <summary>
 /// 开始菜单搜索插件：注册内置 Provider（程序 / 设置 / 文件）并 Provide IStartMenuSearchService。
 /// 消费方（开始菜单搜索框等）通过 Inject 获取服务即可统一搜索三类结果。

@@ -8,6 +8,13 @@ using BetterDesktop.Shell.WindowTracker.Services;
 
 namespace BetterDesktop.Shell.WindowTracker;
 
+// ============================================================
+// 【白话导航 · 窗口追踪域】凭白话需求定位到精确文件：
+//   "当前运行中的应用 / 窗口列表"      → Services/WindowTrackerService.cs（对外服务）+ Native/RunningAppDetector.cs（Win32 枚举）
+//   "任务栏/Dock 怎么知道哪个应用在跑" → Inject IWindowTrackerService（本域 Provide，消除各 UI 包重复枚举）
+//   "鼠标悬停任务栏图标的窗口缩略图预览" → Thumbnail/DwmThumbnail.cs + Thumbnail/ThumbnailWindow.cs + Thumbnail/WindowPeek.cs（Aero Peek）
+// ============================================================
+
 /// <summary>
 /// 运行中窗口 / 应用追踪插件。
 /// 无对外依赖（仅消费 IAppSourceService），加载时 Provide IWindowTrackerService。

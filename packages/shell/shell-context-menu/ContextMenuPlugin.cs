@@ -2,87 +2,60 @@ using BetterDesktop.Kernel.Contracts;
 using BetterDesktop.Kernel.Core;
 using BetterDesktop.Shell.ContextMenus.Contracts;
 using BetterDesktop.Shell.ContextMenus.Services;
-using BetterDesktop.Shell.Core.Surface;
-using BetterDesktop.Shell.Core.Vibrancy;
 using BetterDesktop.Shell.Settings.Contracts;
 
 namespace BetterDesktop.Shell.ContextMenus;
 
+// ============================================================
+// 【白话导航 · 右键菜单域】任何 AI 接手时，凭白话需求定位到精确文件：
+//   "我想禁用/删掉某个右键菜单项（如某软件加的项）"   → Services/MenuManagerToggle.cs（启停/删除，写前备份）
+//   "我想新建/注入一个自己的右键菜单项"             → Services/MenuManagerCreate.cs（写 HKCU，键名前缀 UserMenu）
+//   "我想改右键菜单样式（Win10 / Win11 经典）"       → Services/MenuManagerStyle.cs（CLSID 样式开关）
+//   "我想按来源整体关掉一类菜单项"                 → Services/MenuManagerGroups.cs（BetterDesktop/ShellEx/系统 分组开关）
+//   "我想看/管理注册表里所有右键菜单项"             → Services/MenuManagerService.cs（枚举入口）+ Sections/MenuManagerSection.cs（设置 UI）
+//   "桌面图标/空白处右键不弹菜单"                   → Services/DesktopMenuDelegation.cs（图标→NativeMenuPopup；空白→explorer DefView 转发）
+//   "开始菜单条目的右键菜单"                       → shell-start-menu/Services/AppItemActions.cs（AttachNative）
+//   "dock 图标/应用提取器的右键菜单"               → shell-dock/Services/DockMenuPopup.cs + Templates/DockItemTemplate.cs（dock 自管例外）
+//   "右键菜单里加压缩/解压/回收站还原/新建文件"    → ZipOps.cs / RecycleRestore.cs / ShellNewCatalog.cs
+//   "第三方压缩工具/终端入菜单（7-Zip/WinRAR/WT…）" → Services/ToolCatalog.cs（工具发现与命令模板）
+//   "菜单项图标/显示名/访问键"                     → MenuItemIconCache.cs / MenuText.cs / MenuAccessKeys.cs / ResourceRef.cs / GuidInfo.cs
+//   "注册表写前备份 / 系统项夺权"                  → RegTreeBackup.cs / RegTakeover.cs
+//   "系统原生菜单的渲染通道（HMENU→TrackPopupMenuEx）" → Services/NativeMenuPopup.cs + StaComWorker.cs
+// ============================================================
+
 /// <summary>
-/// 右键菜单插件（context-menu）：向内核 Provide 统一菜单服务。
-/// 场景模板与贡献项由消费者插件（shell-desktop/shell-convert…）经
-/// IMenuService.RegisterTemplate / RegisterContributor 注册。
+/// 右键菜单插件（context-menu）——2026-09-05 架构收口后的定位：
+/// ①系统原生菜单接管（NativeMenuPopup：桌面/开始菜单/文件管理器等未申明自绘菜单的表面统一交给系统）；
+/// ②系统右键菜单管理器（MenuManager：注册表层枚举/启停/新建/注入/备份）。
+/// 自绘右键菜单已全面退役：dock 图标/应用提取器的菜单由 shell-dock 自管
+/// （DockItemTemplate + DockMenuPopup）；主体未申明菜单的表面不弹任何自研菜单。
 /// </summary>
 public sealed class ContextMenuPlugin : IPlugin
 {
-    private MenuService? _service;
-    private readonly List<IDisposable> _handles = [];
-
     public string Name => "context-menu";
 
     public IReadOnlyList<Type> Inject { get; } = [];
 
     public Task LoadAsync(IContext context, CancellationToken cancellationToken = default)
     {
-        var settings = context.Get<ISettingsService>();
-        var service = new MenuService(
-            context.Get<IAppearanceService>(),
-            context.Get<IVibrancyService>(),
-            settings);
-        _service = service;
-        context.Provide<IMenuService>(service);
+        // 【回归修复 2026-09-06 / P2-6】自绘管线退役后桌面/文件管理器右键恒走系统原生菜单
+        //（NativeMenuPopup / DesktopMenuDelegation），context-menu.mode 不再参与行为判定
+        //（旧值 custom = 完全不弹菜单的退化残留已移除；设置键保留兼容旧设置文件）。
+
         context.Provide<IFileClassifier>(new FileClassifier());
 
-        // 用户自定义项/快捷工具（零代码 DIY 层）：每个 Scope 注册一个贡献者，Build 时读设置热更新。
-        if (settings is not null)
-        {
-            foreach (MenuScope scope in Enum.GetValues<MenuScope>())
-            {
-                var contributor = new UserMenuContributor(settings, scope);
-                _handles.Add(service.RegisterContributor(contributor));
-            }
-        }
-        else
-        {
-            DiagnosticLog.Trace("context-menu", "ISettingsService 缺失：用户自定义菜单项未启用");
-        }
-
-        // 内置文件操作贡献者（计划 C7：记事本/编辑/打印/预览/ZIP/壁纸/快捷方式/还原/粘贴到/扩展 3 项）。
-        foreach (var scope in new[] { MenuScope.DesktopIcon, MenuScope.ShellFile })
-        {
-            _handles.Add(service.RegisterContributor(new BuiltInOpsContributor(scope)));
-        }
-
-        // M2：注册表静态 verb + ShellEx COM 透传（第三方软件右键项拿回）。
-        foreach (var scope in new[] { MenuScope.DesktopIcon, MenuScope.ShellFile, MenuScope.DockItem })
-        {
-            _handles.Add(service.RegisterContributor(new ShellMenuContributor(
-                scope,
-                isClsidDisabled: clsid => settings?.Get<List<string>>("context-menu.com.disabled", new List<string>())?
-                    .Contains(clsid, StringComparer.OrdinalIgnoreCase) == true,
-                shouldFlatten: () => settings?.Get(ShellMenuContributor.FlattenKey, false) ?? false)));
-        }
-
-        // 预热 ShellNew 缓存（计划 §5-2 秒开：HKCR 注册表扫描绝不允许发生在 BuildAsync 同步段）。
+        // 预热 ShellNew 缓存（注册表扫描移出同步段；ShellNewCatalog 独立扫注册表，不走已删除的 RegistryVerbs）。
         _ = Task.Run(ShellNewCatalog.Enumerate);
 
-        // 设置分区（「右键菜单」：功能状态 roadmap + 控制开关）
-        context.Get<ISettingsSectionRegistry>()?.Register(new Sections.ContextMenuSection());
+        // 设置分区（「右键菜单」：菜单来源总开关 + 样式 + 场景扩展 + 新建 + 备份；
+        // 2026-09-05 更名合并——原 ContextMenuSection（功能状态+控制）并入本分区，分区名与「菜单栏」区分。
+        context.Get<ISettingsSectionRegistry>()?.Register(new Sections.MenuManagerSection());
 
         return Task.CompletedTask;
     }
 
     public Task UnloadAsync(CancellationToken cancellationToken = default)
     {
-        foreach (var handle in _handles)
-        {
-            try { handle.Dispose(); }
-            catch { /* 注销失败不阻断（M10） */ }
-        }
-        _handles.Clear();
-        _service?.Dismiss();
-        _service?.Dispose();
-        _service = null;
         return Task.CompletedTask;
     }
 }

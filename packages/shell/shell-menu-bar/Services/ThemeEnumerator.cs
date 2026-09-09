@@ -32,9 +32,9 @@ internal static class ThemeEnumerator
             if (key is not null)
             {
                 var v = key.GetValue("AppsUseLightTheme");
-                if (v is not null) appsLight = Convert.ToInt32(v) != 0;
+                if (v is not null) appsLight = System.Convert.ToInt32(v) != 0;
                 v = key.GetValue("SystemUsesLightTheme");
-                if (v is not null) systemLight = Convert.ToInt32(v) != 0;
+                if (v is not null) systemLight = System.Convert.ToInt32(v) != 0;
             }
         }
         catch

@@ -127,25 +127,8 @@ internal sealed class StartMenuWindow : ShellWindow
                 return;
             }
 
-            // 统一右键弹层豁免（2026-09-02 收口）：弹层（ContextMenuPopupWindow）激活会抢走本窗口
-            // 焦点 → Deactivated。若因此立刻 Hide，弹层会浮在已消失的开始菜单位置。
-            // 豁免：菜单打开期间保持可见，菜单关闭（Closed）后补收尾。
-            var menus = _service.Menus;
-            if (menus is { IsOpen: true })
-            {
-                EventHandler? onClosed = null;
-                onClosed = (_, _) =>
-                {
-                    menus.Closed -= onClosed;
-                    if (IsVisible && !_inManualResize && !menus.IsOpen)
-                    {
-                        _service.Hide();
-                    }
-                };
-                menus.Closed += onClosed;
-                return;
-            }
-
+            // 2026-09-05 收口：自绘菜单管线退役，条目右键走系统原生菜单（explorer 进程内
+            // 渲染，不抢本窗口焦点）；原「弹层打开期间豁免关闭」逻辑随管线一并移除。
             _service.Hide();
         };
         PreviewKeyDown += OnPreviewKeyDown;
@@ -242,7 +225,10 @@ internal sealed class StartMenuWindow : ShellWindow
                 break;
             default:
                 var configuredWidth = _service.GetMenuWidth();
-                Width = Math.Clamp(configuredWidth, 400, Math.Min(700, wa.Width));
+                // C9 修复：工作区宽度 <400 时 Math.Clamp(min>max) 会抛 ArgumentException。
+                // 先把上限钳到工作区，下限取 min(400, 上限)，极小屏时宽度收缩到工作区而非崩溃。
+                var maxWidth = Math.Min(700, wa.Width);
+                Width = Math.Clamp(configuredWidth, Math.Min(400, maxWidth), maxWidth);
                 Height = Math.Min(520, wa.Height);
                 break;
         }
@@ -300,9 +286,11 @@ internal sealed class StartMenuWindow : ShellWindow
         if (top + height > areaBottom)
         {
             height = areaBottom - top;
+            // C9 修复：极小工作区放不下 MinHeight 时，不再强制 MinHeight 把窗口推出屏幕，
+            // 而是收缩到可用高度（能显示多少显示多少），避免越界。
             if (height < MinHeight)
             {
-                height = MinHeight;
+                height = Math.Max(0, Math.Min(MinHeight, areaBottom - areaTop));
             }
         }
 

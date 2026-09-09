@@ -16,6 +16,14 @@ using BetterDesktop.Shell.Status.Native;
 
 namespace BetterDesktop.Shell.MenuBar.Services;
 
+// ── 本文件方法级白话索引（WiFi 原生枚举/连接，白话 → 方法）──
+//   "读当前连接（SSID/IP/信号/MAC/速率）" → ReadCurrentConnection（缓存）/ ReadCurrentConnectionCore / ReadCurrentConnectionManaged / SupplementFromManaged / ReadConnectedSsidAndPhySpeed；缓存失效 InvalidateConnectionCache
+//   "扫附近网络（托管 + 原生 WLAN API）" → ScanNearbyAsync / ScanAvailableNetworks；隐藏网络排后 SortHiddenLast；SSID 解码 DecodeSsid
+//   "连接/带密码连接/断开/删配置/等待连上" → Connect / ConnectWithPassword / Disconnect / DeleteProfile / WaitForConnectionAsync / CleanupFailedConnection
+//   "探测网络认证/加密方式"           → ProbeNetworkAuthCipher；MAC 格式化 FormatMac
+//   面板 UI 在 Windows/WifiPopupWindow.cs。
+// ────────────────────────────────────
+
 /// <summary>当前连接的 Wi‑Fi 信息快照。</summary>
 public sealed record WifiConnectedInfo(
     string Ssid,                // 当前连接的 SSID（无连接时为空）

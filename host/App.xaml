@@ -40,11 +40,23 @@
         <sys:Double x:Key="SkinDarkenOpacity">0</sys:Double>
         <SolidColorBrush x:Key="SkinAccentFromSkin" Color="#FF0A84FF" />
 
-        <!-- macOS 风开关（Toggle） -->
+        <!-- 设置中心分组卡片表面令牌：由 SettingsUi 用 SetResourceReference 动态引用（一处改、所有分区卡片
+             自动跟随）。半透明白叠加而非实色，保留毛玻璃通透感，不遮挡底层材质。 -->
+        <SolidColorBrush x:Key="SettingsCardBackground" Color="#FFFFFF" Opacity="0.055" />
+        <SolidColorBrush x:Key="SettingsCardBorder" Color="#FFFFFF" Opacity="0.10" />
+
+        <!-- 开关开启色：macOS 系统绿。收口为令牌，便于主题/皮肤后续统一替换（当前保持 macOS 观感）。 -->
+        <SolidColorBrush x:Key="ToggleOnBrush" Color="#FF34C759" />
+
+        <!-- macOS 风开关（Toggle）
+             视觉要点：①开启色走 ToggleOnBrush 令牌；②旋钮用 RenderTransform 补间 180ms 滑动
+             ——刻意不动画 Margin/Alignment，避免每帧触发布局；③键盘聚焦显示强调色焦点环
+             （可达性：状态不靠 hover 单独表达）。 -->
         <Style x:Key="MacToggle" TargetType="CheckBox">
             <Setter Property="Foreground" Value="{DynamicResource ControlForeground}" />
             <Setter Property="FontSize" Value="13.5" />
             <Setter Property="VerticalContentAlignment" Value="Center" />
+            <Setter Property="Cursor" Value="Hand" />
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="CheckBox">
@@ -55,22 +67,62 @@
                             </Grid.ColumnDefinitions>
                             <ContentPresenter Grid.Column="1" VerticalAlignment="Center"
                                               Margin="0,0,12,0" />
-                            <Border x:Name="track" Grid.Column="0" Width="40" Height="23"
-                                    CornerRadius="11.5" Background="{DynamicResource ControlTrack}"
-                                    VerticalAlignment="Center" HorizontalAlignment="Right">
-                                <Ellipse x:Name="knob" Width="19" Height="19" Fill="White"
-                                         Margin="2,0,0,0" HorizontalAlignment="Left"
-                                         VerticalAlignment="Center" />
-                            </Border>
+                            <Grid Grid.Column="0" Width="40" Height="23"
+                                  VerticalAlignment="Center" HorizontalAlignment="Right">
+                                <!-- 焦点环：仅键盘聚焦可见，外扩 3px 不挤压布局 -->
+                                <Border x:Name="focusRing" Margin="-3" CornerRadius="13.5"
+                                        BorderBrush="{DynamicResource SkinAccentFromSkin}"
+                                        BorderThickness="2" Opacity="0" IsHitTestVisible="False" />
+                                <Border x:Name="track" CornerRadius="11.5"
+                                        Background="{DynamicResource ControlTrack}">
+                                    <Ellipse x:Name="knob" Width="19" Height="19" Fill="White"
+                                             Margin="2,0,0,0" HorizontalAlignment="Left"
+                                             VerticalAlignment="Center">
+                                        <Ellipse.RenderTransform>
+                                            <TranslateTransform X="0" Y="0" />
+                                        </Ellipse.RenderTransform>
+                                    </Ellipse>
+                                </Border>
+                            </Grid>
                         </Grid>
                         <ControlTemplate.Triggers>
                             <Trigger Property="IsChecked" Value="True">
-                                <Setter TargetName="track" Property="Background" Value="#FF34C759" />
-                                <Setter TargetName="knob" Property="Margin" Value="0,0,2,0" />
-                                <Setter TargetName="knob" Property="HorizontalAlignment" Value="Right" />
+                                <Setter TargetName="track" Property="Background" Value="{DynamicResource ToggleOnBrush}" />
+                                <Trigger.EnterActions>
+                                    <BeginStoryboard>
+                                        <Storyboard>
+                                            <DoubleAnimation Storyboard.TargetName="knob"
+                                                             Storyboard.TargetProperty="RenderTransform.(TranslateTransform.X)"
+                                                             To="17" Duration="0:0:0.18">
+                                                <DoubleAnimation.EasingFunction>
+                                                    <CubicEase EasingMode="EaseOut" />
+                                                </DoubleAnimation.EasingFunction>
+                                            </DoubleAnimation>
+                                        </Storyboard>
+                                    </BeginStoryboard>
+                                </Trigger.EnterActions>
+                                <Trigger.ExitActions>
+                                    <BeginStoryboard>
+                                        <Storyboard>
+                                            <DoubleAnimation Storyboard.TargetName="knob"
+                                                             Storyboard.TargetProperty="RenderTransform.(TranslateTransform.X)"
+                                                             To="0" Duration="0:0:0.18">
+                                                <DoubleAnimation.EasingFunction>
+                                                    <CubicEase EasingMode="EaseOut" />
+                                                </DoubleAnimation.EasingFunction>
+                                            </DoubleAnimation>
+                                        </Storyboard>
+                                    </BeginStoryboard>
+                                </Trigger.ExitActions>
                             </Trigger>
                             <Trigger Property="IsMouseOver" Value="True">
                                 <Setter TargetName="track" Property="Opacity" Value="0.88" />
+                            </Trigger>
+                            <Trigger Property="IsKeyboardFocused" Value="True">
+                                <Setter TargetName="focusRing" Property="Opacity" Value="0.9" />
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter Property="Opacity" Value="0.45" />
                             </Trigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>
@@ -154,7 +206,7 @@
             </Setter>
         </Style>
 
-        <!-- macOS 风按钮 -->
+        <!-- macOS 风按钮（视觉结果与改造前一致，仅叠加键盘焦点环） -->
         <Style x:Key="MacButton" TargetType="Button">
             <Setter Property="Height" Value="32" />
             <Setter Property="Padding" Value="16,0" />
@@ -165,10 +217,15 @@
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="Button">
-                        <Border x:Name="b" Background="{TemplateBinding Background}"
-                                CornerRadius="7" SnapsToDevicePixels="True">
+                        <Grid>
+                            <Border x:Name="b" Background="{TemplateBinding Background}"
+                                    CornerRadius="7" SnapsToDevicePixels="True" />
+                            <Border x:Name="focusRing" CornerRadius="7" Margin="-2"
+                                    BorderBrush="{DynamicResource SkinAccentFromSkin}"
+                                    BorderThickness="2" Opacity="0" IsHitTestVisible="False"
+                                    SnapsToDevicePixels="True" />
                             <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
-                        </Border>
+                        </Grid>
                         <ControlTemplate.Triggers>
                             <Trigger Property="IsMouseOver" Value="True">
                                 <Setter TargetName="b" Property="Background" Value="{DynamicResource ControlBackgroundHover}" />
@@ -176,29 +233,51 @@
                             <Trigger Property="IsPressed" Value="True">
                                 <Setter TargetName="b" Property="Background" Value="{DynamicResource ControlBackgroundPressed}" />
                             </Trigger>
+                            <Trigger Property="IsKeyboardFocused" Value="True">
+                                <Setter TargetName="focusRing" Property="Opacity" Value="0.9" />
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter Property="Opacity" Value="0.45" />
+                            </Trigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>
                 </Setter.Value>
             </Setter>
         </Style>
 
-        <!-- 强调蓝按钮（清晰系统蓝，在深色毛玻璃上对比明确） -->
+        <!-- 强调按钮：底色取强调色令牌 SkinAccentFromSkin（默认 #FF0A84FF，与改造前同色），
+             使皮肤/主题切换时自动跟随。hover/press 改用叠加遮罩而非换底色——
+             这样任意强调色都能派生出一致的明暗反馈，不必为每种颜色手写一组色值。 -->
         <Style x:Key="MacAccentButton" TargetType="Button" BasedOn="{StaticResource MacButton}">
-            <Setter Property="Background" Value="#FF0A84FF" />
+            <Setter Property="Background" Value="{DynamicResource SkinAccentFromSkin}" />
             <Setter Property="Foreground" Value="White" />
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="Button">
-                        <Border x:Name="b" Background="{TemplateBinding Background}"
-                                CornerRadius="7" SnapsToDevicePixels="True">
+                        <Grid>
+                            <Border x:Name="b" Background="{TemplateBinding Background}"
+                                    CornerRadius="7" SnapsToDevicePixels="True" />
+                            <Border x:Name="shade" CornerRadius="7" Background="White" Opacity="0"
+                                    IsHitTestVisible="False" />
+                            <Border x:Name="focusRing" CornerRadius="7" Margin="-2"
+                                    BorderBrush="{DynamicResource SkinAccentFromSkin}"
+                                    BorderThickness="2" Opacity="0" IsHitTestVisible="False"
+                                    SnapsToDevicePixels="True" />
                             <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
-                        </Border>
+                        </Grid>
                         <ControlTemplate.Triggers>
                             <Trigger Property="IsMouseOver" Value="True">
-                                <Setter TargetName="b" Property="Background" Value="#FF3B9BFF" />
+                                <Setter TargetName="shade" Property="Opacity" Value="0.14" />
                             </Trigger>
                             <Trigger Property="IsPressed" Value="True">
-                                <Setter TargetName="b" Property="Background" Value="#FF0A6FD6" />
+                                <Setter TargetName="shade" Property="Background" Value="Black" />
+                                <Setter TargetName="shade" Property="Opacity" Value="0.18" />
+                            </Trigger>
+                            <Trigger Property="IsKeyboardFocused" Value="True">
+                                <Setter TargetName="focusRing" Property="Opacity" Value="0.9" />
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter Property="Opacity" Value="0.45" />
                             </Trigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>
@@ -206,7 +285,10 @@
             </Setter>
         </Style>
 
-        <!-- macOS 风滑块（亮色轨道 + 亮色 thumb，避免系统默认黑） -->
+        <!-- macOS 风滑块（亮色轨道 + 亮色 thumb，避免系统默认黑）
+             补充：已填充区间（轨道左侧到 thumb）用强调色表达，解决此前"只有一根轨道、看不出当前值占比"。
+             实现取 Track 的 DecreaseRepeatButton 槽位——它天然占据"起点→thumb"区间，无需转换器；
+             并设 IsHitTestVisible=False / Focusable=False，保持"只有 thumb 可拖动"的既有交互不变。 -->
         <Style x:Key="MacSlider" TargetType="Slider">
             <Setter Property="Foreground" Value="{DynamicResource ControlForeground}" />
             <Setter Property="Background" Value="Transparent" />
@@ -219,11 +301,52 @@
                             <Border x:Name="Track" Height="4" CornerRadius="2"
                                     Background="{DynamicResource ControlTrack}" VerticalAlignment="Center" />
                             <Track x:Name="PART_Track" VerticalAlignment="Center">
+                                <Track.DecreaseRepeatButton>
+                                    <RepeatButton IsHitTestVisible="False" Focusable="False">
+                                        <RepeatButton.Template>
+                                            <ControlTemplate TargetType="RepeatButton">
+                                                <!-- 右侧 -7px 让填充延伸到 thumb 中心，接缝无断口 -->
+                                                <Border Height="4" CornerRadius="2" Margin="0,0,-7,0"
+                                                        Background="{DynamicResource SkinAccentFromSkin}"
+                                                        VerticalAlignment="Center" />
+                                            </ControlTemplate>
+                                        </RepeatButton.Template>
+                                    </RepeatButton>
+                                </Track.DecreaseRepeatButton>
+                                <Track.IncreaseRepeatButton>
+                                    <RepeatButton IsHitTestVisible="False" Focusable="False" Opacity="0" />
+                                </Track.IncreaseRepeatButton>
                                 <Track.Thumb>
                                     <Thumb Width="16" Height="16" Cursor="Hand">
                                         <Thumb.Template>
                                             <ControlTemplate TargetType="Thumb">
-                                                <Ellipse Fill="{DynamicResource ControlForeground}" Stroke="#FF0A84FF" StrokeThickness="1.5" />
+                                                <Grid Background="Transparent">
+                                                    <Ellipse x:Name="dot"
+                                                             Fill="{DynamicResource ControlForeground}"
+                                                             Stroke="{DynamicResource SkinAccentFromSkin}"
+                                                             StrokeThickness="1.5"
+                                                             RenderTransformOrigin="0.5,0.5">
+                                                        <Ellipse.RenderTransform>
+                                                            <ScaleTransform ScaleX="1" ScaleY="1" />
+                                                        </Ellipse.RenderTransform>
+                                                    </Ellipse>
+                                                </Grid>
+                                                <ControlTemplate.Triggers>
+                                                    <Trigger Property="IsMouseOver" Value="True">
+                                                        <Setter TargetName="dot" Property="RenderTransform">
+                                                            <Setter.Value>
+                                                                <ScaleTransform ScaleX="1.16" ScaleY="1.16" />
+                                                            </Setter.Value>
+                                                        </Setter>
+                                                    </Trigger>
+                                                    <Trigger Property="IsDragging" Value="True">
+                                                        <Setter TargetName="dot" Property="RenderTransform">
+                                                            <Setter.Value>
+                                                                <ScaleTransform ScaleX="0.9" ScaleY="0.9" />
+                                                            </Setter.Value>
+                                                        </Setter>
+                                                    </Trigger>
+                                                </ControlTemplate.Triggers>
                                             </ControlTemplate>
                                         </Thumb.Template>
                                     </Thumb>

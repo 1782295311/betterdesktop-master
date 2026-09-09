@@ -29,7 +29,6 @@ using BetterDesktop.Shell.Core.Vibrancy;
 using BetterDesktop.Shell.Desktop.Contracts;
 using BetterDesktop.Shell.Desktop.Controls; // 复用 RelayCommand / DesktopItemRenderer 同款基础设施
 using BetterDesktop.Shell.Desktop.Services;
-using BetterDesktop.Shell.Desktop.Templates;
 using BetterDesktop.Shell.Settings.Contracts;
 
 namespace BetterDesktop.Shell.Desktop.Windows;
@@ -44,8 +43,6 @@ public sealed class FolderBrowserWindow : ShellWindow
 
     private readonly IVibrancyService _vibrancy;
     private readonly ISettingsService? _settings;
-    private readonly BetterDesktop.Shell.ContextMenus.Contracts.IMenuService? _menus;
-    private readonly BetterDesktop.Shell.ContextMenus.Contracts.IFileClassifier? _classifier;
     private readonly List<IDisposable> _menuHandles = [];
     private readonly Dictionary<Border, string> _cellPaths = [];
     private string _path;
@@ -55,15 +52,11 @@ public sealed class FolderBrowserWindow : ShellWindow
     private ScrollViewer? _scroll;
 
     private FolderBrowserWindow(string path, IVibrancyService vibrancy, IAppearanceService? appearance,
-        ISettingsService? settings = null,
-        BetterDesktop.Shell.ContextMenus.Contracts.IMenuService? menus = null,
-        BetterDesktop.Shell.ContextMenus.Contracts.IFileClassifier? classifier = null)
+        ISettingsService? settings = null)
         : base(appearance, vibrancy)
     {
         _vibrancy = vibrancy;
         _settings = settings;
-        _menus = menus;
-        _classifier = classifier;
         _path = path;
 
         Title = "文件";
@@ -75,12 +68,8 @@ public sealed class FolderBrowserWindow : ShellWindow
 
         BuildContent();
 
-        // 统一右键菜单（shell-context-menu）：Scope=ShellFile 模板 + 能力过滤
-        if (_menus is not null)
-        {
-            _menuHandles.Add(_menus.RegisterTemplate(new FolderMenuTemplate(this)));
-            PreviewMouseRightButtonUp += OnMenuMouseUp;
-        }
+        // 2026-09-05 收口：文件管理器条目右键 → 系统原生菜单（自绘管线退役，无条件挂接）。
+        PreviewMouseRightButtonUp += OnMenuMouseUp;
     }
 
     // ======== 窗口属性：文档窗口（可激活、任务栏可见、不置顶、可缩放） ========
@@ -104,9 +93,7 @@ public sealed class FolderBrowserWindow : ShellWindow
 
     /// <summary>打开目录浏览窗口：已有实例则导航到目标目录并置前，否则新建。</summary>
     public static void Open(string path, IVibrancyService vibrancy, IAppearanceService? appearance,
-        ISettingsService? settings = null,
-        BetterDesktop.Shell.ContextMenus.Contracts.IMenuService? menus = null,
-        BetterDesktop.Shell.ContextMenus.Contracts.IFileClassifier? classifier = null)
+        ISettingsService? settings = null)
     {
         if (_instance is { IsLoaded: true })
         {
@@ -221,8 +208,8 @@ public sealed class FolderBrowserWindow : ShellWindow
         };
 
         var body = new DockPanel();
-        DockPanel.SetDock(titleBar, Dock.Top);
-        DockPanel.SetDock(toolRow, Dock.Top);
+        DockPanel.SetDock(titleBar, System.Windows.Controls.Dock.Top);
+        DockPanel.SetDock(toolRow, System.Windows.Controls.Dock.Top);
         body.Children.Add(titleBar);
         body.Children.Add(toolRow);
         body.Children.Add(_scroll);
@@ -374,34 +361,20 @@ public sealed class FolderBrowserWindow : ShellWindow
 
     private void OnMenuMouseUp(object sender, MouseButtonEventArgs e)
     {
-        if (_menus is null)
-        {
-            return;
-        }
-
+        // 范围收口（2026-09-05 用户拍板）：文件管理器条目右键 → 只弹系统原生菜单，
+        // 不再回退自研管线（自研右键菜单只保留 dock 图标/应用提取器）。
         var path = FindCellPath(e.OriginalSource as DependencyObject);
         if (path is null)
         {
             return; // 空白处无菜单（浏览窗口空白不弹，避免误触）
         }
 
-        try
-        {
-            var dpi = VisualTreeHelper.GetDpi(this).PixelsPerDip;
-            var physical = PointToScreen(e.GetPosition(this));
-            var identity = _classifier?.Classify(path);
-            var request = new BetterDesktop.Shell.ContextMenus.Contracts.MenuRequest(
-                BetterDesktop.Shell.ContextMenus.Contracts.MenuScope.ShellFile,
-                new FolderItemTarget(path, Directory.Exists(path)),
-                new Point(physical.X / dpi, physical.Y / dpi),
-                File: identity,
-                ShiftPressed: (System.Windows.Input.Keyboard.Modifiers & System.Windows.Input.ModifierKeys.Shift) != 0);
-            _ = _menus.ShowAsync(request);
-        }
-        catch (Exception ex)
-        {
-            DiagnosticLog.Trace("shell.desktop", $"右键菜单展示失败: {ex.Message}");
-        }
+        // 【回归修复 2026-09-06 / P2-6】移除 IsNativeMode 无菜单门控：任何模式下都弹系统原生菜单。
+
+        _ = BetterDesktop.Shell.ContextMenus.Services.NativeMenuPopup.TryShowItems(
+            [path],
+            PointToScreen(e.GetPosition(this)),
+            (System.Windows.Input.Keyboard.Modifiers & System.Windows.Input.ModifierKeys.Shift) != 0);
     }
 
     private string? FindCellPath(DependencyObject? source)

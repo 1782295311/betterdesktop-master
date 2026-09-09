@@ -12,23 +12,42 @@ using System.Windows.Data;
 using System.Windows.Media;
 using System.Windows.Shapes;
 using System.Windows.Threading;
-using BetterDesktop.Shell.MenuBar.Contracts;
-using BetterDesktop.Shell.MenuBar.Services;
 using BetterDesktop.Shell.Core.Surface;
 using BetterDesktop.Shell.Core.Vibrancy;
+using BetterDesktop.Shell.MenuBar.Contracts;
+using BetterDesktop.Shell.MenuBar.Services;
 using BetterDesktop.Shell.Status.Native;
 
 namespace BetterDesktop.Shell.MenuBar.Windows;
 
+// ── 本文件方法级白话索引（网络面板，白话 → 方法）──
+//   "公网信息区（IP/归属地）"   → BuildPublicSection；公网 IP 异步获取 LoadPublicIpAsyncFireAndForget
+//                                  （B10 已修：八字段初值改为中性「—」，不再展示硬编码假数据）
+//   "局域网信息区（网卡/网关）" → BuildLocalSection
+//   "实时流量曲线图"            → BuildTrafficChart；速率汇总 BuildSpeedSummary / MakeDirectionCell
+//   "外部推流量数据/定时刷新"   → AttachRefresh / OnTick / PushBar；WiFi 字形 BuildWifiGlyph
+//   数据模型 NetworkPanelViewModel（INotifyPropertyChanged）。面板族同构见 MemoryPanelWindow。
+// B8 已修：IsVisibleChanged 隐藏 Pause/显示 Resume、Closed CloseSelf 停 timer。
+// ────────────────────────────────────
+
 /// <summary>NETWORK 独立面板（截图左一）。</summary>
 internal sealed class NetworkPanelWindow : MenuBarPopupWindow
 {
+    private NetworkPanelViewModel? _vm;
+
     public NetworkPanelWindow(IVibrancyService vibrancy, IAppearanceService? appearance = null)
         : base(vibrancy, appearance)
     {
         Width = NativePanelStyles.DefaultWidth;
         MinWidth = NativePanelStyles.DefaultWidth;
         SizeToContent = SizeToContent.Height;
+        // B8：隐藏即停轮询、显示恢复并立即刷新、关闭彻底停止（释放控件树闭包）。
+        IsVisibleChanged += (_, e) =>
+        {
+            if (e.NewValue is true) _vm?.Resume();
+            else _vm?.Pause();
+        };
+        Closed += (_, _) => _vm?.CloseSelf();
     }
 
     public FrameworkElement BuildPreviewContent() => BuildContent();
@@ -51,7 +70,7 @@ internal sealed class NetworkPanelWindow : MenuBarPopupWindow
 
     protected override FrameworkElement BuildContent()
     {
-        var vm = new NetworkPanelViewModel();
+        var vm = _vm = new NetworkPanelViewModel();
         var root = NativePanelStyles.Root(withColumn: col =>
         {
             // ---------- 顶部标题 ----------
@@ -375,14 +394,16 @@ internal sealed class NetworkPanelWindow : MenuBarPopupWindow
 /// 实现 INotifyPropertyChanged，使上下行速率/用量等数据变化实时反映到绑定的 UI 上。</summary>
 internal sealed class NetworkPanelViewModel : INotifyPropertyChanged
 {
-    private string _publicIp = "58.241.3.98（查询中…）";
-    private string _publicGeo = "中国 江苏 无锡市";
-    private string _localIp = "10.2.83.51";
-    private string _currentThroughputLabel = "282.8 KB";
-    private string _uploadSpeedLabel = "26.5KB/s";
-    private string _uploadTotalLabel = "117.7 MB";
-    private string _downloadSpeedLabel = "277.4KB/s";
-    private string _downloadTotalLabel = "163.2 MB";
+    // 初值一律中性占位「—」：真实值由构造快照 / OnTick / 公网查询异步覆盖；
+    // 原生统计不可用或离线时保持「—」，绝不能展示开发者本机快照之类的假数据（B10）。
+    private string _publicIp = "—";
+    private string _publicGeo = "—";
+    private string _localIp = "—";
+    private string _currentThroughputLabel = "—";
+    private string _uploadSpeedLabel = "—";
+    private string _uploadTotalLabel = "—";
+    private string _downloadSpeedLabel = "—";
+    private string _downloadTotalLabel = "—";
 
     public string PublicIp { get => _publicIp; private set => Set(ref _publicIp, value); }
     public string PublicGeo { get => _publicGeo; private set => Set(ref _publicGeo, value); }
@@ -435,6 +456,23 @@ internal sealed class NetworkPanelViewModel : INotifyPropertyChanged
     {
         _refreshChart = refresh;
         _refreshChart?.Invoke(_bars.Length, _bars);
+    }
+
+    /// <summary>面板隐藏：停止 1s 轮询（B8）。</summary>
+    public void Pause() => _timer.Stop();
+
+    /// <summary>面板重新显示：恢复轮询并立即刷一帧（B8）。</summary>
+    public void Resume()
+    {
+        if (!_timer.IsEnabled) _timer.Start();
+        OnTick(null, EventArgs.Empty);
+    }
+
+    /// <summary>窗口最终关闭：停轮询并释放图表刷新闭包（B8）。</summary>
+    public void CloseSelf()
+    {
+        _timer.Stop();
+        _refreshChart = null;
     }
 
     private async void LoadPublicIpAsyncFireAndForget()

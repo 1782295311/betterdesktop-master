@@ -1,9 +1,10 @@
 // BetterDesktop.Shell.StartMenu — MonitorInterop
 // 监视器 P/Invoke 收口：获取鼠标光标所在监视器的可用工作区（物理像素）。
-// 供开始菜单定位（多显示器 / 跨 DPI）使用；其他业务代码不得直接 P/Invoke。
+// 供开始菜单定位（多显示器 / 跨 DPI）使用；P/Invoke 声明已统一收口到 shell-core/Native（NativeMethods）。
 
 using System;
 using System.Runtime.InteropServices;
+using BetterDesktop.Shell.Core.Native;
 
 namespace BetterDesktop.Shell.StartMenu.Native;
 
@@ -34,16 +35,20 @@ internal static class MonitorInterop
     {
         try
         {
-            var cursor = GetCursorPos();
-            var monitor = MonitorFromPoint(cursor.X, cursor.Y);
+            if (!NativeMethods.GetCursorPos(out var cursor))
+            {
+                return null;
+            }
+
+            var monitor = NativeMethods.MonitorFromPoint(cursor, NativeMethods.MONITOR_DEFAULTTONEAREST);
             if (monitor == IntPtr.Zero)
             {
                 return null;
             }
 
-            var info = new MONITORINFO();
-            info.cbSize = (uint)Marshal.SizeOf<MONITORINFO>();
-            if (!GetMonitorInfo(monitor, ref info))
+            var info = new NativeMethods.MONITORINFO();
+            info.cbSize = Marshal.SizeOf<NativeMethods.MONITORINFO>();
+            if (!NativeMethods.GetMonitorInfo(monitor, ref info))
             {
                 return null;
             }
@@ -65,10 +70,9 @@ internal static class MonitorInterop
     /// </summary>
     private static (int X, int Y) GetEffectiveDpi(IntPtr hMonitor)
     {
-        const int MDT_EFFECTIVE_DPI = 0;
         try
         {
-            if (GetDpiForMonitor(hMonitor, MDT_EFFECTIVE_DPI, out var dpiX, out var dpiY) == 0)
+            if (NativeMethods.GetDpiForMonitor(hMonitor, NativeMethods.MDT_EFFECTIVE_DPI, out var dpiX, out var dpiY) == 0)
             {
                 return ((int)dpiX, (int)dpiY);
             }
@@ -80,55 +84,4 @@ internal static class MonitorInterop
 
         return (0, 0);
     }
-
-    [StructLayout(LayoutKind.Sequential)]
-    private struct POINT
-    {
-        public int X;
-        public int Y;
-    }
-
-    [StructLayout(LayoutKind.Sequential)]
-    private struct RECT
-    {
-        public int Left;
-        public int Top;
-        public int Right;
-        public int Bottom;
-    }
-
-    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Auto)]
-    private struct MONITORINFO
-    {
-        public uint cbSize;
-        public RECT rcMonitor;
-        public RECT rcWork;
-        public uint dwFlags;
-    }
-
-    private const int MonitorDefaultToNearest = 2;
-
-    [DllImport("user32.dll")]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool GetCursorPos(out POINT lpPoint);
-
-    [DllImport("user32.dll")]
-    private static extern IntPtr MonitorFromPoint(int x, int y, uint dwFlags);
-
-    [DllImport("shcore.dll")]
-    private static extern int GetDpiForMonitor(IntPtr hmonitor, int dpiType, out uint dpiX, out uint dpiY);
-
-    [DllImport("user32.dll", CharSet = CharSet.Auto)]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool GetMonitorInfo(IntPtr hMonitor, ref MONITORINFO lpmi);
-
-    private static POINT GetCursorPos()
-    {
-        var cursor = new POINT();
-        GetCursorPos(out cursor);
-        return cursor;
-    }
-
-    private static IntPtr MonitorFromPoint(int x, int y)
-        => MonitorFromPoint(x, y, MonitorDefaultToNearest);
 }

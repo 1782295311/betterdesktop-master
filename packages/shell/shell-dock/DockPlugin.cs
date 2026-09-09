@@ -5,20 +5,35 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
 using BetterDesktop.Kernel.Contracts;
+using BetterDesktop.Kernel.Core;
 using BetterDesktop.Shell.AppSource.Contracts;
 using BetterDesktop.Shell.ContextMenus.Contracts;
-using BetterDesktop.Shell.Settings.Contracts;
+using BetterDesktop.Shell.Core;
 using BetterDesktop.Shell.Core.Animation;
 using BetterDesktop.Shell.Core.Surface;
 using BetterDesktop.Shell.Core.Vibrancy;
 using BetterDesktop.Shell.Dock.Services;
 using BetterDesktop.Shell.Pinning.Contracts;
+using BetterDesktop.Shell.Settings.Contracts;
 using BetterDesktop.Shell.WindowTracker.Contracts;
 
 namespace BetterDesktop.Shell.Dock;
 
+// ============================================================
+// 【白话导航 · Dock 域】凭白话需求定位到精确文件：
+//   "Dock 显示/隐藏、显隐动画节奏"        → DockWindow.xaml.cs（窗口本体）+ DockTickPolicy.cs（帧节拍）
+//   "Dock 贴边/占屏（AppBar 协商）"       → DockWindow.AppBar.cs + Native/DockAppBarReservation.cs
+//   "Dock 上有哪些图标/固定/排序/分组"    → Services/DockAppsService.cs + Services/AppGroupStore.cs（数据）、Services/DockItemTemplate.cs（项模板）
+//   "Dock 布局/尺寸/边距/放大效果"        → Services/DockLayoutService.cs + Models/DockLayoutMetrics.cs + Controls/DockItem.xaml.cs
+//   "Dock 图标右键菜单"                  → Services/DockMenuPopup.cs（dock 自管 WPF 菜单）+ Services/DockItemTemplate.cs
+//   "应用提取器/拖拽排序窗口"             → Windows/AppGrabberWindow.cs
+//   "Dock 图标模糊/高清"                 → Services/DockIconService.cs（图标来自 shell-app-source）
+//   "拼音/字母搜索匹配"                  → Services/PinyinMatcher.cs
+//   "Win 键/多任务视图等键盘互操作"       → Native/KeyboardInterop.cs、Native/MultitaskingViewVisibilityService.cs
+// ============================================================
+
 /// <summary>
-/// Dock 插件：管理 Dock 本体（应用管理中心 AppGrabber 已废弃，由开始菜单"所有应用"接管）。
+/// Dock 插件：管理 Dock 本体与应用提取器（AppGrabberWindow，经 "shell.appgrabber.show" 事件唤起）。
 /// 应用来源/图标等底层能力统一由 shell.app-source 插件通过 Inject 注入，
 /// 本插件不再手动 new AppSourceService / Win32IconProvider，消除强耦合。
 /// </summary>
@@ -46,8 +61,9 @@ public sealed class DockPlugin : IPlugin
     private IVibrancyService? _vibrancy;
     private IAppearanceService? _appearance;
     private IEventBus? _events;
-    private readonly List<IDisposable> _menuHandles = [];
-    private DockItemTemplate? _dockItemTemplate;
+    private IDisposable? _appGrabberShowSub;
+    private ISettingsService? _settings;
+    private IContext? _buildContext;
 
     public DockPlugin()
     {
@@ -62,8 +78,35 @@ public sealed class DockPlugin : IPlugin
     public Task LoadAsync(IContext context, CancellationToken cancellationToken = default)
     {
         // 组件开关：系统管理"组件管理"里的 Dock 栏开关（components.dock）。
-        // 关闭则不创建任何 Dock 窗口（含 Launchpad / 应用提取器）。默认启用。
+        // 关闭则不创建任何 Dock 窗口（含应用提取器 AppGrabber，其已融合原 Launchpad 能力）。默认启用。
+        // 2026-09-07：订阅与依赖获取前置——dock=false 启动也订阅，运行中经自绘/系统右键开关
+        // 切回开启时热建窗口（BuildDockWindow），无需重启宿主。
         var settings = context.Get<ISettingsService>();
+        _settings = settings;
+        if (settings is not null)
+        {
+            // 违规1修复：跨程序集裸 event → IEventBus，Effect 托管生命周期
+            context.Effect(() => context.Events.On<SettingsChangedEventArgs>(
+                ShellEvents.SettingsChanged,
+                (e, _) =>
+                {
+                    OnSettingsChanged(e);
+                    return Task.CompletedTask;
+                }));
+        }
+
+        _buildContext = context;
+        _vibrancy = context.Get<IVibrancyService>()!;
+        _appSourceService = context.Get<IAppSourceService>()!;
+        _appIconService = context.Get<IAppIconService>()!;
+        _events = context.Events;
+        // 通用固定/收藏服务（shell.pinning）：Dock 固定列表经 IPinningService("dock") 承载。
+        _pinningService = context.Get<IPinningService>()!;
+        // 全局外观服务（由 shell.settings 的 SettingsPlugin Provide）：让 Dock 系窗口
+        // 的根 Border 描边跟随主题统一驱动（基类 ApplySurfaceChrome 生效）。
+        // 注：圆角裁剪路线（SetWindowRgn）已在本项目 layered 窗口证伪并弃用，窗口走系统默认直角。
+        _appearance = context.Get<IAppearanceService>();
+
         if (settings is not null && !settings.Get("components.dock", true))
         {
             return Task.CompletedTask;
@@ -71,76 +114,70 @@ public sealed class DockPlugin : IPlugin
 
         try
         {
-            _vibrancy = context.Get<IVibrancyService>()!;
-            _appSourceService = context.Get<IAppSourceService>()!;
-            _appIconService = context.Get<IAppIconService>()!;
-            _events = context.Events;
-            // 通用固定/收藏服务（shell.pinning）：Dock 固定列表经 IPinningService("dock") 承载。
-            _pinningService = context.Get<IPinningService>()!;
-            // 全局外观服务（由 shell.settings 的 SettingsPlugin Provide）：让 Dock 系窗口
-            // 的根 Border 描边跟随主题统一驱动（基类 ApplySurfaceChrome 生效）。
-            // 注：圆角裁剪路线（SetWindowRgn）已在本项目 layered 窗口证伪并弃用，窗口走系统默认直角。
-            _appearance = context.Get<IAppearanceService>();
-
-            var appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
-            var storagePath = Path.Combine(appData, "BetterDesktop", "dock-pinned.json");
-
-            _dockAppsService = new DockAppsService(_appSourceService, _pinningService, storagePath);
-            var dockVisual = new DockVisualSettings(settings);
-            _dockIconService = new DockIconService(_appIconService, dockVisual);
-
-            // 注册 Dock 专属门面服务供其他 UI 插件（AppGrabber / Launchpad / NewApps）消费。
-            context.Provide<IDockAppsService>(_dockAppsService);
-            context.Provide<IDockIconService>(_dockIconService);
-            context.Provide<DockVisualSettings>(dockVisual);
-
-            // 「固定到 Dock」贡献者（计划 E1/E2；MENU-SPECS §2 规划落空项补齐）：
-            // 桌面图标 / 文件管理器右键 → 固定/取消固定（AddByPath/RemoveById 现成能力）。
-            if (context.Get<IMenuService>() is { } menus)
-            {
-                _menuHandles.Add(menus.RegisterContributor(new PinToDockContributor(_dockAppsService, MenuScope.DesktopIcon)));
-                _menuHandles.Add(menus.RegisterContributor(new PinToDockContributor(_dockAppsService, MenuScope.ShellFile)));
-
-                // M3：Dock 项统一右键模板（Scope=DockItem；能力过滤/贡献者管线全量接入）。
-                var classifier = context.Get<IFileClassifier>();
-                _dockItemTemplate = new DockItemTemplate(_dockAppsService);
-                _menuHandles.Add(menus.RegisterTemplate(_dockItemTemplate));
-            }
-
-            _dockWindow = new DockWindow(
-                _vibrancy,
-                new AnimationService(),
-                new DockService(),
-                _dockAppsService,
-                _dockIconService,
-                new DockLayoutService(bottomMargin: dockVisual.BottomMargin, settings: settings),
-                this,
-                _appIconService,
-                settings,
-                _appearance,
-                dockVisual,
-                context.Get<IMenuService>(),
-                context.Get<IFileClassifier>());
-            _dockWindow.Show();
-
-            // DockItemTemplate 回调注入（启动/应用提取器为 DockWindow 实例行为）。
-            if (_dockItemTemplate is { } template)
-            {
-                template.Launch = item => _dockWindow.InvokeLaunch(item);
-                template.ShowAppGrabber = () => _dockWindow.InvokeShowAppGrabber();
-                template.ToggleStartMenu = () => ToggleStartMenu();
-            }
-
-            // 应用源变化（开始菜单创建/删除/改名）时失效扫描缓存并刷新 Dock 固定面板，
-            // 安装/卸载程序后无需重启即自动生效。
-            _appSourceService.AppSourceChanged += OnAppSourceChanged;
-
+            BuildDockWindow(context, settings);
             return Task.CompletedTask;
         }
         catch (Exception ex)
         {
             throw new InvalidOperationException($"DockPlugin.LoadAsync 失败: {ex.Message}", ex);
         }
+    }
+
+    /// <summary>构建并显示 Dock 主窗口（LoadAsync 首次 + 运行中 components.dock 关→开热建复用）。
+    /// 依赖字段已在 LoadAsync 前置获取；服务/窗口全部重建，事件订阅先退订再订阅防重。</summary>
+    private void BuildDockWindow(IContext context, ISettingsService? settings)
+    {
+        // 字段在 LoadAsync 前置获取并断言非空；跨方法流分析失效，此处显式解引用。
+        var vibrancy = _vibrancy!;
+        var appSource = _appSourceService!;
+        var appIcon = _appIconService!;
+        var pinning = _pinningService!;
+
+        var appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
+        var storagePath = Path.Combine(appData, "BetterDesktop", "dock-pinned.json");
+
+        _dockAppsService = new DockAppsService(appSource, pinning, storagePath);
+        var dockVisual = new DockVisualSettings(settings, context.Events);
+        _dockIconService = new DockIconService(appIcon, dockVisual);
+
+        // 注册 Dock 专属门面服务供其他 UI 插件（应用提取器 / 新装通知）消费。
+        context.Provide<IDockAppsService>(_dockAppsService);
+        context.Provide<IDockIconService>(_dockIconService);
+        context.Provide<DockVisualSettings>(dockVisual);
+
+        // 2026-09-05 收口：dock 菜单自管（DockWindow 内建 DockItemTemplate + DockMenuPopup），
+        // 不再注册中央贡献者/模板；「固定到 Dock」贡献者随中央管线退役（桌面右键已转系统原生）。
+        var classifier = context.Get<IFileClassifier>();
+
+        _dockWindow = new DockWindow(
+            vibrancy,
+            new AnimationService(),
+            new DockService(),
+            _dockAppsService,
+            _dockIconService,
+            new DockLayoutService(bottomMargin: dockVisual.BottomMargin, settings: settings),
+            this,
+            appIcon,
+            settings,
+            _appearance,
+            dockVisual,
+            classifier,
+            context.Events);
+        _dockWindow.Show();
+
+        // 应用源变化（开始菜单创建/删除/改名）时失效扫描缓存并刷新 Dock 固定面板，
+        // 安装/卸载程序后无需重启即自动生效。先退订再订阅防重复挂载。
+        appSource.AppSourceChanged -= OnAppSourceChanged;
+        appSource.AppSourceChanged += OnAppSourceChanged;
+
+        // 事件桥：Logo 菜单「应用提取器」等外部入口 → shell.appgrabber.show → 打开提取器
+        // （窗口懒创建复用在 DockWindow 内，跨包只经 IEventBus 契约，不引 shell-dock 类型）。
+        _appGrabberShowSub?.Dispose();
+        _appGrabberShowSub = _events?.On<string>("shell.appgrabber.show", (_, _) =>
+        {
+            ShowAppGrabberFromEvent();
+            return Task.CompletedTask;
+        });
     }
 
     /// <summary>
@@ -203,17 +240,77 @@ public sealed class DockPlugin : IPlugin
         }
     }
 
+    /// <summary>处理 shell.appgrabber.show：切 UI 线程打开应用提取器（事件可能在任意线程到达）。</summary>
+    private void ShowAppGrabberFromEvent()
+    {
+        try
+        {
+            if (_dockWindow is not DockWindow dockWindow)
+            {
+                return;
+            }
+
+            var dispatcher = dockWindow.Dispatcher;
+            if (dispatcher.CheckAccess())
+            {
+                dockWindow.InvokeShowAppGrabber();
+            }
+            else
+            {
+                dispatcher.BeginInvoke((Action)dockWindow.InvokeShowAppGrabber);
+            }
+        }
+        catch
+        {
+            // 打开应用提取器失败不阻断（M10）。
+        }
+    }
+
+    private void OnSettingsChanged(SettingsChangedEventArgs e)
+    {
+        if (e.Key != "components.dock")
+        {
+            return;
+        }
+        var enabled = _settings?.Get("components.dock", true) ?? true;
+        if (enabled && _dockWindow is null)
+        {
+            // 运行中从关→开（dock=false 启动后经自绘/系统右键开关切回）：依赖字段已就绪，热建窗口。
+            try
+            {
+                if (_buildContext is not null)
+                {
+                    BuildDockWindow(_buildContext, _settings);
+                }
+            }
+            catch (Exception ex)
+            {
+                DiagnosticLog.Trace("shell.dock", $"dock 热建窗口失败: {ex.Message}");
+            }
+            return;
+        }
+        if (_dockWindow is null)
+        {
+            return;
+        }
+        var dispatcher = _dockWindow.Dispatcher;
+        if (dispatcher.CheckAccess())
+        {
+            // 组件级启停：停/启 auto-hide tick，防止「隐藏 Dock」后被 tick 每拍拉回。
+            _dockWindow.SetComponentEnabled(enabled);
+        }
+        else
+        {
+            dispatcher.BeginInvoke(new Action(() => _dockWindow.SetComponentEnabled(enabled)));
+        }
+    }
+
     /// <inheritdoc />
     public Task UnloadAsync(CancellationToken cancellationToken = default)
     {
+        _appGrabberShowSub?.Dispose();
+        _appGrabberShowSub = null;
         _appSourceService.AppSourceChanged -= OnAppSourceChanged;
-
-        foreach (var handle in _menuHandles)
-        {
-            try { handle.Dispose(); }
-            catch { /* 注销失败不阻断（M10） */ }
-        }
-        _menuHandles.Clear();
 
         _dockWindow?.Close();
         _dockWindow = null;

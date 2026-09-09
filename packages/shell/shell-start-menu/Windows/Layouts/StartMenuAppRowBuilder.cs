@@ -5,6 +5,7 @@ using System.Windows.Input;
 using System.Windows.Media;
 using BetterDesktop.Shell.AppSource.Models;
 using BetterDesktop.Shell.ContextMenus.Services;
+using BetterDesktop.Shell.StartMenu.Contracts;
 using BetterDesktop.Shell.StartMenu.Services;
 
 namespace BetterDesktop.Shell.StartMenu.Windows.Layouts;
@@ -32,7 +33,7 @@ internal static class StartMenuAppRowBuilder
     }
 
     /// <summary>构建应用行：24px 图标 + 名称，32px 高，悬浮浅底，右键菜单，左键启动并关闭菜单。</summary>
-    public static FrameworkElement BuildAppRow(AppItem app, string displayName, StartMenuService service, StartMenuPalette palette)
+    public static FrameworkElement BuildAppRow(AppItem app, string displayName, IStartMenuDataService service, StartMenuPalette palette)
     {
         var row = new Grid
         {
@@ -77,7 +78,7 @@ internal static class StartMenuAppRowBuilder
             service.ActivateOrLaunch(app);
             service.Hide();
         };
-        MenuSurface.Attach(row, () => AppItemActions.BuildItems(app, service), service.Menus);
+        AppItemActions.AttachNative(row, app);
 
         var host = new Border { CornerRadius = new CornerRadius(4), Child = row };
         host.MouseEnter += (_, _) => host.Background = palette.RowHover;
@@ -88,7 +89,7 @@ internal static class StartMenuAppRowBuilder
     }
 
     /// <summary>异步加载应用图标（失败静默退回留空）。</summary>
-    private static async System.Threading.Tasks.Task LoadIconAsync(AppItem app, Image target, StartMenuService service)
+    private static async System.Threading.Tasks.Task LoadIconAsync(AppItem app, Image target, IStartMenuDataService service)
     {
         try
         {

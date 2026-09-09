@@ -1,4 +1,4 @@
-﻿// 麦克风面板：输入音量整数滑块 + 输入设备枚举（capture 端）。
+// 麦克风面板：输入音量整数滑块 + 输入设备枚举（capture 端）。
 using System;
 using System.Collections.Generic;
 using System.Windows;
@@ -8,19 +8,36 @@ using System.Windows.Media;
 using System.Windows.Threading;
 using BetterDesktop.Shell.Core.Surface;
 using BetterDesktop.Shell.Core.Vibrancy;
-using BetterDesktop.Shell.Status.Native;
 using BetterDesktop.Shell.MenuBar.Contracts;
+using BetterDesktop.Shell.Status.Native;
 
 namespace BetterDesktop.Shell.MenuBar.Windows;
 
+// ── 本文件方法级白话索引（麦克风面板，白话 → 方法）──
+//   "输入设备列表行（含音量）"  → BuildDeviceRow
+//   "外部把设备数据推进面板"    → Attach
+//   "设置主麦克风音量"          → SetVolume；重新枚举设备 Reload
+//   数据模型 MicrophonePanelViewModel（文件尾部）。面板族同构关系见 MemoryPanelWindow 索引。
+// B8 已修：IsVisibleChanged 隐藏 Pause/显示 Resume、Closed CloseSelf 停 timer。
+// ────────────────────────────────────
+
 internal sealed class MicrophonePanelWindow : MenuBarPopupWindow
 {
+    private MicrophonePanelViewModel? _vm;
+
     public MicrophonePanelWindow(IVibrancyService vibrancy, IAppearanceService? appearance = null)
         : base(vibrancy, appearance)
     {
         Width = NativePanelStyles.DefaultWidth;
         MinWidth = NativePanelStyles.DefaultWidth;
         SizeToContent = SizeToContent.Height;
+        // B8：隐藏即停轮询、显示恢复并立即刷新、关闭彻底停止（释放控件树闭包）。
+        IsVisibleChanged += (_, e) =>
+        {
+            if (e.NewValue is true) _vm?.Resume();
+            else _vm?.Pause();
+        };
+        Closed += (_, _) => _vm?.CloseSelf();
     }
 
     public FrameworkElement BuildPreviewContent() => BuildContent();
@@ -88,7 +105,7 @@ internal sealed class MicrophonePanelWindow : MenuBarPopupWindow
             col.Children.Add(NativePanelStyles.CreateSettingsLink("声音偏好设置…", "ms-settings:sound", fontSize: 11));
         });
 
-        var vm = new MicrophonePanelViewModel();
+        var vm = _vm = new MicrophonePanelViewModel();
         vm.Attach(v =>
         {
             sliderValue.Text = v.VolumePct.ToString("0");
@@ -208,6 +225,23 @@ internal sealed class MicrophonePanelViewModel
         };
         _timer.Tick += (_, _) => Reload();
         _timer.Start();
+    }
+
+    /// <summary>面板隐藏：停止 1s 轮询（B8）。</summary>
+    public void Pause() => _timer.Stop();
+
+    /// <summary>面板重新显示：恢复轮询并立即刷一帧（B8）。</summary>
+    public void Resume()
+    {
+        if (!_timer.IsEnabled) _timer.Start();
+        Reload();
+    }
+
+    /// <summary>窗口最终关闭：停轮询并释放刷新闭包（B8）。</summary>
+    public void CloseSelf()
+    {
+        _timer.Stop();
+        _changed = null;
     }
 
     public void Attach(Action<MicrophonePanelViewModel> changed)

@@ -23,6 +23,17 @@ using Windows.Devices.Radios;
 
 namespace BetterDesktop.Shell.MenuBar.Status;
 
+// ── 本文件方法级白话索引（菜单栏右区整条状态条，2000+ 行，按内嵌图标块查找）──
+//  本文件由「一个个状态图标内嵌块」组成，每块固定三件套：OnXxxChanged（订阅状态）→ UpdateXxx（刷新外观）→ Dispose（退订）。
+//   "电池图标"     → OnBatteryChanged/UpdateBattery；"无线电/飞行模式" → InitializeRadioAsync/ApplyState
+//   "亮度图标"     → OnBrightnessChanged/UpdateBrightness/SetOn；"CPU 图标" → OnCpuChanged/UpdateCpu
+//   "FPS 图标"     → OnFrame；"输入法图标" → OnImeChanged/UpdateIme/RefreshIcon/ShowFallback/ReadSemanticLabel（B11 缺陷点 L755/L818）
+//   "内存图标"     → OnMemChanged/UpdateMem
+//   "控制某个图标显隐（组件开关）" → SetComponentVisible（按 MenuBarStatusButtonId）；全部按钮存于 _buttons
+//   "键盘图标矢量绘制" → BuildKeyboardIcon；图标裁剪工具 Crop
+//  扩展图标如何被收集见 shell-core MenuBarExtensionRegistry；各图标点开的独立面板在 Windows/*PanelWindow.cs。
+// ────────────────────────────────────
+
 internal sealed class BatteryIcon : ContentControl, IDisposable
 {
     private readonly IBatteryMonitor? _bat;
@@ -984,12 +995,21 @@ public sealed class MenuBarStatusStrip : StackPanel, IDisposable
 
     private readonly SystemTrayIcon _systemTrayIcon;
 
+    /// <summary>通知图标（双胶囊开关）。左键/右键动作见 StatusBarMenuBarExtension case Notification：
+    /// 左键=控制中心（高频）、右键=通知中心（本控件只翻图标状态；通知中心尚未接系统通知，见类注释）。</summary>
+    private readonly NotificationToggle _notifyToggle = new();
+
     private bool _disposed;
 
     /// <summary>按钮注册表：每一项菜单栏按钮对应的 Border，供扩展中心运行时显隐控制。</summary>
     private readonly Dictionary<MenuBarStatusButtonId, Border> _buttons = new();
 
     public event EventHandler<MenuBarStatusButtonClickedEventArgs>? ButtonClicked;
+
+    /// <summary>右键点击通知图标时由 StatusBarMenuBarExtension 调用：翻转通知中心开关图标状态。
+    /// 当前通知中心仅图标占位（未接系统通知/新装应用提醒，后者见 shell-notification 的 INotificationService），
+    /// 后续接入系统通知时在此处扩展真实通知中心面板。</summary>
+    internal void ToggleNotificationSwitch() => _notifyToggle.Toggle();
 
     public MenuBarStatusStrip(IVolumeMonitor? vol, IMicrophoneMonitor? mic, IBatteryMonitor? bat, IImeMonitor? ime, IBrightnessMonitor? brightness, INetworkMonitor? net, IMemoryMonitor? mem, ICpuMonitor? cpu, ISettingsService? settings = null)
     {
@@ -1045,12 +1065,10 @@ public sealed class MenuBarStatusStrip : StackPanel, IDisposable
         base.Children.Add(CreateButton(MenuBarStatusButtonId.Microphone, "麦克风", _micIcon, 14.0));
         _batteryIcon = new BatteryIcon(bat);
         base.Children.Add(CreateButton(MenuBarStatusButtonId.Battery, "电池", _batteryIcon, 56.0));
-        NotificationToggle notifyToggle = new NotificationToggle();
-        Border border = CreateButton(MenuBarStatusButtonId.Notification, "通知中心", notifyToggle, 16.0);
-        border.MouseLeftButtonUp += delegate
-        {
-            notifyToggle.Toggle();
-        };
+        // 通知图标 = 控制中心 + 通知中心双用入口（同一图标空间）：左键/右键都走 ButtonClicked
+        // → StatusBarMenuBarExtension case Notification 分发（左键=控制中心、右键=通知中心）。
+        // 不在本处再挂 MouseLeftButtonUp，避免与事件链重复触发。
+        Border border = CreateButton(MenuBarStatusButtonId.Notification, "通知中心", _notifyToggle, 16.0);
         base.Children.Add(border);
         base.Children.Add(CreateButton(MenuBarStatusButtonId.Search, "搜索", CreateSearchIcon(), 18.0));
         TextBlock content2 = new TextBlock
@@ -1599,6 +1617,10 @@ internal sealed class NetworkTrafficIcon : ContentControl, IDisposable
     }
 }
 
+/// <summary>通知中心开关图标（上/下双胶囊，随 Toggle 交替点亮）。
+/// 现状：仅图标状态占位，尚未与系统通知接轨（无通知历史窗口/系统通知读取）。
+/// 真正已实现的系统通知能力只有 shell-notification 的"新装应用提醒"（INotificationService.ShowNewAppsNotification，
+/// 由 AppSourceChanged 自动触发），与菜单栏图标无关。后续把通知中心接到系统通知时替换此控件语义。</summary>
 internal sealed class NotificationToggle : ContentControl
 {
     private readonly CapsuleSwitch _topSwitch;

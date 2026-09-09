@@ -1,4 +1,4 @@
-﻿using System.Runtime.InteropServices;
+using System.Runtime.InteropServices;
 using BetterDesktop.Shell.Core.Native;
 
 namespace BetterDesktop.Shell.WindowTracker.Thumbnail;

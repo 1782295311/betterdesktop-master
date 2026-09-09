@@ -1,4 +1,4 @@
-﻿// BetterDesktop.Shell.Status — 网络状态 P/Invoke 收口：
+// BetterDesktop.Shell.Status — 网络状态 P/Invoke 收口：
 //   - ConnectionState：托管层 NetworkInterface（零依赖），区分接口类型/连接状态/速度。
 //   - WirelessAdapters：wlanapi WlanOpenHandle + WlanEnumInterfaces 枚举无线适配器及其连接态。
 //

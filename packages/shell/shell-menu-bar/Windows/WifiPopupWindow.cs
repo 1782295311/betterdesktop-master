@@ -12,6 +12,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
 using System.Windows.Shapes;
+using BetterDesktop.Kernel.Core;
 using BetterDesktop.Shell.Core.Surface;
 using BetterDesktop.Shell.Core.Vibrancy;
 using BetterDesktop.Shell.MenuBar.Services;
@@ -19,12 +20,28 @@ using Windows.Devices.Radios;
 
 namespace BetterDesktop.Shell.MenuBar.Windows;
 
+// ── 本文件方法级白话索引（WiFi 列表面板，白话 → 方法）──
+//   "面板整体"                       → BuildContent / RefreshContent
+//   "当前已连网络信息块（IP/速率/MAC）" → LoadCurrentAsync / CreateCurrentConnectionBlock / CreateMetaLine / CreateMetaLineMac
+//   "WiFi 总开关（无线电）"          → LoadRadioStateAsync
+//   "定时扫描 + 附近网络列表"         → ScanTickAsync / RenderNearby / CreateNearbyRow；信号/锁图标 SignalIcon/LockIcon
+//   "输密码连网 / 断开"              → OpenPasswordDialog（连接逻辑在 WifiEnumerator）
+//   "跳系统设置项"                   → CreatePrefLinkRow；速率格式化 FormatSpeed
+//   原生枚举与连接能力在 Services/WifiEnumerator.cs；面板基类 MenuBarPopupWindow。
+// ────────────────────────────────────
+
 /// <summary>Wi‑Fi 独立弹出面板。</summary>
 internal sealed class WifiPopupWindow : MenuBarPopupWindow
 {
     private const double DefaultWidth = 320;
     private readonly IVibrancyService _vibrancy;
     private readonly IAppearanceService? _appearance;
+
+    // 2026-09-04 用户拍板：WiFi 面板要像蓝牙面板一样持续扫描更新——
+    // 面板可见期间周期扫描刷新列表（隐藏即停，防后台空转）；防重入避免扫描耗时 > 间隔时重叠。
+    private System.Windows.Threading.DispatcherTimer? _scanTimer;
+    private StackPanel? _nearbyHost;
+    private int _scanBusy;
 
     public WifiPopupWindow(IVibrancyService vibrancy, IAppearanceService? appearance = null)
         : base(vibrancy, appearance)
@@ -34,9 +51,34 @@ internal sealed class WifiPopupWindow : MenuBarPopupWindow
         SizeToContent = SizeToContent.Height;
         _vibrancy = vibrancy;
         _appearance = appearance;
+
+        _scanTimer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromSeconds(4) };
+        _scanTimer.Tick += async (_, _) => await ScanTickAsync();
+        // 面板显示 → 启动周期扫描并立即来一轮；隐藏 → 停（7438 配对纪律：启停严格成对）。
+        IsVisibleChanged += (_, e) =>
+        {
+            if (e.NewValue is true && _scanTimer is not null)
+            {
+                _scanTimer.Start();
+                _ = ScanTickAsync();
+            }
+            else
+            {
+                _scanTimer?.Stop();
+            }
+        };
     }
 
-    public FrameworkElement BuildPreviewContent() => BuildContent();
+    // G7：设计预览路径门控——预览时跳过真实 radio/wlan 后台读取，只渲染占位。
+    // 基类 BuildContent() 为无参抽象方法（MenuBarPopupWindow.cs L131），故用字段而非参数传递。
+    private bool _previewMode;
+
+    public FrameworkElement BuildPreviewContent()
+    {
+        _previewMode = true;
+        try { return BuildContent(); }
+        finally { _previewMode = false; }
+    }
 
     protected override FrameworkElement BuildContent()
     {
@@ -51,19 +93,33 @@ internal sealed class WifiPopupWindow : MenuBarPopupWindow
         var column = new StackPanel { Orientation = Orientation.Vertical };
 
         // ========== Wi‑Fi Toggle ==========
-        column.Children.Add(CreateToggleRow("Wi‑Fi", on => _ = RadioInterop.SetStateAsync(RadioKind.WiFi, on)));
+        // G3：初始态不再硬编码 ON——BuildContent 后异步读真实 radio 状态回填。
+        // ToggleSwitch 程序化赋值 IsOn 只走 OnIsOnChanged 更新视觉、不触发 Toggled（无回环风险）。
+        // 切换失败（SetStateAsync=false）时记日志并回弹开关；读取失败保守保持占位值。
+        ToggleSwitch? wifiToggle = null;
+        column.Children.Add(CreateToggleRow("Wi‑Fi", on =>
+        {
+            var toggle = wifiToggle;
+            _ = System.Threading.Tasks.Task.Run(async () =>
+            {
+                bool ok = await RadioInterop.SetStateAsync(RadioKind.WiFi, on).ConfigureAwait(false);
+                if (!ok && toggle is not null)
+                {
+                    DiagnosticLog.Trace("menu-bar.wifi", $"WiFi radio 切换失败（目标={(on ? "开" : "关")}），回弹开关");
+                    await toggle.Dispatcher.InvokeAsync(() => toggle.IsOn = !on);
+                }
+            });
+        }, t => wifiToggle = t));
+        if (!_previewMode && wifiToggle is not null)
+        {
+            _ = LoadRadioStateAsync(wifiToggle);
+        }
 
-        // ========== 当前连接信息 ==========
-        var current = WifiEnumerator.ReadCurrentConnection();
-        string connectedSsid = current.IsConnected ? current.Ssid : string.Empty;
-        if (current.IsConnected)
-        {
-            column.Children.Add(CreateCurrentConnectionBlock(current));
-        }
-        else
-        {
-            column.Children.Add(CreateMutedText("未连接到任何 Wi‑Fi 网络", new Thickness(14, 6, 14, 6)));
-        }
+        // ========== 当前连接信息（2026-09-04 回归修复：改后台加载——切换网络瞬间
+        // ReadCurrentConnection 的 W4 托管降级会跑 GetAllNetworkInterfaces（可达秒级），
+        // 此前在 UI 线程同步调用 = 每次刷新卡死 STA 线程（右键菜单唤不出/程序卡死的根因）。 ==========
+        var currentPlaceholder = CreateMutedText("正在读取连接状态…", new Thickness(14, 6, 14, 6));
+        column.Children.Add(currentPlaceholder);
         column.Children.Add(CreatePrefLinkRow("网络偏好设置", "ms-settings:network-wifi"));
 
         column.Children.Add(CreateSeparator());
@@ -71,45 +127,147 @@ internal sealed class WifiPopupWindow : MenuBarPopupWindow
         // ========== "其他网络" 标题 ==========
         column.Children.Add(CreateMutedText("其他网络", new Thickness(14, 4, 0, 6), FontWeights.SemiBold, 10));
 
-        // ========== 附近网络列表（异步填充，避免阻塞 UI 线程） ==========
-        var nearbyPlaceholder = CreateMutedText("正在扫描附近 Wi‑Fi 网络…", new Thickness(14, 6, 14, 8), wrap: true);
-        column.Children.Add(nearbyPlaceholder);
+        // ========== 附近网络列表（持续扫描：面板可见期间每 4s 刷新，见 ScanTickAsync） ==========
+        var nearbyHost = new StackPanel();
+        _nearbyHost = nearbyHost;
+        nearbyHost.Children.Add(CreateMutedText("正在扫描附近 Wi‑Fi 网络…", new Thickness(14, 6, 14, 8), wrap: true));
+        column.Children.Add(nearbyHost);
 
-        _ = LoadNearbyAsync(column, nearbyPlaceholder, connectedSsid);
+        if (!_previewMode)
+        {
+            _ = LoadCurrentAsync(column, currentPlaceholder);
+        }
 
         root.Child = column;
         return root;
     }
 
-    /// <summary>异步拉取附近网络并在就绪后替换占位文本。全程不阻塞 UI 线程；异常/超时时显示错误而非永久"搜索中"。</summary>
-    private static async System.Threading.Tasks.Task LoadNearbyAsync(StackPanel column, TextBlock placeholder, string connectedSsid)
+    /// <summary>后台读取当前连接并回填（UI 线程零 wlanapi/GetAllNetworkInterfaces 调用）。
+    /// S3：整体 try-catch + Dispatcher 判空——fire-and-forget 链上的异常不得直达进程级处理器。</summary>
+    private static async System.Threading.Tasks.Task LoadCurrentAsync(StackPanel column, FrameworkElement placeholder)
     {
-        System.Collections.Generic.IReadOnlyList<WifiNearbyItem> networks;
         try
         {
-            networks = await WifiEnumerator.ScanNearbyAsync();
-        }
-        catch
-        {
-            networks = Array.Empty<WifiNearbyItem>();
-        }
-        var ui = System.Windows.Application.Current.Dispatcher;
-        await ui.InvokeAsync(() =>
-        {
-            column.Children.Remove(placeholder);
-            if (networks.Count == 0)
+            var current = await System.Threading.Tasks.Task.Run(() => WifiEnumerator.ReadCurrentConnection()).ConfigureAwait(false);
+            var ui = System.Windows.Application.Current?.Dispatcher;
+            if (ui is null)
             {
-                column.Children.Add(CreateMutedText("未扫描到附近 Wi‑Fi 网络（适配器可能繁忙或无权限，请稍后重试）", new Thickness(14, 6, 14, 8), wrap: true));
-                return;
+                return; // 宿主已退出/预览环境：放弃回填
             }
-            int shown = 0;
-            foreach (var net in networks)
+            await ui.InvokeAsync(() =>
             {
-                if (shown++ >= 12) break; // 预览限制最多 12 个，避免面板太高
-                bool isCurrent = string.Equals(net.Ssid, connectedSsid, StringComparison.Ordinal);
-                column.Children.Add(CreateNearbyRow(net, isCurrent));
+                // 面板可能在等待期间被 RefreshContent 重建：只替换仍挂在本列上的占位元素。
+                if (!column.Children.Contains(placeholder))
+                {
+                    return;
+                }
+
+                var index = column.Children.IndexOf(placeholder);
+                column.Children.RemoveAt(index);
+                if (current.IsConnected)
+                {
+                    column.Children.Insert(index, CreateCurrentConnectionBlock(current));
+                }
+                else
+                {
+                    column.Children.Insert(index, CreateMutedText("未连接到任何 Wi‑Fi 网络", new Thickness(14, 6, 14, 6)));
+                }
+            });
+        }
+        catch (Exception ex)
+        {
+            DiagnosticLog.Trace("menu-bar.wifi", "当前连接回填失败: " + ex.Message);
+        }
+    }
+
+    /// <summary>
+    /// G3：异步读取真实 WiFi radio 状态并回填开关。ToggleSwitch 程序化赋值 IsOn 只走
+    /// OnIsOnChanged 更新视觉、不触发 Toggled（ToggleSwitch.cs L70-81），无回环风险。
+    /// 读取失败/不可用：保守保持占位值，不打断 UI。
+    /// </summary>
+    private static async System.Threading.Tasks.Task LoadRadioStateAsync(ToggleSwitch toggle)
+    {
+        try
+        {
+            var state = await RadioInterop.GetStateAsync(RadioKind.WiFi).ConfigureAwait(false);
+            if (state is null)
+            {
+                return; // 读不到 radio（无权限/无设备）：保守保持当前值
             }
-        });
+            bool on = state.Value == RadioState.On;
+            await toggle.Dispatcher.InvokeAsync(() => toggle.IsOn = on);
+        }
+        catch (Exception ex)
+        {
+            DiagnosticLog.Trace("menu-bar.wifi", "读取 WiFi radio 状态失败: " + ex.Message);
+        }
+    }
+
+    /// <summary>
+    /// 周期扫描一轮（面板可见期间每 4s；防重入：上一轮未完成时跳过本轮）。
+    /// 全程后台执行，UI 线程零 wlanapi 调用。空列表不再定论——下一轮继续（对齐蓝牙面板持续更新语义）。
+    /// </summary>
+    private async System.Threading.Tasks.Task ScanTickAsync()
+    {
+        if (!IsVisible || _nearbyHost is null)
+        {
+            return;
+        }
+        if (System.Threading.Interlocked.CompareExchange(ref _scanBusy, 1, 0) != 0)
+        {
+            return; // 上一轮还在跑
+        }
+        try
+        {
+            // 当前连接 SSID：走 ReadCurrentConnection 的 1s 缓存，与 LoadCurrentAsync 共享底层读取。
+            var current = await System.Threading.Tasks.Task.Run(() => WifiEnumerator.ReadCurrentConnection()).ConfigureAwait(false);
+            var networks = await System.Threading.Tasks.Task.Run(() => WifiEnumerator.ScanNearbyAsync()).ConfigureAwait(false);
+            var connectedSsid = current.IsConnected ? current.Ssid : string.Empty;
+            await Dispatcher.InvokeAsync(() => RenderNearby(networks, connectedSsid));
+        }
+        catch (Exception ex)
+        {
+            // S3：Tick 的 async void 链上不允许异常逃逸（否则直达进程级处理器，表现为闪退）。
+            DiagnosticLog.Trace("menu-bar.wifi", "扫描周期异常: " + ex.Message);
+        }
+        finally
+        {
+            System.Threading.Interlocked.Exchange(ref _scanBusy, 0);
+        }
+    }
+
+    /// <summary>把扫描结果渲染到附近网络区块（仅当该区块仍属于当前面板内容时）。</summary>
+    private void RenderNearby(System.Collections.Generic.IReadOnlyList<WifiNearbyItem> networks, string connectedSsid)
+    {
+        var host = _nearbyHost;
+        if (host is null || !IsVisible)
+        {
+            return; // 面板已被 RefreshContent 重建/关闭：放弃本轮渲染
+        }
+
+        host.Children.Clear();
+        if (networks.Count == 0)
+        {
+            host.Children.Add(CreateMutedText(
+                "未扫描到附近 Wi‑Fi 网络。适配器可能正忙（如正在连接/认证中），将持续自动重试。",
+                new Thickness(14, 6, 14, 8), wrap: true));
+            return;
+        }
+        int shown = 0;
+        foreach (var net in networks)
+        {
+            if (shown++ >= 12) break; // 预览限制最多 12 个，避免面板太高
+            bool isCurrent = string.Equals(net.Ssid, connectedSsid, StringComparison.Ordinal);
+            host.Children.Add(CreateNearbyRow(net, isCurrent));
+        }
+    }
+
+    protected override void OnClosed(EventArgs e)
+    {
+        _scanTimer?.Stop(); // 生命周期收口：窗口关闭停周期扫描（7438 配对纪律）
+        _scanTimer = null;
+        _nearbyHost = null;
+        base.OnClosed(e);
     }
 
     // ------------------- UI 工厂 -------------------
@@ -145,7 +303,7 @@ internal sealed class WifiPopupWindow : MenuBarPopupWindow
         return tb;
     }
 
-    private static FrameworkElement CreateToggleRow(string label, Action<bool> onChanged)
+    private static FrameworkElement CreateToggleRow(string label, Action<bool> onChanged, Action<ToggleSwitch>? onCreated = null)
     {
         var row = new Grid
         {
@@ -165,14 +323,15 @@ internal sealed class WifiPopupWindow : MenuBarPopupWindow
         row.Children.Add(labelText);
         var toggle = new ToggleSwitch
         {
-            IsOn = true,
+            IsOn = true, // 初始占位；真实 radio 态由 LoadRadioStateAsync 异步回填（G3）
             VerticalAlignment = VerticalAlignment.Center,
             Margin = new Thickness(0, 0, 6, 0)
         };
+        onCreated?.Invoke(toggle);
         toggle.Toggled += (_, args) =>
         {
             try { onChanged((bool)args); }
-            catch { /* ignore */ }
+            catch (Exception ex) { DiagnosticLog.Trace("menu-bar.wifi", "WiFi toggle 切换处理失败: " + ex.Message); }
         };
         Grid.SetColumn(toggle, 1);
         row.Children.Add(toggle);
@@ -362,7 +521,7 @@ internal sealed class WifiPopupWindow : MenuBarPopupWindow
         row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
         row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
 
-        // 信号图标：5 格条形（按 0-20/40/60/80/100 截断）
+        // 信号图标：4 条条形（按 20/40/60/80 截断点亮条数；与 WifiGlyph 三弧折算是两套阈值，统一见 deferred）
         var sig = SignalIcon(net.SignalQuality);
         Grid.SetColumn(sig, 0); row.Children.Add(sig);
 
@@ -406,64 +565,59 @@ internal sealed class WifiPopupWindow : MenuBarPopupWindow
             row.MouseLeftButtonUp += async (_, _) =>
             {
                 var owner = Window.GetWindow(row) as WifiPopupWindow;
-                // 检查是否有已保存配置文件
-                bool hasProfile = await System.Threading.Tasks.Task.Run(() => WifiEnumerator.HasSavedProfile(net.Ssid));
-                if (!hasProfile)
+                try
                 {
-                    // 无保存配置：直接弹密码窗输入密码连接
-                    owner?.OpenPasswordDialog(net.Ssid);
-                    return;
-                }
-                // 有保存配置：先用保存的密码直接连接（密码正确时无需重复输入）。
-                // 连接后轮询状态：成功则正常；失败/超时则删除错误 profile 并弹密码窗让用户重输。
-                bool ok = await System.Threading.Tasks.Task.Run(() => WifiEnumerator.Connect(net.Ssid));
-                if (!ok)
-                {
-                    // 连接请求都发不出去：删 profile 弹密码窗
-                    await System.Threading.Tasks.Task.Run(() => WifiEnumerator.DeleteProfile(net.Ssid));
-                    owner?.OpenPasswordDialog(net.Ssid);
-                    return;
-                }
-                string targetSsid = net.Ssid;
-                _ = System.Threading.Tasks.Task.Run(async () =>
-                {
-                    for (int i = 0; i < 10; i++) // 最多轮询 10 秒（密码正确连接很快，超时即判定失败），每 1 秒查一次
+                    // 检查是否有已保存配置文件
+                    bool hasProfile = await System.Threading.Tasks.Task.Run(() => WifiEnumerator.HasSavedProfile(net.Ssid));
+                    if (!hasProfile)
                     {
-                        await System.Threading.Tasks.Task.Delay(1000);
-                        int state = WifiEnumerator.GetInterfaceState();
-                        if (state == 1) // 已连接，成功
+                        // 无保存配置：直接弹密码窗输入密码连接
+                        owner?.OpenPasswordDialog(net.Ssid);
+                        return;
+                    }
+                    // 有保存配置：先用保存的密码直接连接（密码正确时无需重复输入）。
+                    bool ok = await System.Threading.Tasks.Task.Run(() => WifiEnumerator.Connect(net.Ssid));
+                    if (!ok)
+                    {
+                        // 连接请求都发不出去：删 profile 弹密码窗
+                        await System.Threading.Tasks.Task.Run(() => WifiEnumerator.DeleteProfile(net.Ssid));
+                        owner?.OpenPasswordDialog(net.Ssid);
+                        return;
+                    }
+                    string targetSsid = net.Ssid;
+                    _ = System.Threading.Tasks.Task.Run(async () =>
+                    {
+                        try
                         {
-                            if (owner is not null) await owner.Dispatcher.InvokeAsync(owner.RefreshContent);
-                            return;
-                        }
-                        if (state == 0 || state == 6) // 断开/AdHoc = 系统已反馈连接失败（密码错误等）
-                        {
-                            // 先断开释放适配器，再删除错误 profile，保证列表不崩溃、下次点击秒弹
-                            WifiEnumerator.Disconnect();
-                            WifiEnumerator.DeleteProfile(targetSsid);
+                            // G4：统一等待器（含 SSID 核对，防把其它网络/适配器的连接误判为成功）。
+                            bool connected = await WifiEnumerator.WaitForConnectionAsync(targetSsid).ConfigureAwait(false);
+                            if (!connected)
+                            {
+                                // 失败/超时：先断开释放适配器，再删除错误 profile（connectionMode=auto 红线）。
+                                await System.Threading.Tasks.Task.Run(() => WifiEnumerator.CleanupFailedConnection(targetSsid)).ConfigureAwait(false);
+                            }
                             if (owner is not null)
                             {
                                 await owner.Dispatcher.InvokeAsync(() =>
                                 {
                                     owner.RefreshContent();
-                                    owner.OpenPasswordDialog(targetSsid);
+                                    if (!connected)
+                                    {
+                                        owner.OpenPasswordDialog(targetSsid);
+                                    }
                                 });
                             }
-                            return;
                         }
-                    }
-                    // 超时（30 秒系统仍未反馈）：主动断开释放适配器 + 删 profile
-                    WifiEnumerator.Disconnect();
-                    WifiEnumerator.DeleteProfile(targetSsid);
-                    if (owner is not null)
-                    {
-                        await owner.Dispatcher.InvokeAsync(() =>
+                        catch (Exception ex)
                         {
-                            owner.RefreshContent();
-                            owner.OpenPasswordDialog(targetSsid);
-                        });
-                    }
-                });
+                            DiagnosticLog.Trace("menu-bar.wifi", $"连接等待任务异常（{targetSsid}）: {ex.Message}");
+                        }
+                    });
+                }
+                catch (Exception ex)
+                {
+                    DiagnosticLog.Trace("menu-bar.wifi", $"连接请求处理异常（{net.Ssid}）: {ex.Message}");
+                }
             };
         }
         return row;
@@ -541,10 +695,10 @@ internal sealed class WifiPopupWindow : MenuBarPopupWindow
         return canvas;
     }
 
-    private static string FormatSpeed(long bitsPerSec)
+    /// <summary>链路速度显示（G1：入参为 bits/秒；旧实现的 ≥1Gbps 分支与 ≥1Mbps 分支逐字相同是死分支，已合并）。</summary>
+    internal static string FormatSpeed(long bitsPerSec)
     {
         if (bitsPerSec <= 0) return "— Mbps";
-        if (bitsPerSec >= 1000_000_000) return $"{(bitsPerSec / 1_000_000.0):0} Mbps";
         if (bitsPerSec >= 1_000_000) return $"{(bitsPerSec / 1_000_000.0):0} Mbps";
         if (bitsPerSec >= 1000) return $"{(bitsPerSec / 1000.0):0} Kbps";
         return $"{bitsPerSec} bps";

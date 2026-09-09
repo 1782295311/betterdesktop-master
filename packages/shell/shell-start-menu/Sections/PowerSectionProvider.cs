@@ -17,7 +17,7 @@ public sealed class PowerSectionProvider : IStartMenuSectionProvider
     public string Name => "power";
 
     /// <inheritdoc />
-    public FrameworkElement BuildSection(StartMenuService service)
+    public FrameworkElement BuildSection(IStartMenuDataService service)
     {
         var panel = new StackPanel { Margin = new Thickness(0, 0, 0, 12) };
         if (!service.Settings.Get("startmenu.show-power", true))

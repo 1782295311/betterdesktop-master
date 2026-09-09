@@ -1,0 +1,27 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0-windows10.0.19041.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <Platforms>x64</Platforms>
+    <UseWPF>true</UseWPF>
+    <RootNamespace>BetterDesktop.Shell.Calendar</RootNamespace>
+    <AssemblyName>BetterDesktop.Shell.Calendar</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\kernel\kernel\BetterDesktop.Kernel.csproj" />
+    <ProjectReference Include="..\shell-settings\BetterDesktop.Shell.Settings.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- 节假日年表：内置随包（只读），用户可放同名文件到 %LocalAppData%\BetterDesktop\Calendar\ 覆盖 -->
+    <EmbeddedResource Include="Data\holidays-*.json" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\api\BetterDesktop.Api.csproj" />
+  </ItemGroup>
+</Project>

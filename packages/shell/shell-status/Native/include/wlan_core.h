@@ -20,6 +20,7 @@ extern "C" {
 //   ipv4/ipv4Cch  输出：无线适配器 IPv4 地址
 //   mac/macCch    输出：无线适配器 MAC（"AA:BB:.."）
 //   linkSpeedBps  输出：当前链路速度（bps，未知时 0）
+//   signalQuality 输出：0-100 信号质量（未知时 0）
 //   所有字符串缓冲区由调用方分配；Cch 为缓冲区容量（含结尾 NUL）。
 __declspec(dllexport) int __stdcall Wlan_ReadConnected(
     int* connected,
@@ -27,7 +28,8 @@ __declspec(dllexport) int __stdcall Wlan_ReadConnected(
     wchar_t* desc, int descCch,
     wchar_t* ipv4, int ipv4Cch,
     wchar_t* mac, int macCch,
-    unsigned long long* linkSpeedBps);
+    unsigned long long* linkSpeedBps,
+    int* signalQuality);
 
 // 异步触发一次附近网络扫描（不阻塞调用线程）。发出 WlanScan 请求后立即返回；
 // 结果需在稍后调用 Wlan_ScanCollect 汇总。失败返回负 HRESULT。

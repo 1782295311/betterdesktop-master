@@ -1,4 +1,4 @@
-﻿// BetterDesktop.Host — 图标恢复哨兵（--icon-restore-sentinel <pid>）
+// BetterDesktop.Host — 图标恢复哨兵（--icon-restore-sentinel <pid>）
 //
 // 背景（2026-09-06 真机实证）：宿主会话冻结后被任务管理器结束（TerminateProcess），
 // Application.Exit / AppDomain.ProcessExit 均不触发 → explorer 桌面图标层（SysListView32）

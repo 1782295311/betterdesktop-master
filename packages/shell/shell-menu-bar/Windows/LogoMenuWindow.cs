@@ -1,6 +1,6 @@
 // BetterDesktop.Shell.MenuBar — 左区 Logo 快捷功能菜单（参照 CairoShell CairoMenu 裁剪为本程序快捷功能）
 // 菜单分三组：
-//   [本程序] 关于 / 设置（ISettingsWindowService）
+//   [本程序] 关于 / 设置（ISettingsWindowService）/ 应用提取器（IEventBus shell.appgrabber.show → shell.dock）
 //   [系统入口] Windows 控制面板 / Windows 设置 / 运行 / 任务管理器
 //   [电源与 session] 锁定 / 注销 / 重启 / 关机 / 退出 BetterDesktop
 // 面板继承 MenuBarPopupWindow（失焦自动收起）；收起时经 Hidden 回调驱动左区图标反向动画回常态。
@@ -11,6 +11,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
+using BetterDesktop.Kernel.Contracts;
 using BetterDesktop.Shell.Core.Surface;
 using BetterDesktop.Shell.Core.Vibrancy;
 using BetterDesktop.Shell.MenuBar.Contracts;
@@ -24,6 +25,7 @@ internal sealed class LogoMenuWindow : MenuBarPopupWindow
     private const double DefaultWidth = 220;
 
     private readonly ISettingsWindowService? _settingsWindow;
+    private readonly IEventBus? _events;
 
     /// <summary>true = 显示"关于"子视图（窗口内切换，替代系统 MessageBox——窗口属性统一走基类外观）。</summary>
     private bool _aboutMode;
@@ -31,10 +33,11 @@ internal sealed class LogoMenuWindow : MenuBarPopupWindow
     /// <summary>面板隐藏（失焦/点击外部/Esc）后触发，供左区图标回常态动画。</summary>
     public event Action? Hidden;
 
-    public LogoMenuWindow(ISettingsWindowService? settingsWindow, IVibrancyService vibrancy, IAppearanceService? appearance = null)
+    public LogoMenuWindow(ISettingsWindowService? settingsWindow, IVibrancyService vibrancy, IAppearanceService? appearance = null, IEventBus? events = null)
         : base(vibrancy, appearance)
     {
         _settingsWindow = settingsWindow;
+        _events = events;
         Width = DefaultWidth;
         MinWidth = DefaultWidth;
         SizeToContent = SizeToContent.Height;
@@ -74,6 +77,12 @@ internal sealed class LogoMenuWindow : MenuBarPopupWindow
             RebuildContent();
         }, hideOnClick: false));
         column.Children.Add(CreateItem("设置", () => _settingsWindow?.Show()));
+        // 应用提取器在 shell.dock 包内（跨包不经类型引用）：经 IEventBus 契约由 DockPlugin 打开。
+        column.Children.Add(CreateItem("应用提取器", () =>
+        {
+            try { _ = _events?.EmitAsync<string>("shell.appgrabber.show", string.Empty); }
+            catch { /* 事件发送失败静默（M10） */ }
+        }));
 
         column.Children.Add(CreateSeparator());
 

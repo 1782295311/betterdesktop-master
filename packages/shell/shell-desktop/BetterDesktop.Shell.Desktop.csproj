@@ -1,4 +1,4 @@
-<Project Sdk="Microsoft.NET.Sdk">
+﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
     <TargetFramework>net8.0-windows10.0.19041.0</TargetFramework>
@@ -24,6 +24,11 @@
     <ProjectReference Include="..\shell-settings\BetterDesktop.Shell.Settings.csproj" />
     <!-- 统一右键菜单：消费 IMenuService/IFileClassifier（服务）与 MenuStyling（主题工厂）。 -->
     <ProjectReference Include="..\shell-context-menu\BetterDesktop.Shell.ContextMenu.csproj" />
+    <!-- 转换挂点（2026-09-07）：桌面图标右键「转换为 ▸」消费 IConvertMenuService（shell-convert）。 -->
+    <ProjectReference Include="..\shell-convert\BetterDesktop.Shell.Convert.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <ProjectReference Include="..\..\api\BetterDesktop.Api.csproj" />
+  </ItemGroup>
 </Project>

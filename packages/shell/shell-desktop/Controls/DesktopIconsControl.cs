@@ -29,6 +29,17 @@ using BetterDesktop.Shell.Settings.Contracts;
 
 namespace BetterDesktop.Shell.Desktop.Controls;
 
+// ── 本文件方法级白话索引（桌面图标画布，2000 行按功能分组找）──
+//   "图标网格重建/排列方式"             → Rebuild / RebuildAutoArrange（自动对齐）/ RebuildFreeLayout（自由摆放）；位置持久化 LoadPositions
+//   "创建一个图标格子"                  → CreateItem；格子命中框 GetCellRect
+//   "拖拽自动排版（避让/找空位/重叠消解/紧凑）" → SnapTarget、FindFreeSlot、RebuildOccupancy、ApplyAvoidance、ResolveOverlaps、CompactLayout、CommitLayout
+//   "拖拽过程的快照/复位/动画"          → CaptureLayoutSnapshot、RestoreBasePositions、AnimateTo、BeginDragVisual/EndDragVisual、ShowDropIndicator/HideDropIndicator
+//   "拖拽中触发重建后续拖"              → ExitArrangeAndContinueDrag / ResumeDragAfterRebuild；按路径找格子 FindCellByPath/EnumerateCells/ClearDragState
+//   "选中/双击打开"                     → SelectForClick/SyncSelectionVisual、Open/StartFile/StartExplorerFolder/StartFileShellNamespace/OpenSettings
+//   "拖到回收站"                        → UpdateRecycleDropState
+//   "右键菜单（统一路由）"              → BuildIconMenuEntries（图标）/ BuildBackgroundMenuEntries（空白），渲染交 NativeMenuPopup
+// ────────────────────────────────────
+
 /// <summary>右键路由的图标目标（cell→entry 映射；原 DesktopMenuTemplates 定义，收口后本地化）。</summary>
 public sealed record DesktopIconTarget(BrowserEntry Entry, Border Cell, TextBlock Label);
 
@@ -1988,7 +1999,9 @@ public sealed class DesktopIconsControl : ScrollViewer, IDisposable
         Content = null;
     }
 
-    // ===== 统一右键菜单路由（shell-context-menu 新路径；旧自绘路径见 Build*Menu） =====
+    // ===== 统一右键菜单路由（2026-09-05 收口后唯一路径）：
+    //   本区域只构建菜单项定义（BuildIconMenuEntries 图标 / BuildBackgroundMenuEntries 空白），
+    //   渲染交给 shell-context-menu 的 NativeMenuPopup（系统原生菜单）；旧自绘 BuildIconMenu/BuildBlankMenu 已退役。 =====
 
     private void OnMenuServiceMouseUp(object sender, MouseButtonEventArgs e)
     {

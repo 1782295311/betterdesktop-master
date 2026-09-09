@@ -1,24 +1,18 @@
-// BetterDesktop.Shell.MenuBar — 弹窗锚点定位工具
-// 菜单栏按钮弹出的面板都要"锚在按钮正下方、不超所在显示器工作区边界"，逻辑通用收口在此。
-//
-// 【单位纪律】本文件对外一律使用 **WPF 逻辑单位**（与 Window.Left/Top 同域）。
-//   Visual.PointToScreen() 给的是物理像素，Window.Left 收的是逻辑单位，两者不能直接相加——
-//   换算与"取哪个显示器"都由 MenuBarScreen 承担，本文件只做纯几何计算。
+// BetterDesktop.Shell.MenuBar — 弹窗锚点定位工具（薄壳）
+// 2026-09-07 弹窗体系上提（P0-2/B1）：几何计算已上提 shell-core/Windows/PopupPositioningService
+// （601 范式：贴靠锚点下方 + clamp 工作区全可见；精确 DIP 换算）。
+// 本文件保留菜单栏特有的「锚点来源」语义（锚定按钮/物理点 + 所在显示器工作区 + 菜单栏高度），
+// 对外接口与单位纪律不变（一律 WPF 逻辑单位）。
 
 using System.Windows;
 using System.Windows.Media;
+using BetterDesktop.Shell.Core.Windows;
 
 namespace BetterDesktop.Shell.MenuBar.Contracts;
 
 /// <summary>弹窗锚点计算工具：把 (popupWidth, popupHeight) 放到按钮锚点正下方，必要时回钳工作区。</summary>
 internal static class PopupAnchor
 {
-    /// <summary>按钮上沿与弹窗顶部的间距（保持视觉呼吸，避免贴边）。</summary>
-    private const int VerticalGap = 4;
-
-    /// <summary>弹窗与工作区左右/下边缘之间保留的最小安全边距（避免贴死屏幕边）。</summary>
-    private const double EdgeMargin = 4;
-
     /// <summary>
     /// 计算弹窗 TopLeft 坐标（**逻辑单位**，可直接赋给 Window.Left/Top）。
     /// </summary>
@@ -33,13 +27,13 @@ internal static class PopupAnchor
         Size popupSize,
         double menuBarHeight = MenuBarMetrics.MenuBarHeight)
     {
-        var physical = anchorVisual.PointToScreen(new Point(0, 0));
+        _ = buttonWidth; // 保留参数签名兼容调用方；对齐不再依赖按钮宽度
 
-        // 关键修正（原实现两处缺陷）：
-        //   1) 锚点换算：物理像素 → 逻辑单位，否则非 100% DPI 缩放时弹窗整体偏移。
-        //   2) 工作区取"锚点所在显示器"而非主屏，否则多显示器下副屏弹窗会被钳到主屏。
-        var anchor = MenuBarScreen.ToLogical(anchorVisual, physical);
-        return ComputeCore(anchor, MenuBarScreen.GetWorkArea(physical), buttonWidth, popupSize, menuBarHeight);
+        // 锚点换算：物理像素 → 逻辑单位（TransformFromDevice 精确路径），否则非 100% DPI 缩放时弹窗整体偏移。
+        var anchor = PopupPositioningService.ToScreenDip(anchorVisual, new Point(0, 0));
+        // 工作区取"锚点所在显示器"而非主屏，否则多显示器下副屏弹窗会被钳到主屏。
+        var physical = anchorVisual.PointToScreen(new Point(0, 0));
+        return PopupPositioningService.ComputeAnchored(anchor, MenuBarScreen.GetWorkArea(physical), popupSize, menuBarHeight);
     }
 
     /// <summary>
@@ -54,49 +48,9 @@ internal static class PopupAnchor
         Size popupSize,
         double menuBarHeight = MenuBarMetrics.MenuBarHeight)
     {
+        _ = buttonWidth;
         var scale = MenuBarScreen.GetScale(anchorPhysicalPoint);
         var anchor = new Point(anchorPhysicalPoint.X / scale, anchorPhysicalPoint.Y / scale);
-        return ComputeCore(anchor, MenuBarScreen.GetWorkArea(anchorPhysicalPoint), buttonWidth, popupSize, menuBarHeight);
-    }
-
-    /// <summary>纯几何计算（入参均为逻辑单位）：把弹窗放到锚点下方，并回钳到给定工作区。</summary>
-    private static Point ComputeCore(
-        Point anchor,
-        Rect workArea,
-        double buttonWidth,
-        Size popupSize,
-        double menuBarHeight)
-    {
-
-        // 竖直：菜单栏底部（按钮上沿 + 菜单栏高度）+ 间距。
-        // 过去硬编码 +32，但真实菜单栏高度是 16（MenuBarWindow.Height），导致弹窗比菜单栏下沿低约 16px 悬空。
-        var y = anchor.Y + menuBarHeight + VerticalGap;
-
-        // 横向：弹窗左端对齐按钮左端 —— 在功能图标**正下方**展开（cairoshell 规范）。
-        // 原实现仿 macOS 右端对齐，导致弹窗整体跑到按钮左侧、与图标无对齐关系；
-        // 按钮贴近屏幕右缘时由下方回钳保证不越界（弹窗自动左移收进工作区）。
-        _ = buttonWidth; // 保留参数签名兼容调用方；对齐不再依赖按钮宽度
-        var x = anchor.X;
-
-        // 回钳到所在显示器工作区（右/下不越界，并保留安全边距）
-        var minX = workArea.Left + EdgeMargin;
-        var maxX = workArea.Right - popupSize.Width - EdgeMargin;
-        if (maxX < minX)
-        {
-            // 弹窗比工作区还宽：退化为左对齐并夹紧，避免算出 maxX < minX 的无效区间
-            minX = workArea.Left;
-            maxX = minX;
-        }
-        x = Math.Clamp(x, minX, maxX);
-
-        var minY = workArea.Top + menuBarHeight + VerticalGap;
-        var maxY = workArea.Bottom - popupSize.Height - EdgeMargin;
-        if (maxY < minY)
-        {
-            maxY = minY;
-        }
-        y = Math.Clamp(y, minY, maxY);
-
-        return new Point(x, y);
+        return PopupPositioningService.ComputeAnchored(anchor, MenuBarScreen.GetWorkArea(anchorPhysicalPoint), popupSize, menuBarHeight);
     }
 }

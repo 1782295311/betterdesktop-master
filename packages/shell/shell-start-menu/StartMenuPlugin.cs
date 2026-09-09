@@ -8,8 +8,8 @@ using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 using BetterDesktop.Kernel.Contracts;
-using BetterDesktop.Shell.ContextMenus.Contracts;
 using BetterDesktop.Shell.AppSource.Contracts;
+using BetterDesktop.Shell.ContextMenus.Contracts;
 using BetterDesktop.Shell.Core.Surface;
 using BetterDesktop.Shell.Core.Vibrancy;
 using BetterDesktop.Shell.Pinning.Contracts;
@@ -23,6 +23,17 @@ using BetterDesktop.Shell.StartMenu.Windows.Layouts;
 using BetterDesktop.Shell.WindowTracker.Contracts;
 
 namespace BetterDesktop.Shell.StartMenu;
+
+// ============================================================
+// 【白话导航 · 开始菜单域】凭白话需求定位到精确文件：
+//   "按 Win 键 / 点开始图标没反应"            → Services/StartKeyHook.cs（Win 键钩子）+ Services/StartMenuService.cs（显隐/单例）
+//   "开始菜单窗口本体（尺寸/位置/动画/外观）"  → Windows/StartMenuWindow.cs + Windows/StartMenuVisuals.cs
+//   "换开始菜单布局（Win7 / Win10 / Win11 / 经典 / 全部应用）" → Windows/Layouts/（Win7Layout/Win10Layout/Win11Layout/ClassicLayout/AllAppsLayout）
+//   "开始菜单条目右键菜单"                    → Services/AppItemActions.cs（接系统原生菜单）
+//   "开始菜单里的电源 / 最近 / 位置分区"       → Sections/（PowerSectionProvider/RecentSectionProvider/PlacesSectionProvider）+ Services/PowerCommands.cs
+//   "开始菜单搜索结果"                        → shell-search（StartMenuSearchService + 各 SearchProvider）
+//   "开始菜单固定项"                          → shell-pinning（PinningService）
+// ============================================================
 
 /// <summary>
 /// 开始菜单插件：纯自绘 WPF 菜单（唯一后端）。
@@ -69,7 +80,8 @@ public sealed class StartMenuPlugin : IPlugin
             context.Get<ISettingsWindowService>(),
             context.Get<IAppIconService>(),
             context.Logger,
-            win11);
+            win11,
+            context.Events);
 
         service.RegisterLayout(win11);
         service.RegisterLayout(new AllAppsLayout());
@@ -79,9 +91,6 @@ public sealed class StartMenuPlugin : IPlugin
         service.RegisterSection(new RecentSectionProvider());
         service.RegisterSection(new PlacesSectionProvider());
         service.RegisterSection(new PowerSectionProvider());
-
-        // 统一右键菜单服务（context-menu 插件先于本插件加载，此处可解析到；缺失则右键降级不弹）
-        service.Menus = context.Get<IMenuService>();
 
         // 默认样式（startmenu.style：win7 / win10 / win11）→ 活动布局。
         var style = context.Get<ISettingsService>()!.Get("startmenu.style", "win11") ?? "win11";

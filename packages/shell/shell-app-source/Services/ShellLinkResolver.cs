@@ -74,37 +74,45 @@ public static class ShellLinkResolver
 
     private static (string DisplayName, string TargetPath, BetterDesktop.Shell.AppSource.Models.AppSource Source) ResolveLnk(string path)
     {
+        var link = (IShellLink)new CShellLink();
         try
         {
-            var link = (IShellLink)new CShellLink();
-            ((IPersistFile)link).Load(path, 0);
-
-            var buffer = new char[1024];
-            var targetBuilder = new System.Text.StringBuilder(1024);
-
-            // 取目标路径
-            link.GetPath(targetBuilder, buffer.Length, IntPtr.Zero, 0);
-            var targetPath = targetBuilder.ToString();
-
-            // 取显示名（优先用友好名称）
-            link.GetDescription(targetBuilder, buffer.Length);
-            var description = targetBuilder.ToString();
-
-            var displayName = string.IsNullOrWhiteSpace(description)
-                ? Path.GetFileNameWithoutExtension(path)
-                : description;
-
-            if (string.IsNullOrWhiteSpace(targetPath))
+            try
             {
-                targetPath = path;
-            }
+                ((IPersistFile)link).Load(path, 0);
 
-            return (displayName, targetPath, BetterDesktop.Shell.AppSource.Models.AppSource.StartMenu);
+                var buffer = new char[1024];
+                var targetBuilder = new System.Text.StringBuilder(1024);
+
+                // 取目标路径
+                link.GetPath(targetBuilder, buffer.Length, IntPtr.Zero, 0);
+                var targetPath = targetBuilder.ToString();
+
+                // 取显示名（优先用友好名称）
+                link.GetDescription(targetBuilder, buffer.Length);
+                var description = targetBuilder.ToString();
+
+                var displayName = string.IsNullOrWhiteSpace(description)
+                    ? Path.GetFileNameWithoutExtension(path)
+                    : description;
+
+                if (string.IsNullOrWhiteSpace(targetPath))
+                {
+                    targetPath = path;
+                }
+
+                return (displayName, targetPath, BetterDesktop.Shell.AppSource.Models.AppSource.StartMenu);
+            }
+            catch
+            {
+                // LNK 解析失败时回退到文件名
+                return (Path.GetFileNameWithoutExtension(path), path, BetterDesktop.Shell.AppSource.Models.AppSource.StartMenu);
+            }
         }
-        catch
+        finally
         {
-            // LNK 解析失败时回退到文件名
-            return (Path.GetFileNameWithoutExtension(path), path, BetterDesktop.Shell.AppSource.Models.AppSource.StartMenu);
+            // F9/O1（7437 纪律 3）：CShellLink RCW 确定性释放，不依赖 GC。
+            _ = Marshal.ReleaseComObject(link);
         }
     }
 

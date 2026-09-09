@@ -1,8 +1,8 @@
-﻿using System.Windows;
-using System.Windows.Controls;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Windows;
+using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Documents;
 using System.Windows.Input;
@@ -11,6 +11,7 @@ using System.Windows.Shapes;
 using BetterDesktop.Shell.Core.Surface;
 using BetterDesktop.Shell.Settings.Contracts;
 using BetterDesktop.Shell.Settings.Services;
+using BetterDesktop.Shell.Settings.Surface;
 
 namespace BetterDesktop.Shell.Settings.Sections;
 
@@ -34,20 +35,15 @@ public sealed class SystemSection : ISettingsSection
     public UIElement Build(ISettingsService settings, IThemeTokens tokens)
     {
         var panel = new StackPanel { Orientation = Orientation.Vertical };
-        panel.Children.Add(new TextBlock
-        {
-            Text = "设置",
-            FontSize = 24,
-            FontWeight = FontWeights.SemiBold,
-            Foreground = tokens.Foreground,
-            Margin = new Thickness(0, 0, 0, 4)
-        });
+        // 页面标题统一由窗口标题栏承载（见 SettingsWindow），此处不再重复渲染大标题，
+        // 只保留说明文字，避免同一屏出现两个同名标题。
         panel.Children.Add(new TextBlock
         {
             Text = "管理桌面环境的外观、启动、性能与组件。",
             Foreground = tokens.MutedForeground,
             FontSize = 13,
-            Margin = new Thickness(0, 0, 0, 18)
+            Margin = new Thickness(0, 0, 0, 16),
+            TextWrapping = TextWrapping.Wrap
         });
 
         // ---- 常规与外观（原"通用"分区内容，合并至此） ----
@@ -188,28 +184,7 @@ public sealed class SystemSection : ISettingsSection
     /// 并在 Unloaded（窗口关闭）时退订，避免单例外观服务持有卡片造成内存泄漏。
     /// 返回 Border（圆角容器），其 Child 为内容 StackPanel，用 <see cref="CardBody"/> 取内层。
     /// </summary>
-    private static Border GroupCard(IThemeTokens tokens)
-    {
-        var body = new StackPanel { Margin = new Thickness(16, 14, 16, 14) };
-        // 暂停描边尝试：分组卡片不再画任何描边线（含内层 inner 亮线），仅保留圆角透明容器，
-        // 与"暂时去掉所有描边和阴影"的总要求一致；待视觉方案重做后再恢复。
-        var inner = new Border
-        {
-            CornerRadius = new CornerRadius(9),
-            Child = body
-        };
-        var card = new Border
-        {
-            Margin = new Thickness(0, 0, 0, 16),
-            CornerRadius = new CornerRadius(10),
-            // 透明：透出统一窗口基类的毛玻璃托盘，不叠加第二层 ContentBackground 色块，也不画描边。
-            Background = Brushes.Transparent,
-            Child = inner
-        };
-
-        // 描边/阴影档位只作用于大窗口根 ChromeBorder，分组卡片不参与；无需订阅 AppearanceService。
-        return card;
-    }
+    private static Border GroupCard(IThemeTokens tokens) => SettingsUi.CreateCard();
 
     /// <summary>取分组卡片内层内容面板（最内层 StackPanel）。</summary>
     private static StackPanel CardBody(Border card) => (StackPanel)((Border)card.Child!).Child!;
@@ -275,18 +250,7 @@ public sealed class SystemSection : ISettingsSection
         };
         if (tokens is IAppearanceService appearance)
         {
-            EventHandler<AppearanceChangedArgs>? handler = null;
-            handler = (_, e) =>
-            {
-                if (e.ThemeModeChanged || e.WindowTintChanged || e.ContentOpacityChanged)
-                {
-                    box.Foreground = tokens.Foreground;
-                    box.Background = tokens.InputBackground;
-                    box.BorderBrush = tokens.InputBorder;
-                }
-            };
-            appearance.Changed += handler;
-            box.Unloaded += (_, _) => { if (handler is not null) appearance.Changed -= handler; };
+            // 违规1修复：移除跨程序集 appearance.Changed 订阅；TextBox 初始主题由 tokens 静态应用，运行时主题变更需重开设置窗口。
         }
         // TODO: 接入真实启动延迟逻辑（host 启动计时器读取 system.startupDelay）。
         return box;
@@ -506,8 +470,8 @@ public sealed class SystemSection : ISettingsSection
             FontSize = 13,
             Foreground = tokens.Foreground
         };
-        DockPanel.SetDock(text, Dock.Left);
-        DockPanel.SetDock(control, Dock.Right);
+        DockPanel.SetDock(text, System.Windows.Controls.Dock.Left);
+        DockPanel.SetDock(control, System.Windows.Controls.Dock.Right);
         row.Children.Add(text);
         row.Children.Add(control);
         return row;
@@ -535,14 +499,14 @@ public sealed class SystemSection : ISettingsSection
         };
 
         var dock = new DockPanel { Margin = new Thickness(0, 12, 0, 0), LastChildFill = true };
-        DockPanel.SetDock(button, Dock.Left);
+        DockPanel.SetDock(button, System.Windows.Controls.Dock.Left);
         dock.Children.Add(button);
         dock.Children.Add(desc);
 
         // 注意：分隔线必须是独立元素，绝不能给整行 Border 设 Opacity ——
         // 否则按钮与描述文字一起被压暗（"蒙一层灰"）。分隔线用自身低 alpha 笔刷即可。
         var row = new DockPanel { LastChildFill = true };
-        DockPanel.SetDock(dock, Dock.Top);
+        DockPanel.SetDock(dock, System.Windows.Controls.Dock.Top);
         row.Children.Add(dock);
         row.Children.Add(SectionSeparator(tokens, separatorBrush));
         return new Border

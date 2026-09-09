@@ -58,7 +58,7 @@ public static class MenuAccessKeys
                     continue;
                 }
 
-                result[i] = string.Concat(text.AsSpan(0, p), "&", text.AsSpan(p));
+                result[i] = string.Concat(text.AsSpan(0, p), "_", text.AsSpan(p));
                 break;
             }
         }
@@ -69,7 +69,7 @@ public static class MenuAccessKeys
     /// <summary>查找显式标注 (_X) / (&amp;X)，返回其在文本中的位置与字符。</summary>
     private static (int Index, char Char)? FindExplicitMarker(string text)
     {
-        for (var i = 0; i + 2 < text.Length; i++)
+        for (var i = 0; i + 3 < text.Length; i++)
         {
             if (text[i] != '(')
             {
@@ -92,8 +92,8 @@ public static class MenuAccessKeys
     {
         var sb = new StringBuilder(text.Length + 2);
         sb.Append(text.AsSpan(0, marker.Index));
-        sb.Append('&').Append(marker.Char);
-        sb.Append(text.AsSpan(marker.Index + 4)); // 跳过 "(_X)" 四个字符
+        sb.Append('_').Append(marker.Char);
+        sb.Append(text.AsSpan(marker.Index + 4)); // 跳过 "(_X)"/"(&X)" 四个字符
         return sb.ToString();
     }
 }

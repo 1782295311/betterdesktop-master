@@ -1,5 +1,6 @@
 using System;
 using System.Runtime.InteropServices;
+using BetterDesktop.Shell.Core.Native;
 
 namespace BetterDesktop.Shell.StartMenu.Services;
 
@@ -47,7 +48,7 @@ public sealed class StartKeyHook : IDisposable
     private const byte VkEscape = 0x1B;
     private const uint KeyeventfKeyup = 0x0002;
 
-    private readonly HookProc _proc;
+    private readonly NativeMethods.LowLevelMouseProc _proc;
     private IntPtr _hook;
     private bool _installed;
     // Win 键按下期间的状态：哪一侧 Win 按下、是否检测到组合键（其他非修饰键按下）
@@ -75,7 +76,7 @@ public sealed class StartKeyHook : IDisposable
 
         try
         {
-            _hook = SetWindowsHookEx(WhKeyboardLl, _proc, IntPtr.Zero, 0);
+            _hook = NativeMethods.SetWindowsHookEx(WhKeyboardLl, _proc, IntPtr.Zero, 0);
             _installed = _hook != IntPtr.Zero;
             return _installed;
         }
@@ -94,7 +95,7 @@ public sealed class StartKeyHook : IDisposable
 
         try
         {
-            _ = UnhookWindowsHookEx(_hook);
+            _ = NativeMethods.UnhookWindowsHookEx(_hook);
         }
         catch
         {
@@ -122,7 +123,7 @@ public sealed class StartKeyHook : IDisposable
                 // 一律放行，让系统正常处理模拟热键——这是恢复"完美运行过"的输入法切换所必需。
                 if (isWin && isInjected)
                 {
-                    return CallNextHookEx(_hook, nCode, wParam, lParam);
+                    return NativeMethods.CallNextHookEx(_hook, nCode, wParam, lParam);
                 }
 
                 if (msg == WmKeydown || msg == WmSyskeydown)
@@ -138,7 +139,7 @@ public sealed class StartKeyHook : IDisposable
                         _winDown = true;
                         _winVk = vk;
                         _comboDetected = false;
-                        return CallNextHookEx(_hook, nCode, wParam, lParam); // 放行
+                        return NativeMethods.CallNextHookEx(_hook, nCode, wParam, lParam); // 放行
                     }
                     else if (_winDown && !isWin)
                     {
@@ -172,7 +173,7 @@ public sealed class StartKeyHook : IDisposable
                         // 都被解释成 Win 组合键（"按什么都是命令"的恶性 bug）。
                         // 放行让系统收到真实的 UP，正确释放 Win 键状态；系统开始菜单已 Esc 关闭，
                         // UP 不会让它重新弹出（Win10/11 开始菜单 toggle 只在 DOWN 时触发）。
-                        return CallNextHookEx(_hook, nCode, wParam, lParam);
+                        return NativeMethods.CallNextHookEx(_hook, nCode, wParam, lParam);
                     }
                 }
             }
@@ -182,7 +183,7 @@ public sealed class StartKeyHook : IDisposable
             // 钩子回调异常绝不冒泡（M10）。
         }
 
-        return CallNextHookEx(_hook, nCode, wParam, lParam);
+        return NativeMethods.CallNextHookEx(_hook, nCode, wParam, lParam);
     }
 
     /// <summary>发 Esc 关闭刚被放行 Win DOWN 触发的系统开始菜单。Esc 注入会被本钩子放行到达系统。</summary>
@@ -190,8 +191,8 @@ public sealed class StartKeyHook : IDisposable
     {
         try
         {
-            keybd_event(VkEscape, 0, 0, UIntPtr.Zero);
-            keybd_event(VkEscape, 0, KeyeventfKeyup, UIntPtr.Zero);
+            NativeMethods.keybd_event(VkEscape, 0, 0, UIntPtr.Zero);
+            NativeMethods.keybd_event(VkEscape, 0, KeyeventfKeyup, UIntPtr.Zero);
         }
         catch
         {
@@ -199,21 +200,7 @@ public sealed class StartKeyHook : IDisposable
         }
     }
 
-    [UnmanagedFunctionPointer(CallingConvention.Winapi)]
-    private delegate IntPtr HookProc(int nCode, IntPtr wParam, IntPtr lParam);
-
-    [DllImport("user32.dll", SetLastError = true)]
-    private static extern IntPtr SetWindowsHookEx(int idHook, HookProc lpfn, IntPtr hMod, uint dwThreadId);
-
-    [DllImport("user32.dll", SetLastError = true)]
-    private static extern bool UnhookWindowsHookEx(IntPtr hhk);
-
-    [DllImport("user32.dll")]
-    private static extern IntPtr CallNextHookEx(IntPtr hhk, int nCode, IntPtr wParam, IntPtr lParam);
-
     [DllImport("user32.dll")]
     private static extern short GetAsyncKeyState(int vKey);
 
-    [DllImport("user32.dll")]
-    private static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, UIntPtr dwExtraInfo);
 }

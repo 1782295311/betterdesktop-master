@@ -1,6 +1,7 @@
 // BetterDesktop.Shell.Status — 系统电源状态 P/Invoke 收口：GetSystemPowerStatus（含 AC/电池、剩余百分比、剩余时间估算）。
 
 using System.Runtime.InteropServices;
+using BetterDesktop.Shell.Core.Native;
 
 namespace BetterDesktop.Shell.Status.Native;
 
@@ -24,18 +25,23 @@ public struct SystemPowerStatus
 /// </summary>
 public static class BatteryInterop
 {
-    [DllImport("kernel32.dll", SetLastError = true)]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool GetSystemPowerStatus(out SystemPowerStatus lpSystemPowerStatus);
-
     /// <summary>读取当前电源状态；失败返回 null。</summary>
     public static SystemPowerStatus? Read()
     {
         try
         {
-            if (GetSystemPowerStatus(out var status))
+            var status = default(NativeMethods.SYSTEM_POWER_STATUS);
+            if (NativeMethods.GetSystemPowerStatus(ref status))
             {
-                return status;
+                return new SystemPowerStatus
+                {
+                    ACLineStatus = status.ACLineStatus,
+                    BatteryFlag = status.BatteryFlag,
+                    BatteryLifePercent = status.BatteryLifePercent,
+                    SystemStatusFlag = status.SystemStatusFlag,
+                    BatteryLifeTime = status.BatteryLifeTime,
+                    BatteryFullLifeTime = status.BatteryFullLifeTime,
+                };
             }
             return null;
         }

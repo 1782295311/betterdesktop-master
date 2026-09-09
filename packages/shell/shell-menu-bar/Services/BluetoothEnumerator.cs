@@ -7,6 +7,10 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Runtime.InteropServices;
+using BetterDesktop.Shell.Core.Native;
+// "Windows" 在成员体内会被 BetterDesktop.Shell.MenuBar.Windows 命名空间遮蔽（CS0234），
+// 必须在文件顶部（namespace 之前）using 全局 Windows.Devices.Radios。
+using Windows.Devices.Radios;
 
 namespace BetterDesktop.Shell.MenuBar.Services;
 
@@ -61,7 +65,7 @@ internal static partial class BluetoothEnumerator
                     }
                     finally
                     {
-                        _ = CloseHandle(hRadio);
+                        _ = NativeMethods.CloseHandle(hRadio);
                         hRadio = IntPtr.Zero;
                     }
                 } while (BluetoothFindNextRadio(findRadio, out hRadio));
@@ -75,8 +79,40 @@ internal static partial class BluetoothEnumerator
         return devices;
     }
 
-    /// <summary>当前蓝牙开关状态：无适配器 / 关闭 / 开启。</summary>
+    /// <summary>当前蓝牙开关状态：无适配器 / 关闭 / 开启。
+    /// 适配器存在性走经典 bthprops 路径；开关态唯一公开可靠来源是 WinRT Radio
+    /// （Windows 设置同源。注：计划原定 BluetoothGetRadioInfo 读 fHardwareRadioEnabled 双位，
+    /// 经本机 SDK 头文件实证 BLUETOOTH_RADIO_INFO 不含该双位、且公开头文件无此字段，故改走 WinRT）。</summary>
     public static BluetoothRadioState GetRadioState()
+    {
+        if (!HasAnyRadio())
+        {
+            return BluetoothRadioState.NoAdapter;
+        }
+        try
+        {
+            // WinRT API 异步：放工作线程同步等待 + 3s 超时，避免调用线程（常为 UI）挂起。
+            var task = System.Threading.Tasks.Task.Run(
+                () => RadioInterop.GetStateAsync(RadioKind.Bluetooth));
+            if (task.Wait(TimeSpan.FromSeconds(3)) && task.Result is { } state)
+            {
+                return state switch
+                {
+                    RadioState.On => BluetoothRadioState.On,
+                    RadioState.Off or RadioState.Disabled => BluetoothRadioState.Off,
+                    _ => BluetoothRadioState.On, // Unknown：有适配器但读不到态，保守按开（与历史行为一致）
+                };
+            }
+        }
+        catch
+        {
+            // WinRT 不可用（权限/服务未起）：走兜底。
+        }
+        return BluetoothRadioState.On;
+    }
+
+    /// <summary>经典路径探测是否存在蓝牙无线电（枚举到任一 radio 句柄即存在）。</summary>
+    private static bool HasAnyRadio()
     {
         try
         {
@@ -85,23 +121,23 @@ internal static partial class BluetoothEnumerator
             IntPtr findRadio = BluetoothFindFirstRadio(ref radioParams, out IntPtr hRadio);
             if (findRadio == IntPtr.Zero)
             {
-                return BluetoothRadioState.NoAdapter;
+                return false;
             }
             try
             {
                 if (hRadio != IntPtr.Zero)
                 {
-                    _ = CloseHandle(hRadio);
+                    _ = NativeMethods.CloseHandle(hRadio);
                     hRadio = IntPtr.Zero;
                 }
             }
             catch { /* ignore */ }
             _ = BluetoothFindRadioClose(findRadio);
-            return BluetoothRadioState.On;
+            return true;
         }
         catch
         {
-            return BluetoothRadioState.NoAdapter;
+            return false;
         }
     }
 
@@ -130,7 +166,7 @@ internal static partial class BluetoothEnumerator
             }
             finally
             {
-                if (hRadio != IntPtr.Zero) _ = CloseHandle(hRadio);
+                if (hRadio != IntPtr.Zero) _ = NativeMethods.CloseHandle(hRadio);
                 _ = BluetoothFindRadioClose(findRadio);
             }
         }
@@ -160,16 +196,40 @@ internal static partial class BluetoothEnumerator
     /// <summary>
     /// 发起与未配对设备的配对请求。使用 BluetoothAuthenticateDevice（Just Works / PIN 配对）。
     /// 该 API 是同步阻塞式弹窗，必须在有消息泵的线程（UI 线程）调用，并传入真实父窗口句柄，
-    /// 否则对话框无归属、容易弹不出来导致线程被无限占住。
+    /// 否则对话框无归属、容易弹不出来导致线程被无限占住（红线）。
+    /// 本方法自带线程守卫：后台线程调用时编队回 UI 线程执行；父窗口缺省时取主窗口句柄兜底。
     /// 返回 true 表示配对请求已发出（实际配对结果由系统对话框/后续状态反映）。
     /// </summary>
     public static bool PairDevice(ulong address, string deviceName, IntPtr hwndParent = default)
     {
         if (address == 0) return false;
+
+        var app = System.Windows.Application.Current;
+        if (app is not null && !app.Dispatcher.CheckAccess())
+        {
+            // 后台线程：同步编队回 UI 线程执行（配对对话框自带消息泵，不会与 UI 线程互锁）。
+            return app.Dispatcher.Invoke(() => PairDeviceCore(address, deviceName, hwndParent));
+        }
+        return PairDeviceCore(address, deviceName, hwndParent);
+    }
+
+    /// <summary>PairDevice 的实现体：必须在有消息泵的线程（UI 线程）上执行。</summary>
+    private static bool PairDeviceCore(ulong address, string deviceName, IntPtr hwndParent)
+    {
         IntPtr hRadio = IntPtr.Zero;
         IntPtr findRadio = IntPtr.Zero;
         try
         {
+            // 父窗口缺省：取主窗口句柄兜底，避免 NULL 父窗口导致对话框无归属。
+            if (hwndParent == IntPtr.Zero)
+            {
+                var main = System.Windows.Application.Current?.MainWindow;
+                if (main is not null)
+                {
+                    hwndParent = new System.Windows.Interop.WindowInteropHelper(main).Handle;
+                }
+            }
+
             var radioParams = default(BLUETOOTH_FIND_RADIO_PARAMS);
             radioParams.dwSize = Marshal.SizeOf<BLUETOOTH_FIND_RADIO_PARAMS>();
             findRadio = BluetoothFindFirstRadio(ref radioParams, out hRadio);
@@ -193,7 +253,7 @@ internal static partial class BluetoothEnumerator
         }
         finally
         {
-            if (hRadio != IntPtr.Zero) _ = CloseHandle(hRadio);
+            if (hRadio != IntPtr.Zero) _ = NativeMethods.CloseHandle(hRadio);
             if (findRadio != IntPtr.Zero) _ = BluetoothFindRadioClose(findRadio);
         }
     }
@@ -248,7 +308,7 @@ internal static partial class BluetoothEnumerator
             }
             finally
             {
-                if (hRadio != IntPtr.Zero) _ = CloseHandle(hRadio);
+                if (hRadio != IntPtr.Zero) _ = NativeMethods.CloseHandle(hRadio);
                 _ = BluetoothFindRadioClose(findRadio);
             }
         }
@@ -468,9 +528,6 @@ internal static partial class BluetoothEnumerator
 
     [DllImport("bthprops.cpl", EntryPoint = "BluetoothFindDeviceClose", SetLastError = true)]
     private static extern bool BluetoothFindDeviceClose(IntPtr hFind);
-
-    [DllImport("kernel32.dll", SetLastError = true)]
-    private static extern bool CloseHandle(IntPtr hObject);
 
     [DllImport("bthprops.cpl", SetLastError = true)]
     private static extern bool BluetoothEnumerateInstalledServices(

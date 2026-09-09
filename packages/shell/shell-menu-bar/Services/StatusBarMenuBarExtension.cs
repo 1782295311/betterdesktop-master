@@ -6,15 +6,16 @@
 
 using System;
 using System.Windows;
+using BetterDesktop.Shell.AppSource.Contracts;
+using BetterDesktop.Shell.Core.Contracts;
 using BetterDesktop.Shell.Core.Surface;
 using BetterDesktop.Shell.Core.Vibrancy;
 using BetterDesktop.Shell.MenuBar.Contracts;
 using BetterDesktop.Shell.MenuBar.Status;
 using BetterDesktop.Shell.MenuBar.Windows;
+using BetterDesktop.Shell.Search.Contracts;
 using BetterDesktop.Shell.Settings.Contracts;
 using BetterDesktop.Shell.Status.Contracts;
-using BetterDesktop.Shell.Search.Contracts;
-using BetterDesktop.Shell.AppSource.Contracts;
 
 namespace BetterDesktop.Shell.MenuBar.Services;
 
@@ -36,6 +37,8 @@ internal sealed class StatusBarMenuBarExtension : IMenuBarExtension, IDisposable
     private readonly ISettingsService? _settings;
     private readonly IStartMenuSearchService? _search;
     private readonly IAppIconService? _appIcon;
+    private readonly BetterDesktop.Shell.Calendar.Contracts.ICalendarService? _calendar;
+    private readonly BetterDesktop.Shell.Pinning.Contracts.IPinningService? _pinning;
 
     private MenuBarStatusStrip? _strip;
     private SearchPopupWindow? _searchPopup;
@@ -52,6 +55,7 @@ internal sealed class StatusBarMenuBarExtension : IMenuBarExtension, IDisposable
     private CpuPanelWindow? _cpuPopup;
     private MicrophonePanelWindow? _microphonePopup;
     private SoundPanelWindow? _soundPopup;
+    private NotificationCenterWindow? _notificationCenterPopup;
 
     public StatusBarMenuBarExtension(
         IVolumeMonitor? vol,
@@ -66,7 +70,9 @@ internal sealed class StatusBarMenuBarExtension : IMenuBarExtension, IDisposable
         IAppearanceService? appearance,
         ISettingsService? settings = null,
         IStartMenuSearchService? search = null,
-        IAppIconService? appIcon = null)
+        IAppIconService? appIcon = null,
+        BetterDesktop.Shell.Calendar.Contracts.ICalendarService? calendar = null,
+        BetterDesktop.Shell.Pinning.Contracts.IPinningService? pinning = null)
     {
         _vol = vol;
         _mic = mic;
@@ -81,6 +87,8 @@ internal sealed class StatusBarMenuBarExtension : IMenuBarExtension, IDisposable
         _settings = settings;
         _search = search;
         _appIcon = appIcon;
+        _calendar = calendar;
+        _pinning = pinning;
     }
 
     public FrameworkElement GetVisual()
@@ -120,7 +128,10 @@ internal sealed class StatusBarMenuBarExtension : IMenuBarExtension, IDisposable
     {
         try
         {
-            // 状态条自身已处理的动作（显示桌面）：不重复干预。
+            // 状态条自身已处理的动作：显示桌面（Desktop，由 strip 内部处理）。
+            // 通知图标（Notification）是双用入口，在下方 case 中按左右键分发：
+            //   左键 → 控制中心（高频入口）
+            //   右键 → 通知中心（低频；当前仅图标开关占位，尚未接系统通知）
             if (e.Button == MenuBarStatusButtonId.Desktop)
             {
                 return;
@@ -131,18 +142,33 @@ internal sealed class StatusBarMenuBarExtension : IMenuBarExtension, IDisposable
             switch (e.Button)
             {
                 case MenuBarStatusButtonId.Notification:
-                    // 通知图标入口：打开控制中心（功能目录布局），与加号入口解耦
-                    ShowPopup(ref _controlCenterPopup,
-                        () => new ControlCenterWindow(
-                            ControlCenterFeatureCatalog.Build(_vibrancy, _appearance, _net, _vol, _mic, _bat, _brightness),
-                            _vol, _mic, _brightness, _vibrancy, _appearance),
-                        e.Source, buttonWidth, new Size(400, 420));
+                    // 通知图标 = 控制中心 + 通知中心双用入口（同一图标空间）：
+                    //   左键（高频）= 控制中心（功能目录，Wi-Fi/蓝牙/热点/投影/电源/屏幕/声音等）
+                    //   右键（低频）= 通知中心（strip.ToggleNotificationSwitch 只翻图标状态；
+                    //                 通知中心尚未接系统通知，见 MenuBarStatusStrip NotificationToggle 注释）
+                    if (e.IsRightButton)
+                    {
+                        // 右键 = 通知中心：图标状态复位（未读标记清掉）+ 弹通知中心面板。
+                        // 面板当前为空态占位（未接系统通知源，见 NotificationCenterWindow 头注释）。
+                        _strip?.ToggleNotificationSwitch();
+                        ShowPopup(ref _notificationCenterPopup,
+                            () => new NotificationCenterWindow(_vibrancy, _appearance),
+                            e.Source, buttonWidth, new Size(320, 400));
+                    }
+                    else
+                    {
+                        ShowPopup(ref _controlCenterPopup,
+                            () => new ControlCenterWindow(
+                                ControlCenterFeatureCatalog.Build(_vibrancy, _appearance, _net, _vol, _mic, _bat, _brightness),
+                                _vol, _mic, _brightness, _vibrancy, _appearance),
+                            e.Source, buttonWidth, new Size(400, 420));
+                    }
                     break;
 
                 case MenuBarStatusButtonId.Search:
                     // 搜索：弹出搜索面板（程序/设置/文件）。服务缺失时面板内显示"不可用"占位（M10）。
                     ShowPopup(ref _searchPopup,
-                        () => new SearchPopupWindow(_search, _appIcon, _vibrancy, _appearance),
+                        () => new SearchPopupWindow(_search, _appIcon, _vibrancy, _appearance, _pinning),
                         e.Source, buttonWidth, new Size(440, 500));
                     break;
 
@@ -213,7 +239,7 @@ internal sealed class StatusBarMenuBarExtension : IMenuBarExtension, IDisposable
                     break;
 
                 case MenuBarStatusButtonId.DateTime:
-                    ShowPopup(ref _calendarPopup, () => new CalendarPopupWindow(_vibrancy, _appearance),
+                    ShowPopup(ref _calendarPopup, () => new CalendarPopupWindow(_calendar, _vibrancy, _appearance),
                         e.Source, buttonWidth, new Size(340, 420));
                     break;
 
@@ -272,6 +298,7 @@ internal sealed class StatusBarMenuBarExtension : IMenuBarExtension, IDisposable
         HideIfNot(_cpuPopup, except);
         HideIfNot(_microphonePopup, except);
         HideIfNot(_soundPopup, except);
+        HideIfNot(_notificationCenterPopup, except);
     }
 
     private static void HideIfNot(MenuBarPopupWindow? window, MenuBarPopupWindow? except)
@@ -319,5 +346,6 @@ internal sealed class StatusBarMenuBarExtension : IMenuBarExtension, IDisposable
         _cpuPopup?.Close();
         _microphonePopup?.Close();
         _soundPopup?.Close();
+        _notificationCenterPopup?.Close();
     }
 }

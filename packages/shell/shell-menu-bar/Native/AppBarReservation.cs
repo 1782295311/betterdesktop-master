@@ -1,4 +1,4 @@
-﻿// BetterDesktop.Shell.MenuBar — AppBar 空间预留（Win32 SHAppBarMessage）
+// BetterDesktop.Shell.MenuBar — AppBar 空间预留（Win32 SHAppBarMessage）
 // 目的：把菜单栏注册为顶部 AppBar，explorer 会自动把工作区下移，
 // 桌面图标 / 最大化窗口都会让出菜单栏条带（不再被盖住）。
 // 生命周期：Register（ABM_NEW）→ ApplyPos（ABM_QUERYPOS + ABM_SETPOS）→ Unregister（ABM_REMOVE）。

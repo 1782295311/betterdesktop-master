@@ -1,4 +1,4 @@
-﻿// BetterDesktop.Shell.MenuBar — IME 输入法独立弹出面板（继承 MenuBarPopupWindow：失焦关闭）
+// BetterDesktop.Shell.MenuBar — IME 输入法独立弹出面板（继承 MenuBarPopupWindow：失焦关闭）
 // UI 内容完全来自系统，零硬编码：
 //   - 列表项：ImeLayoutEnumerator.Enumerate() → 真实布局名（"美式键盘" / "微软拼音" / "搜狗拼音输入法"）
 //   - 方块图标：CompactLabel（"美" / "中" / "拼" / "搜"，从真实 LayoutName 提取）
@@ -20,13 +20,22 @@ using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using BetterDesktop.Shell.Core.Surface;
 using BetterDesktop.Shell.Core.Vibrancy;
+using BetterDesktop.Shell.MenuBar.Contracts;
 using BetterDesktop.Shell.MenuBar.Services;
 using BetterDesktop.Shell.Status.Contracts;
 using BetterDesktop.Shell.Status.Native;
 using Microsoft.Win32;
-using BetterDesktop.Shell.MenuBar.Contracts;
 
 namespace BetterDesktop.Shell.MenuBar.Windows;
+
+// ── 本文件方法级白话索引（输入法/键盘布局面板，白话 → 方法）──
+//   "面板整体（普通态/管理态切换）" → BuildContent / EnterManager / ExitManager / RebuildContent / BuildManagerContent
+//   "已启用布局列 / 可添加布局列"   → FillEnabledLayoutsContent / FillAddLayoutsContent（行 CreateLayoutRow / CreateManagerLayoutRow）
+//   "开关行 / 跳转链接行 / 按钮"    → CreateToggleRow / CreateLinkRow / CreateIconButton / CreateTextButton
+//   "输入法相关设置的注册表读写"    → ReadRegistryBool / WriteRegistryBool；打开系统键盘设置 OpenKeyboardSettings
+//   "布局图标加载"                  → LoadLayoutIcon
+//   布局枚举/切换的原生能力在 shell-status Native/KeyboardLayoutInterop.cs。
+// ────────────────────────────────────
 
 /// <summary>输入法独立弹出面板。</summary>
 internal sealed class ImePopupWindow : MenuBarPopupWindow

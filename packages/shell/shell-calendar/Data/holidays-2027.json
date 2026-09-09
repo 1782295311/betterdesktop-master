@@ -1,0 +1,12 @@
+{
+  "year": 2027,
+  "meta": {
+    "source": "国务院办公厅节假日安排",
+    "updatedAt": "",
+    "note": "days 需按官方通知填写：workday=false 为放假、workday=true 为调休补班。把同名文件放到 %LocalAppData%\\BetterDesktop\\Calendar\\ 可覆盖内置年表；未填写时不显示休/班标记（绝不用猜测数据）。"
+  },
+  "example": [
+    { "date": "2027-01-01", "name": "元旦", "workday": false }
+  ],
+  "days": []
+}

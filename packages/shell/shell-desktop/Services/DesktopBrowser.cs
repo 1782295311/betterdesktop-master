@@ -22,6 +22,16 @@ using Microsoft.Win32;
 
 namespace BetterDesktop.Shell.Desktop.Services;
 
+// ── 本文件方法级白话索引（桌面文件夹浏览器：导航 + 文件操作，白话 → 方法）──
+//   "前进/后退/上一级/跳到某目录"   → Navigate / Back / Forward / Up / LoadLocation
+//   "监听文件系统变化并刷新"         → EnsureFileSystemWatch / OnFsChange / OnFsRename / ScheduleRefresh
+//   "此电脑/回收站等 CLSID 显示名"    → ResolveShellName
+//   "选中项管理"                     → SetSelection / ToggleSelection
+//   "剪切/复制/粘贴/重命名/删除"     → Cut / Copy / Paste / Rename / Delete（回收站）/ DeletePermanent（彻底）
+//   "排序"                           → SetSort
+//   图标呈现层在 Controls/DesktopIconsControl.cs，宿主窗口在 Windows/DesktopWindow.cs。
+// ────────────────────────────────────
+
 /// <summary>桌面/文件夹浏览器（IDesktopBrowser 实现）。</summary>
 public sealed class DesktopBrowser : IDesktopBrowser
 {

@@ -1,4 +1,4 @@
-<Project Sdk="Microsoft.NET.Sdk">
+﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
     <TargetFramework>net8.0-windows10.0.19041.0</TargetFramework>
@@ -13,8 +13,12 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\kernel\kernel\BetterDesktop.Kernel.csproj" />
+    <ProjectReference Include="..\shell-core\BetterDesktop.Shell.Core.csproj" />
     <ProjectReference Include="..\shell-app-source\BetterDesktop.Shell.AppSource.csproj" />
     <ProjectReference Include="..\shell-window-tracker\BetterDesktop.Shell.WindowTracker.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <ProjectReference Include="..\..\api\BetterDesktop.Api.csproj" />
+  </ItemGroup>
 </Project>

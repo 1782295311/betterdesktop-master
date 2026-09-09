@@ -12,8 +12,36 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\..\kernel\kernel\BetterDesktop.Kernel.csproj" />
-    <ProjectReference Include="..\shell-context-menu\BetterDesktop.Shell.ContextMenu.csproj" />
+    <!-- 纯逻辑单测（shell-convert-tests）需要访问 internal 测试缝（参数序列/发布命名等）。 -->
+    <InternalsVisibleTo Include="BetterDesktop.Shell.Convert.Tests" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!--
+      NuGet 许可证白名单（红线 11；选型纪律对照计划 14.1）：
+      - Markdig (MIT)：md→html 纯托管链
+      - ReverseMarkdown (MIT)：html→md 纯托管链
+      - System.Drawing.Common 8.0.8 (BCL)：常规图片互转（png/jpg/bmp/gif/tiff；Windows 支持）
+      - SkiaSharp 2.88.9 (MIT)：webp 缺口补齐（带原生二进制，x64 锁定）
+      - PDFsharp 6.2.4 (MIT)：PDF 合并/图片合成/拆分（自带 PdfSharp.System 图像后端，无 ImageSharp 依赖；2026-09-08 C7 修复替换 PdfSharpCore 1.3.2，根除 SixLabors.ImageSharp 1.0.0 高危链）
+      - YamlDotNet 16.0.0 (MIT)：YAML↔JSON 结构化文本互转（文本类近善近全，2026-09-07；2026-09-08 与 Kernel.Loader 统一版本）
+      禁止引入 GPL/AGPL 或需商业授权的库；ImageSharp 依赖已随 PdfSharpCore 替换根除（C7，不再出现在依赖图）。
+    -->
+    <PackageReference Include="Markdig" Version="0.37.0" />
+    <PackageReference Include="ReverseMarkdown" Version="4.3.0" />
+    <PackageReference Include="System.Drawing.Common" Version="8.0.8" />
+    <PackageReference Include="SkiaSharp" Version="2.88.9" />
+    <PackageReference Include="PDFsharp" Version="6.2.4" />
+    <PackageReference Include="YamlDotNet" Version="16.0.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\kernel\kernel\BetterDesktop.Kernel.csproj" />
+    <ProjectReference Include="..\shell-context-menu\BetterDesktop.Shell.ContextMenu.csproj" />
+    <ProjectReference Include="..\shell-settings\BetterDesktop.Shell.Settings.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\api\BetterDesktop.Api.csproj" />
+  </ItemGroup>
 </Project>

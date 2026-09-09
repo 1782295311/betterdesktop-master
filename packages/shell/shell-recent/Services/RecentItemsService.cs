@@ -7,6 +7,7 @@ using BetterDesktop.Kernel.Contracts;
 using BetterDesktop.Shell.AppSource.Contracts;
 using BetterDesktop.Shell.AppSource.Models;
 using BetterDesktop.Shell.Recent.Contracts;
+using BetterDesktop.Shell.Recent.Native;
 using BetterDesktop.Shell.WindowTracker.Contracts;
 
 namespace BetterDesktop.Shell.Recent.Services;
@@ -170,12 +171,41 @@ public sealed class RecentItemsService : IRecentItemsService, IDisposable
             return Array.Empty<AppItemId>();
         }
 
+        // P2a（7401 已拍板策略）：系统跳转列表（权威数据源）优先，自管理 JSON 兜底合并去重。
+        // appId 非 AUMID（本地程序路径哈希等）时系统 Initialize 失败 → 自然回落 JSON。
+        var merged = new List<AppItemId>();
+        var seen = new HashSet<AppItemId>();
+        try
+        {
+            foreach (var id in SystemJumpListReader.ReadPinned(appId))
+            {
+                if (!id.IsEmpty && seen.Add(id))
+                {
+                    merged.Add(id);
+                }
+            }
+        }
+        catch
+        {
+            // 系统跳转列表读取失败不阻断（降级 JSON）。
+        }
+
         lock (_sync)
         {
-            return _jumplist.TryGetValue(appId, out var list)
-                ? list.Select(x => new AppItemId(x)).ToList()
-                : Array.Empty<AppItemId>();
+            if (_jumplist.TryGetValue(appId, out var list))
+            {
+                foreach (var x in list)
+                {
+                    var id = new AppItemId(x);
+                    if (!id.IsEmpty && seen.Add(id))
+                    {
+                        merged.Add(id);
+                    }
+                }
+            }
         }
+
+        return merged;
     }
 
     /// <inheritdoc />

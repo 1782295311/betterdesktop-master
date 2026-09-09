@@ -3,12 +3,22 @@ using System.Windows;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using BetterDesktop.Kernel.Contracts;
+using BetterDesktop.Shell.Core;
 using BetterDesktop.Shell.Core.Surface;
 using BetterDesktop.Shell.Core.Vibrancy;
 using BetterDesktop.Shell.PluginSdk;
 using BetterDesktop.Shell.Settings.Contracts;
 
 namespace BetterDesktop.Shell.Settings.Services;
+
+// ── 本文件方法级白话索引（外观/主题服务，白话 → 方法）──
+//   "初始化 / 应用一套主题预设"     → Initialize / ApplyPreset；模式默认值 ApplyModeDefaults
+//   "把主题令牌同步进 WPF 资源"     → SyncAppResources / SyncSkinResources / SetBrush / SetAppResource
+//   "颜色工具（透明度/变亮/解析/画刷）" → WithAlpha / MakeBrush / Lighten / ParseColor / FallbackTintBrush
+//   "改主题并广播变更"              → SetColor/SetDouble/SetString/SetInt → Emit/Raise（AppearanceChangedArgs，各窗口订阅）
+//   "壁纸/位图缓存"                 → GetCachedBitmap
+//   订阅方示例：DockWindow.OnAppearanceChangedForBackground；主题令牌定义见 shell-settings 主题模型。
+// ────────────────────────────────────
 
 /// <summary>
 /// 全局外观服务（实时、可持久化、可观察）。
@@ -19,18 +29,23 @@ namespace BetterDesktop.Shell.Settings.Services;
 /// </summary>
 public sealed class AppearanceService : IAppearanceService, IThemeTokens
 {
+    private readonly IContext? _context;
     private readonly ISettingsService _settings;
-    private readonly object _gate = new();
 
-    public AppearanceService(ISettingsService settings)
+    public AppearanceService(ISettingsService settings, IContext? context = null)
     {
         _settings = settings;
+        _context = context;
     }
 
     // ---- 强调色 / 文字（文字恒亮，保证可读性，不受主题影响） ----
     // IAppearanceService.Accent 暴露 Color（供控件/绘制）；IThemeTokens.Accent 暴露 Brush（兼容旧消费者）。
     public Color Accent
     {
+        // 2026-09-04 用户实测反馈回退：默认固定天蓝 #0A84FF——P1a 的"默认跟随系统强调色"
+        // 会让全 shell 跟着 Windows 主题色变（用户系统是橙色，菜单栏大面积变橙，被要求改回）。
+        // SystemAccentColorReader 能力保留（7440/7405 读色链已验证），未来可做成设置页
+        // "跟随系统强调色"开关（显式 opt-in），不再作默认值来源。
         get => ParseColor(_settings.Get("appearance.accent", "#0A84FF"), Color.FromRgb(0x0A, 0x84, 0xFF));
         set
         {
@@ -136,8 +151,8 @@ public sealed class AppearanceService : IAppearanceService, IThemeTokens
     {
         ["graphite"] = ("#1F1F22", "#0A84FF", 2, 0.5),
         ["midnight"] = ("#0B1020", "#5E5CE6", 1, 0.5),
-        ["sakura"]   = ("#2A1A22", "#FF375F", 2, 0.5),
-        ["mint"]     = ("#10231C", "#30D158", 0, 0.5)
+        ["sakura"] = ("#2A1A22", "#FF375F", 2, 0.5),
+        ["mint"] = ("#10231C", "#30D158", 0, 0.5)
     };
 
     private void ApplyPreset(string key)
@@ -245,9 +260,9 @@ public sealed class AppearanceService : IAppearanceService, IThemeTokens
     /// 按 <see cref="SkinBlurBehindDwm"/> 决定清晰还是模糊：
     /// <list type="bullet">
     ///   <item><description>清晰档（false）：原图 ImageBrush 直接返回，图锐利。</description></item>
-  ///   <item><description>模糊档（true，默认）：用 <see cref="System.Windows.Media.VisualBrush"/> 包一个带
-  ///     <see cref="System.Windows.Media.Effects.BlurEffect"/> 的 Image（源=同一张冻结图，不预渲染、不做透明边放大，
-  ///     与清晰档拉伸语义完全一致，不会放大裁切）——底层 DWM 毛玻璃透过半透明图透出，形成磨砂感。</description></item>
+    ///   <item><description>模糊档（true，默认）：用 <see cref="System.Windows.Media.VisualBrush"/> 包一个带
+    ///     <see cref="System.Windows.Media.Effects.BlurEffect"/> 的 Image（源=同一张冻结图，不预渲染、不做透明边放大，
+    ///     与清晰档拉伸语义完全一致，不会放大裁切）——底层 DWM 毛玻璃透过半透明图透出，形成磨砂感。</description></item>
     /// </list>
     /// 这是 WPF+DWM 模型下能产生真实视觉差异的做法（WPF 背景永远在 DWM 合成之下，无法用 Z-order 区分清晰/模糊，
     /// 只能对图本身做模糊处理）。
@@ -515,7 +530,7 @@ public sealed class AppearanceService : IAppearanceService, IThemeTokens
         SetBrush(app, "ThemeMutedForeground", muted);
         SetBrush(app, "ThemeSeparator", sepColor, sepOpacity);
 
-        // 卡片级描边/阴影推成 App 动态资源（供 Dock/AppGrabber/Launchpad 卡片 Border 直接
+        // 卡片级描边/阴影推成 App 动态资源（供 Dock/应用提取器卡片 Border 直接
         // DynamicResource 绑定），使描边强度/阴影档位变化时所有窗口卡片自动刷新，
         // 淘汰"OnAppearanceContentChanged 重建面板"模式（仅结构变化才需重建）。
         SetAppResource(app, "CardBorderBrush", CardBorder);
@@ -768,10 +783,16 @@ public sealed class AppearanceService : IAppearanceService, IThemeTokens
     /// 恒为 null = 不套阴影）。</summary>
     public System.Windows.Media.Effects.Effect? CardShadow => null;
 
-    // ===== 事件 =====
-    public event EventHandler<AppearanceChangedArgs>? Changed;
+    // ===== 事件（违规1修复：跨程序集裸 event → IEventBus，单监听器异常隔离由内核保障） =====
 
-    public void NotifyChanged(AppearanceChangedArgs args) => Changed?.Invoke(this, args);
+    /// <inheritdoc />
+    public void NotifyChanged(AppearanceChangedArgs args) => Emit(args);
+
+    /// <summary>外观变更广播：fire-and-forget EmitAsync，不阻塞 setter 调用方。</summary>
+    private void Emit(AppearanceChangedArgs args)
+    {
+        if (_context is not null) _ = _context.Events.EmitAsync(ShellEvents.AppearanceChanged, args);
+    }
 
     // ===== 内部 =====
     private void SetColor(string key, Color value, AppearanceChangedArgs args)
@@ -808,28 +829,8 @@ public sealed class AppearanceService : IAppearanceService, IThemeTokens
 
     private void Raise(AppearanceChangedArgs args)
     {
-        // 逐个通知并隔离异常：一个窗口的刷新处理器抛异常不得中断整条事件链
-        // （否则后续窗口收不到外观变更，表现为"模式改了只有部分窗口生效"）。
-        var handlers = Changed;
-        if (handlers is null)
-        {
-            return;
-        }
-
-        lock (_gate)
-        {
-            foreach (EventHandler<AppearanceChangedArgs> handler in handlers.GetInvocationList())
-            {
-                try
-                {
-                    handler(this, args);
-                }
-                catch
-                {
-                    // 单个订阅者失败不阻断其余窗口刷新
-                }
-            }
-        }
+        // 违规1修复：经内核事件总线广播（单监听器异常隔离由 EventBus 内核保障，不再手动 try-catch 循环）。
+        Emit(args);
     }
 
     private static Brush MakeBrush(Color c, double alpha)
@@ -855,15 +856,15 @@ public sealed class AppearanceService : IAppearanceService, IThemeTokens
                 var hex = s[1..];
                 if (hex.Length == 6)
                     return Color.FromRgb(
-                        Convert.ToByte(hex[..2], 16),
-                        Convert.ToByte(hex[2..4], 16),
-                        Convert.ToByte(hex[4..6], 16));
+                        System.Convert.ToByte(hex[..2], 16),
+                        System.Convert.ToByte(hex[2..4], 16),
+                        System.Convert.ToByte(hex[4..6], 16));
                 if (hex.Length == 8)
                     return Color.FromArgb(
-                        Convert.ToByte(hex[..2], 16),
-                        Convert.ToByte(hex[2..4], 16),
-                        Convert.ToByte(hex[4..6], 16),
-                        Convert.ToByte(hex[6..8], 16));
+                        System.Convert.ToByte(hex[..2], 16),
+                        System.Convert.ToByte(hex[2..4], 16),
+                        System.Convert.ToByte(hex[4..6], 16),
+                        System.Convert.ToByte(hex[6..8], 16));
             }
         }
         catch

@@ -243,7 +243,7 @@ public sealed class ResourceGovernor : IDisposable
         }
 
         // 窗口结束后若尚未建立基线（例如窗口内从未采样成功），用当前值补建，避免永不触发。
-        var (warn, isolate, kill, ready)  = ResolveThresholds(subject.Id);
+        var (warn, isolate, kill, ready) = ResolveThresholds(subject.Id);
         if (!ready)
         {
             lock (_gate)

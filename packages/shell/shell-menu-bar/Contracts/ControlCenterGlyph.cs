@@ -23,7 +23,6 @@ internal enum ControlCenterIcon
     Bluetooth,
     Hotspot,
     Focus,
-    StageManager,
     Project,
     Power,
     Display,
@@ -48,7 +47,6 @@ internal static class ControlCenterGlyph
             case ControlCenterIcon.Bluetooth: BuildBluetooth(canvas, brush); break;
             case ControlCenterIcon.Hotspot: BuildHotspot(canvas, brush); break;
             case ControlCenterIcon.Focus: BuildMoon(canvas, brush); break;
-            case ControlCenterIcon.StageManager: BuildWindows(canvas, brush); break;
             case ControlCenterIcon.Project: BuildProject(canvas, brush); break;
             case ControlCenterIcon.Power: BuildBattery(canvas, brush); break;
             case ControlCenterIcon.Display: BuildDisplay(canvas, brush); break;
@@ -232,7 +230,10 @@ internal static class ControlCenterGlyph
 
     private static Line Line(double x1, double y1, double x2, double y2, Brush brush) => new()
     {
-        X1 = x1, Y1 = y1, X2 = x2, Y2 = y2,
+        X1 = x1,
+        Y1 = y1,
+        X2 = x2,
+        Y2 = y2,
         Stroke = brush,
         StrokeThickness = StrokeWidth,
         StrokeStartLineCap = PenLineCap.Round,

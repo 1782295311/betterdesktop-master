@@ -1,8 +1,11 @@
-﻿using System.Collections.Generic;
+using System.Collections.Generic;
 using System.Linq;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
+using System.Windows.Media;
+using System.Windows.Media.Animation;
+using BetterDesktop.Kernel.Contracts;
 using BetterDesktop.Kernel.Core;
 using BetterDesktop.Shell.Core.Surface;
 using BetterDesktop.Shell.Core.Vibrancy;
@@ -27,13 +30,15 @@ public partial class SettingsWindow : ShellWindow
     // 导航栏绑定源：可观察集合，增量追加分区时自动刷新 UI（不依赖加载时序）。
     private readonly System.Collections.ObjectModel.ObservableCollection<ISettingsSection> _sectionItems = new();
 
-    public SettingsWindow(ISettingsSectionRegistry registry, ISettingsService settings, IThemeTokens tokens, IVibrancyService? vibrancy = null)
+    public SettingsWindow(ISettingsSectionRegistry registry, ISettingsService settings, IThemeTokens tokens, IVibrancyService? vibrancy = null,
+        IEventBus? events = null)
     {
         _registry = registry;
         _settings = settings;
         _tokens = tokens;
         // 外观服务交给统一基类：基类据此订阅 Changed 并自动重绘（背景/色调/字号/材质/描边/圆角）。
         AppearanceService = tokens as IAppearanceService;
+        Events = events;
 
         InitializeComponent();
 
@@ -100,7 +105,7 @@ public partial class SettingsWindow : ShellWindow
         {
             var body = new Border
             {
-                Padding = new Thickness(30, 22, 30, 30),
+                Padding = new Thickness(30, 20, 30, 28),
                 Visibility = Visibility.Collapsed
             };
             body.Child = section.Build(_settings, _tokens);
@@ -193,6 +198,42 @@ public partial class SettingsWindow : ShellWindow
             body.Visibility = sec == section ? Visibility.Visible : Visibility.Collapsed;
         }
         TitleText.Text = section?.Title ?? "设置";
+
+        // 切页反馈：淡入 + 轻微上移，让"换了一页"这件事被看见（此前是瞬间闪现，缺少空间连续性）。
+        // 仍用 Visibility 切换而非重建视觉树，因此不牺牲原本的切换性能。
+        if (section is not null && _sectionBodies.TryGetValue(section, out var active)) AnimateIn(active);
+    }
+
+    /// <summary>
+    /// 分区入场动画。尊重「设置 → 系统 → 启用界面动画」开关：关闭时直接落位，不做补间。
+    /// 只动画 Opacity 与 RenderTransform（合成层属性，不触发布局），刻意不动 Width/Height/Margin。
+    /// </summary>
+    private void AnimateIn(Border body)
+    {
+        if (body.RenderTransform is not TranslateTransform shift)
+        {
+            shift = new TranslateTransform();
+            body.RenderTransform = shift;
+        }
+
+        if (!_settings.Get("system.animations", true))
+        {
+            // 先撤掉可能仍在持有的补间，否则后面赋的本地值会被 HoldEnd 的动画值盖住。
+            body.BeginAnimation(UIElement.OpacityProperty, null);
+            shift.BeginAnimation(TranslateTransform.YProperty, null);
+            shift.Y = 0;
+            body.Opacity = 1;
+            return;
+        }
+
+        shift.Y = 6;
+        body.Opacity = 0;
+
+        var ease = new CubicEase { EasingMode = EasingMode.EaseOut };
+        var fade = new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(180)) { EasingFunction = ease };
+        var slide = new DoubleAnimation(6, 0, TimeSpan.FromMilliseconds(220)) { EasingFunction = ease };
+        body.BeginAnimation(UIElement.OpacityProperty, fade);
+        shift.BeginAnimation(TranslateTransform.YProperty, slide);
     }
 
     // ---- 标题栏拖拽（无 WindowChrome，自管） ----

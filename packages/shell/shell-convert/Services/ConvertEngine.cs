@@ -1,32 +1,14 @@
 using System.Collections.Concurrent;
-using System.Diagnostics;
 using System.IO;
 using BetterDesktop.Kernel.Core;
 
 namespace BetterDesktop.Shell.Convert.Services;
 
-/// <summary>转换错误分类（照 local-engine-orchestration 契约：引擎缺失/崩溃/超时/转换失败 分开）。</summary>
-public enum ConvertError
-{
-    None,
-    /// <summary>引擎缺失（不是用户文件错误——提示语必须区分，禁止伪装成转换失败）。</summary>
-    EngineMissing,
-    /// <summary>引擎崩溃（进程非零退出且无产物）。</summary>
-    EngineCrashed,
-    /// <summary>超时（超时控制必须存在）。</summary>
-    Timeout,
-    /// <summary>转换失败（引擎正常退出但无输出/业务失败）。</summary>
-    ConversionFailed,
-    /// <summary>输入非法（空路径/\0/不存在/不支持类型）。</summary>
-    InputInvalid,
-    /// <summary>输出发布失败（写/移动失败）。</summary>
-    OutputFailed,
-}
-
 /// <summary>
-/// PDF 转换引擎定位与可用性探测（适配 local-engine-orchestration 变体 A：
+/// 引擎路径定位（local-engine-orchestration 变体 A：
 /// 环境变量覆盖 → 多候选路径 → 进程级缓存）。
-/// 【红线适配】错误分类保留；execFile→Process.Start+ArgumentList（不经过 shell，参数数组直传）。
+/// 【红线适配】execFile → Process.Start + ArgumentList（不经过 shell，参数数组直传）在引擎层实施；
+/// 本类只做定位与 COM ProgID 探测。
 /// </summary>
 public static class ConvertEngineLocator
 {
@@ -89,10 +71,11 @@ public static class ConvertEngineLocator
             ProgIdCache.GetOrAdd(id, static pid => Type.GetTypeFromProgID(pid) is not null));
     }
 
-    /// <summary>PDF 引擎是否可用（任一途径；决定"转 PDF"菜单项显示，隐藏优先）。</summary>
-    public static bool HasPdfEngine() => LocateSoffice() is not null || OfficeProgIds.Any(e => LocateComProgId(e.Category) is not null);
+    /// <summary>COM（Office/WPS）引擎是否可用（决定 pdf 兜底链显隐，隐藏优先）。</summary>
+    public static bool HasComEngine() =>
+        OfficeProgIds.Any(e => LocateComProgId(e.Category) is not null);
 
-    /// <summary>扩展名 → 类别（convert 支持集）。</summary>
+    /// <summary>扩展名 → 类别（COM 分支支持集）。</summary>
     public static FileCategory? CategoryOf(string extension) => extension.ToLowerInvariant() switch
     {
         ".doc" or ".docx" or ".docm" or ".rtf" or ".odt" or ".wps" => FileCategory.Word,
@@ -101,11 +84,3 @@ public static class ConvertEngineLocator
         _ => null,
     };
 }
-
-/// <summary>转换事件载荷（IEventBus convert/*）。</summary>
-public sealed record ConvertEventPayload(
-    string Source,
-    string? Target,
-    string Engine,
-    string? Error,
-    long ElapsedMs);

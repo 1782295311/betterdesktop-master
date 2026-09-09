@@ -1,4 +1,4 @@
-﻿// BetterDesktop.Shell.Desktop — 自绘桌面插件入口
+// BetterDesktop.Shell.Desktop — 自绘桌面插件入口
 // 装配：DesktopBrowser（Provide 给菜单栏左区/工具条）+ DesktopWindow（透明"文件显示器"，壁纸归 explorer）。
 // 启用时隐藏 explorer 原桌面图标（ShellHelper.ToggleDesktopIcons），退出/卸载时还原（用户环境不可破坏）。
 //
@@ -49,6 +49,26 @@ using BetterDesktop.Shell.Desktop.Windows;
 using BetterDesktop.Shell.Settings.Contracts;
 
 namespace BetterDesktop.Shell.Desktop;
+
+// ============================================================
+// 【白话导航 · 自绘桌面域】凭白话需求定位到精确文件：
+//   "桌面图标排列/刷新/拖拽/重命名/选中" → Controls/DesktopIconsControl.cs（图标画布，最大文件）
+//   "桌面窗口本体（嵌入 explorer、吞消息）" → Windows/DesktopWindow.cs
+//   "双击图标打开文件夹（自绘文件管理器）" → Services/DesktopBrowser.cs（IDesktopBrowser）+ Windows/FolderBrowserWindow.cs
+//   "桌面右键菜单"                      → shell-context-menu（图标 NativeMenuPopup、空白 DesktopMenuDelegation）；本域 Services/DesktopMenuPopup.cs 为补充
+//   "桌面右键新建文件模板"              → Services/NewFileTemplates.cs
+//   "隐藏/恢复 explorer 原生桌面图标"    → 本文件（ToggleDesktopIcons + 退出兜底）
+//   "系统项显示名/卸载信息/命名空间解析"  → Services/ShellNamespaceHelper.cs、Services/UninstallResolver.cs
+//   "桌面设置分区"                      → Sections/DesktopSection.cs
+// ============================================================
+
+// ── 本文件方法级白话索引（桌面插件生命周期 + 原生图标接管，白话 → 方法）──
+//   "插件加载/卸载、桌面启停"        → LoadAsync / UnloadAsync / StartDesktop / StopDesktop / ApplyEnabledState；设置变更 OnSettingsChanged
+//   "退出时恢复 explorer 原生图标（多重保险）" → RegisterExitRestoreHooks / OnExitRestoreIcons / OnProcessExitRestoreIcons / SpawnIconRestoreSentinel / RestoreIcons
+//   "原生桌面图标显隐与窗口查找"      → SetNativeIconsVisible / AreNativeIconsVisible / FindDesktopListView / FindDesktopDefView
+//   "桌面空白双击切换图标（低级鼠标钩子）" → InstallDesktopDoubleClickHook / RemoveDesktopDoubleClickHook / OnMouseHookProc / IsOverNativeDesktop / ToggleNativeIconsByDoubleClick
+//   桌面窗口本体在 Windows/DesktopWindow.cs，图标画布在 Controls/DesktopIconsControl.cs。
+// ────────────────────────────────────
 
 /// <summary>自绘桌面插件（shell.desktop）。</summary>
 public sealed class DesktopPlugin : IPlugin

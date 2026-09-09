@@ -1,4 +1,4 @@
-﻿// BetterDesktop.Shell.MenuBar — 顶部菜单栏主窗口
+// BetterDesktop.Shell.MenuBar — 顶部菜单栏主窗口
 // 分两区：左区（程序菜单/位置/下载/文档，见 MenuBarLeftZone）、右区（按 IMenuBarExtension 顺序横向排列的按钮）。
 // 所有按钮的点击 → 调 OpenPopup(anchor)，由扩展自己创建/打开独立 ShellWindow（不把 UI 嵌套在本窗口里）。
 // 定位：主屏工作区顶部全宽，高度 16（紧凑菜单栏，见 MenuBarMetrics）。
@@ -16,11 +16,13 @@ using System.Windows.Controls;
 using System.Windows.Interop;
 using System.Windows.Media;
 using BetterDesktop.Kernel.Contracts;
+using BetterDesktop.Shell.Core.Contracts;
+using BetterDesktop.Shell.Core.Native;
 using BetterDesktop.Shell.Core.Surface;
 using BetterDesktop.Shell.Core.Vibrancy;
+using BetterDesktop.Shell.Desktop.Contracts;
 using BetterDesktop.Shell.MenuBar.Contracts;
 using BetterDesktop.Shell.MenuBar.Native;
-using BetterDesktop.Shell.Desktop.Contracts;
 using BetterDesktop.Shell.MenuBar.Services;
 using BetterDesktop.Shell.Settings.Contracts;
 using BetterDesktop.Shell.WindowTracker.Contracts;
@@ -40,6 +42,7 @@ internal sealed class MenuBarWindow : ShellWindow
     private const int AppBarCallbackMessage = 0x8100;
 
     private readonly IReadOnlyList<IMenuBarExtension> _extensions;
+    private readonly IMenuBarExtensionRegistry _registry;
     private readonly Panel _rightHost;
     private readonly Dictionary<IMenuBarExtension, FrameworkElement> _visuals = new();
     private MenuBarLeftZone? _leftZone;
@@ -54,17 +57,19 @@ internal sealed class MenuBarWindow : ShellWindow
     private bool _idleHidden;
 
     public MenuBarWindow(
-        IReadOnlyList<IMenuBarExtension> extensions,
+        IMenuBarExtensionRegistry registry,
         IVibrancyService vibrancy,
         IAppearanceService? appearance,
         IKernelLogger logger,
         ISettingsWindowService? settingsWindow = null,
         IWindowTrackerService? windowTracker = null,
         IDesktopBrowser? desktopBrowser = null,
-        ISettingsService? settings = null)
+        ISettingsService? settings = null,
+        IEventBus? events = null)
         : base(appearance, vibrancy)
     {
-        _extensions = extensions;
+        _extensions = registry.GetAll(); // assembly snapshot
+        _registry = registry;
         _settings = settings;
         Title = "BetterDesktop.MenuBar";
         Height = MenuBarMetrics.MenuBarHeight;
@@ -98,7 +103,7 @@ internal sealed class MenuBarWindow : ShellWindow
         root.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
 
         // 左区：Logo 快捷功能菜单（三态动画图标）+ 前台窗口标题 + 位置/下载/文档 + 文件夹工具条
-        _leftZone = new MenuBarLeftZone(vibrancy, appearance, settingsWindow, windowTracker, desktopBrowser, settings)
+        _leftZone = new MenuBarLeftZone(vibrancy, appearance, settingsWindow, registry, windowTracker, desktopBrowser, settings, events)
         {
             Margin = new Thickness(8, 0, 0, 0)
         };
@@ -118,7 +123,7 @@ internal sealed class MenuBarWindow : ShellWindow
         Content = chrome;
 
         // 把所有扩展点的 Visual 挂到右区，并绑定点击 → OpenPopup
-        foreach (var ext in extensions)
+        foreach (var ext in _extensions)
         {
             var visual = ext.GetVisual();
             if (visual is null)
@@ -226,7 +231,7 @@ internal sealed class MenuBarWindow : ShellWindow
                 var idleMinutes = GetSystemIdleMs() / 60000.0;
 
                 // 空闲中贴顶热区 → 临时唤出
-                if (_idleHidden && GetCursorPos(out var pt) && pt.Y < 6)
+                if (_idleHidden && NativeMethods.GetCursorPos(out var pt) && pt.Y < 6)
                 {
                     SetIdleHidden(false);
                     return;
@@ -261,6 +266,11 @@ internal sealed class MenuBarWindow : ShellWindow
         _idleHidden = hidden;
         IsHitTestVisible = !hidden;
 
+        // 隐藏时挂起 DWM 材质（毛玻璃/亚克力）：窗口仍存在（AppBar 登记保留），
+        // 但 DWM 背景不随 Opacity 淡出 → 不挂起就会在顶部原地残留一条玻璃带。
+        // 显现时自动按当前主题材质恢复（见 ShellWindow.SetMaterialSuspended）。
+        SetMaterialSuspended(hidden);
+
         // ⚠️ 必须先写基值再用 FillBehavior.Stop 过渡：
         //    若只播 1→0 动画而不改基值，Stop 会在动画结束露出基值 1，
         //    Opacity 弹回 → "菜单栏根本没隐藏"（实测回归）。
@@ -278,32 +288,12 @@ internal sealed class MenuBarWindow : ShellWindow
     /// <summary>系统级用户空闲毫秒数（最后一次鼠标/键盘输入至今；GetLastInputInfo）。</summary>
     private static double GetSystemIdleMs()
     {
-        var info = new LastInputInfo { cbSize = (uint)System.Runtime.InteropServices.Marshal.SizeOf<LastInputInfo>() };
-        return GetLastInputInfo(ref info)
+        var info = new NativeMethods.LASTINPUTINFO { cbSize = (uint)System.Runtime.InteropServices.Marshal.SizeOf<NativeMethods.LASTINPUTINFO>() };
+        return NativeMethods.GetLastInputInfo(ref info)
             ? unchecked(Environment.TickCount - (int)info.dwTime)
             : 0; // 检测失败按"刚有输入"处理 → 不隐藏
     }
 
-    [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
-    private struct LastInputInfo
-    {
-        public uint cbSize;
-        public uint dwTime;
-    }
-
-    [System.Runtime.InteropServices.DllImport("user32.dll")]
-    [return: System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.Bool)]
-    private static extern bool GetLastInputInfo(ref LastInputInfo plii);
-
-    [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
-    private struct NativePoint
-    {
-        public int X;
-        public int Y;
-    }
-
-    [System.Runtime.InteropServices.DllImport("user32.dll")]
-    private static extern bool GetCursorPos(out NativePoint lpPoint);
 
     private IntPtr WndProc(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
     {
@@ -340,6 +330,8 @@ internal sealed class MenuBarWindow : ShellWindow
             _hwndSource.RemoveHook(WndProc);
             _hwndSource = null;
         }
+        // B2：先停空闲轮询——否则窗口关闭后 Timer 仍每秒 Tick，闭包持续引用已关窗口。
+        _idleTimer.Stop();
         _leftZone?.Dispose(); // 退订前台窗口事件
         _leftZone = null;
         base.OnClosed(e);

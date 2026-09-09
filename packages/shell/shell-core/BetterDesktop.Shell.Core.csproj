@@ -13,7 +13,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\kernel\kernel\BetterDesktop.Kernel.csproj" />
-    <ProjectReference Include="..\shell-plugin-sdk\BetterDesktop.Shell.PluginSdk.csproj" />
+    <ProjectReference Include="..\..\api\BetterDesktop.Api.csproj" />
   </ItemGroup>
 
 </Project>

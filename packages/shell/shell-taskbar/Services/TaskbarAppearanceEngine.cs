@@ -4,6 +4,7 @@ using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 using BetterDesktop.Kernel.Contracts;
 using BetterDesktop.Kernel.Core;
+using BetterDesktop.Shell.Core.Native;
 using BetterDesktop.Shell.Taskbar.Contracts;
 using BetterDesktop.Shell.Taskbar.Native;
 
@@ -24,14 +25,16 @@ public sealed class TaskbarAppearanceEngine : ITaskbarAppearanceService, IDispos
     private readonly bool _isWindows11;
     private readonly ExplorerTapBridge? _bridge;
     private readonly AppVisibilityWatcher _appVisibility;
-    private readonly List<WinEventHook> _hooks = new();
+    private readonly WinEventPump _pump = new();
     private readonly Dictionary<IntPtr, bool> _taskbars = new();
+    private bool _processDiesRegistered;
+    private bool _bridgeUnavailableWarned;
     private bool _disposed;
 
     // EnumWindows 回调必须以字段强引用持有，否则原生枚举期间委托被 GC 回收会触发 AccessViolation。
     // 不能用内联 lambda（闭包无根）。
-    private readonly EnumWindowsProc _enumSearchProc;
-    private readonly EnumWindowsProc _enumMaxProc;
+    private readonly NativeMethods.EnumWindowsProc _enumSearchProc;
+    private readonly NativeMethods.EnumWindowsProc _enumMaxProc;
     private bool _enumFound; // 枚举复用状态，避免闭包捕获
 
     // 场景状态（显式初始化，避免 CS0649 在 -warnaserror 下报错）
@@ -88,6 +91,13 @@ public sealed class TaskbarAppearanceEngine : ITaskbarAppearanceService, IDispos
                     _logger?.Info(ok
                         ? $"[TaskbarAccent] Win11 注入成功：任务栏 hwnd={h:X} 已连接 ITaskbarAppearanceService。"
                         : $"[TaskbarAccent] Win11 注入失败：hwnd={h:X} 的 Connect 返回 false（可能被杀软拦截）。");
+                    if (ok && !_processDiesRegistered)
+                    {
+                        // F1（7436）：进程死亡还原契约，启动必调一次——否则进程崩溃/强杀后外观永久残留。
+                        _processDiesRegistered = _bridge.RestoreAllWhenProcessDies();
+                        DiagnosticLog.Trace("TaskbarAccent",
+                            $"RestoreAllTaskbarsToDefaultWhenProcessDies(pid={Environment.ProcessId}) => {_processDiesRegistered}");
+                    }
                 }
             }
             if (_taskbars.Count == 0)
@@ -98,10 +108,10 @@ public sealed class TaskbarAppearanceEngine : ITaskbarAppearanceService, IDispos
             _appVisibility.LauncherVisibilityChanged += OnLauncherVisibility;
             _appVisibility.Start();
 
-            // 监听窗口创建/销毁/前台/重排：触发重新评估外观。
-            _hooks.Add(WinEventHook.Create(0x8000, 0x8001, (_, _) => { UpdateSceneState(); RefreshAll(); }));
-            _hooks.Add(WinEventHook.Create(0x0003, 0x0003, (_, _) => { UpdateSceneState(); RefreshAll(); }));
-            _hooks.Add(WinEventHook.Create(0x8008, 0x8008, (_, _) => { UpdateSceneState(); RefreshAll(); }));
+            // 监听窗口创建/销毁/前台/重排：触发重新评估外观（7435 收口：统一 WinEventPump 单泵多订阅）。
+            _pump.Subscribe(0x8000, 0x8001, (_, _) => { UpdateSceneState(); RefreshAll(); });
+            _pump.Subscribe(0x0003, 0x0003, (_, _) => { UpdateSceneState(); RefreshAll(); });
+            _pump.Subscribe(0x8008, 0x8008, (_, _) => { UpdateSceneState(); RefreshAll(); });
 
             UpdateSceneState();
             RefreshAll();
@@ -168,8 +178,8 @@ public sealed class TaskbarAppearanceEngine : ITaskbarAppearanceService, IDispos
     {
         // Win10 搜索是独立的 immersive 窗口类；Win11 搜索宿主为 SearchHost.exe（类名 Windows.UI.Core.CoreWindow）。
         // 用 FindWindow 探测已知类，避免依赖进程名（更稳）。
-        if (FindWindow("Windows.Shell.Search", null) != IntPtr.Zero) return true;
-        if (FindWindow("SearchPane", null) != IntPtr.Zero) return true;
+        if (NativeMethods.FindWindow("Windows.Shell.Search", null) != IntPtr.Zero) return true;
+        if (NativeMethods.FindWindow("SearchPane", null) != IntPtr.Zero) return true;
         // Win11：CoreWindow 通用类，需确认是搜索宿主且可见。
         if (SearchHostVisible()) return true;
         return false;
@@ -178,15 +188,15 @@ public sealed class TaskbarAppearanceEngine : ITaskbarAppearanceService, IDispos
     /// <summary>任务视图是否打开（Win10/Win11 任务切换器类名）。</summary>
     private bool IsTaskViewOpen()
     {
-        return FindWindow("Windows.TaskSwitcher", null) != IntPtr.Zero
-            || FindWindow("TaskViewFrame", null) != IntPtr.Zero;
+        return NativeMethods.FindWindow("Windows.TaskSwitcher", null) != IntPtr.Zero
+            || NativeMethods.FindWindow("TaskViewFrame", null) != IntPtr.Zero;
     }
 
     /// <summary>省电模式是否开启（Windows 10+ SYSTEM_POWER_STATUS.SystemStatusFlag 第 0 位）。</summary>
     private bool IsBatterySaver()
     {
-        var status = new SYSTEM_POWER_STATUS();
-        if (!GetSystemPowerStatus(ref status)) return false;
+        var status = new NativeMethods.SYSTEM_POWER_STATUS();
+        if (!NativeMethods.GetSystemPowerStatus(ref status)) return false;
         return (status.SystemStatusFlag & 0x1) != 0;
     }
 
@@ -194,7 +204,7 @@ public sealed class TaskbarAppearanceEngine : ITaskbarAppearanceService, IDispos
     private bool SearchHostVisible()
     {
         _enumFound = false;
-        EnumWindows(_enumSearchProc, IntPtr.Zero);
+        NativeMethods.EnumWindows(_enumSearchProc, IntPtr.Zero);
         return _enumFound;
     }
 
@@ -202,8 +212,8 @@ public sealed class TaskbarAppearanceEngine : ITaskbarAppearanceService, IDispos
     {
         if (_enumFound) return true;
         var sb = new System.Text.StringBuilder(256);
-        if (GetClassName(hwnd, sb, sb.Capacity) > 0 && sb.ToString() == "Windows.UI.Core.CoreWindow"
-            && IsWindowVisible(hwnd))
+        if (NativeMethods.GetClassName(hwnd, sb, sb.Capacity) > 0 && sb.ToString() == "Windows.UI.Core.CoreWindow"
+            && NativeMethods.IsWindowVisible(hwnd))
         {
             _enumFound = true;
             return false;
@@ -214,7 +224,7 @@ public sealed class TaskbarAppearanceEngine : ITaskbarAppearanceService, IDispos
     private bool HasMaximizedWindowOnAnyMonitor()
     {
         _enumFound = false;
-        EnumWindows(_enumMaxProc, IntPtr.Zero);
+        NativeMethods.EnumWindows(_enumMaxProc, IntPtr.Zero);
         return _enumFound;
     }
 
@@ -222,9 +232,9 @@ public sealed class TaskbarAppearanceEngine : ITaskbarAppearanceService, IDispos
     {
         if (_enumFound) return true;
         // 仅考虑可见、非最小化的顶层窗口；跳过任务栏/工具条自身。
-        if (!IsWindowVisible(hwnd) || IsIconic(hwnd)) return true;
-        if (GetWindow(hwnd, 4 /*GW_OWNER*/) != IntPtr.Zero) return true; // 子窗口/owned
-        if (IsZoomed(hwnd)) { _enumFound = true; return false; }
+        if (!NativeMethods.IsWindowVisible(hwnd) || NativeMethods.IsIconic(hwnd)) return true;
+        if (NativeMethods.GetWindow(hwnd, NativeMethods.GW_OWNER) != IntPtr.Zero) return true; // 子窗口/owned
+        if (NativeMethods.IsZoomed(hwnd)) { _enumFound = true; return false; }
         return true;
     }
 
@@ -300,11 +310,23 @@ public sealed class TaskbarAppearanceEngine : ITaskbarAppearanceService, IDispos
                     if (!ok) _logger?.Warn($"[TaskbarAccent] SetTaskbarAppearance(SolidColor) 失败 hwnd={hWnd:X}。");
                 }
             }
-            else
+            else if (!_isWindows11)
             {
-                // Win10：直接 SetWindowCompositionAttribute。
+                // Win10：直接 SetWindowCompositionAttribute（合法降级路径）。
                 bool ok = DwmapiHelper.SetAccent(hWnd, appearance);
                 if (!ok) _logger?.Warn($"[TaskbarAccent] SetWindowCompositionAttribute 失败 hwnd={hWnd:X}。");
+            }
+            else
+            {
+                // F2（7404）：Win11 任务栏是 XAML，WCA 对其无效——桥不可用时静默走 WCA
+                // 等于"用户调外观没反应"。改为一次性 Warn + 跳过无效降级；不可用状态
+                // 已通过 Win11BridgeAvailable && IsWindows11 对设置页可读。
+                if (!_bridgeUnavailableWarned)
+                {
+                    _bridgeUnavailableWarned = true;
+                    _logger?.Warn("[TaskbarAccent] Win11 桥不可用（ExplorerTAP.dll 缺失/注入失败），任务栏外观功能不可用；已跳过对 XAML 任务栏无效的 WCA 降级。");
+                    DiagnosticLog.Trace("TaskbarAccent", "Win11BridgeUnavailable: 外观功能不可用（不走无效的 WCA 降级，请补齐 ExplorerTAP.dll）");
+                }
             }
         }
         catch (Exception ex)
@@ -327,50 +349,6 @@ public sealed class TaskbarAppearanceEngine : ITaskbarAppearanceService, IDispos
         }
     }
 
-    private delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
-
-    [DllImport("user32.dll")]
-    private static extern bool EnumWindows(EnumWindowsProc lpEnumFunc, IntPtr lParam);
-
-    [DllImport("user32.dll")]
-    private static extern bool IsZoomed(IntPtr hWnd);
-
-    [DllImport("user32.dll")]
-    private static extern bool IsIconic(IntPtr hWnd);
-
-    [DllImport("user32.dll")]
-    private static extern bool IsWindowVisible(IntPtr hWnd);
-
-    [DllImport("user32.dll")]
-    private static extern IntPtr GetWindow(IntPtr hWnd, uint uCmd);
-
-    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
-    private static extern IntPtr FindWindow(string? lpClassName, string? lpWindowName);
-
-    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
-    private static extern IntPtr FindWindowEx(IntPtr hWndParent, IntPtr hWndChildAfter, string? lpClassName, string? lpWindowName);
-
-    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
-    private static extern int GetClassName(IntPtr hWnd, System.Text.StringBuilder lpClassName, int nMaxCount);
-
-    [DllImport("kernel32.dll")]
-    private static extern bool GetSystemPowerStatus(ref SYSTEM_POWER_STATUS lpSystemPowerStatus);
-
-    // 与 Windows SDK 定义严格一致（16 字节）：
-    // 4×BYTE + 3×DWORD。此前结构体只有 8 字节（缺 BatteryLifeTime/BatteryFullLifeTime/Reserved1），
-    // 导致 GetSystemPowerStatus 越界写栈 → AccessViolation（启动即崩溃）。
-    [StructLayout(LayoutKind.Sequential)]
-    private struct SYSTEM_POWER_STATUS
-    {
-        public byte ACLineStatus;
-        public byte BatteryFlag;
-        public byte BatteryLifePercent;
-        public byte SystemStatusFlag; // Windows 10+ 第 0 位 = 省电模式开启
-        public uint BatteryLifeTime;
-        public uint BatteryFullLifeTime;
-        public uint Reserved1;
-    }
-
     public void Dispose()
     {
         lock (_lock)
@@ -378,8 +356,7 @@ public sealed class TaskbarAppearanceEngine : ITaskbarAppearanceService, IDispos
             if (_disposed) return;
             _disposed = true;
             try { ReturnToStock(); } catch { /* ignore */ }
-            foreach (var hook in _hooks) hook.Dispose();
-            _hooks.Clear();
+            _pump.Dispose();
             _appVisibility.Dispose();
             _bridge?.Dispose();
         }

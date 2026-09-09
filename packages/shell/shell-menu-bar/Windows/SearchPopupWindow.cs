@@ -24,17 +24,30 @@ using BetterDesktop.Shell.AppSource.Contracts;
 using BetterDesktop.Shell.Core.Surface;
 using BetterDesktop.Shell.Core.Vibrancy;
 using BetterDesktop.Shell.MenuBar.Contracts;
+using BetterDesktop.Shell.Pinning.Contracts;
 using BetterDesktop.Shell.Search.Contracts;
 
 namespace BetterDesktop.Shell.MenuBar.Windows;
 
+// ── 本文件方法级白话索引（全局搜索面板，白话 → 方法）──
+//   "面板整体 / 执行搜索 / 渲染结果" → BuildContent / RunSearchAsync / RenderResults
+//   "分组标题 / 单条结果行 / 详情文案" → CreateGroupHeader / CreateResultRow / ResolveDetailText；结果图标异步加载 LoadResultIconAsync
+//   "结果右键菜单 / 打开 / 在资源管理器定位" → ShowResultMenu（AddMenuItem 加项）/ Launch / RevealInExplorer / ResolveRevealPath
+//   "空结果态 / 类型字形"             → ShowEmpty / CreateSettingsGlyph / CreateFolderGlyph
+//   搜索数据源（应用/设置/文件）在 StartMenuService.SearchAsync 与各搜索 Provider。
+// ────────────────────────────────────
+
 /// <summary>菜单栏搜索面板：搜索程序 / 设置 / 文件（复用 shell-search 聚合服务）。</summary>
 internal sealed class SearchPopupWindow : MenuBarPopupWindow
 {
+    // 含搜索输入框：禁用 WS_EX_NOACTIVATE，否则点击后窗口不获焦点、键盘输入落不进 TextBox。
+    protected override bool UseNoActivateWindowStyle => false;
+
     private const double DefaultWidth = 440;
 
     private readonly IStartMenuSearchService? _search;
     private readonly IAppIconService? _appIcon;
+    private readonly IPinningService? _pinning;
     private readonly DispatcherTimer _debounce;
     private TextBox? _queryBox;
     private StackPanel? _resultHost;
@@ -44,11 +57,13 @@ internal sealed class SearchPopupWindow : MenuBarPopupWindow
         IStartMenuSearchService? search,
         IAppIconService? appIcon,
         IVibrancyService vibrancy,
-        IAppearanceService? appearance = null)
+        IAppearanceService? appearance = null,
+        IPinningService? pinning = null)
         : base(vibrancy, appearance)
     {
         _search = search;
         _appIcon = appIcon;
+        _pinning = pinning;
         Width = DefaultWidth;
         MinWidth = DefaultWidth;
         SizeToContent = SizeToContent.Height;
@@ -300,7 +315,128 @@ internal sealed class SearchPopupWindow : MenuBarPopupWindow
             Launch(result);
             Hide(); // 点结果即收起面板
         };
+        row.MouseRightButtonUp += (_, e) =>
+        {
+            e.Handled = true;
+            ShowResultMenu(row, result);
+        };
         return row;
+    }
+
+    // ============================================================
+    //  结果右键菜单（"谁的菜单谁管理"：本面板自建 WPF ContextMenu）
+    // ============================================================
+
+    /// <summary>按结果类别给右键菜单：打开（默认）→ 固定/取消固定（应用）→ 位置与路径（有真实路径的）。</summary>
+    private void ShowResultMenu(FrameworkElement anchor, SearchResult result)
+    {
+        var menu = new ContextMenu();
+        var hasItem = false;
+
+        // 1) 打开（默认动作，加粗；与左键行为一致）
+        hasItem |= AddMenuItem(menu, "打开", isDefault: true, () =>
+        {
+            Launch(result);
+            Hide();
+        });
+
+        // 2) 应用类：固定到 Dock / 从 Dock 取消固定（固定服务缺失则跳过，M10）
+        if (result.AppItem is not null && _pinning is not null)
+        {
+            var pinned = false;
+            try { pinned = _pinning.IsPinned("dock", result.AppItem.Id); } catch { /* 判定失败按未固定处理 */ }
+
+            if (pinned)
+            {
+                var appId = result.AppItem.Id;
+                hasItem |= AddMenuItem(menu, "从 Dock 取消固定", isDefault: false, () => _pinning.Unpin("dock", appId));
+            }
+            else
+            {
+                var appItem = result.AppItem;
+                hasItem |= AddMenuItem(menu, "固定到 Dock", isDefault: false, () => _pinning.Pin("dock", appItem));
+            }
+        }
+
+        // 3) 有真实文件路径的结果：打开所在位置 / 复制路径；设置类给复制链接
+        var path = ResolveRevealPath(result);
+        if (!string.IsNullOrEmpty(path))
+        {
+            hasItem |= AddMenuItem(menu, "打开所在位置", isDefault: false, () => RevealInExplorer(path));
+            hasItem |= AddMenuItem(menu, "复制路径", isDefault: false, () => Clipboard.SetText(path));
+        }
+        else if (result.LaunchPath is not null && result.LaunchPath.StartsWith("ms-settings:", StringComparison.OrdinalIgnoreCase))
+        {
+            hasItem |= AddMenuItem(menu, "复制链接", isDefault: false, () => Clipboard.SetText(result.LaunchPath));
+        }
+
+        if (!hasItem)
+        {
+            return;
+        }
+
+        // 弹菜单期间挂起"外点收起"：点菜单项在几何上位于面板外，不挂起会菜单未执行就收面板
+        SetOutsideClickHideSuppressed(true);
+        menu.Closed += (_, _) => SetOutsideClickHideSuppressed(false);
+
+        menu.Placement = System.Windows.Controls.Primitives.PlacementMode.AbsolutePoint;
+        var physical = anchor.PointToScreen(new Point(0, anchor.ActualHeight));
+        var dpi = VisualTreeHelper.GetDpi(anchor).PixelsPerDip;
+        menu.HorizontalOffset = physical.X / dpi;
+        menu.VerticalOffset = physical.Y / dpi;
+        menu.IsOpen = true;
+    }
+
+    private static bool AddMenuItem(ContextMenu menu, string header, bool isDefault, Action action)
+    {
+        var item = new MenuItem { Header = header };
+        if (isDefault)
+        {
+            item.FontWeight = FontWeights.Bold;
+        }
+        item.Click += (_, _) =>
+        {
+            try { action(); }
+            catch { /* 菜单动作失败静默（M10） */ }
+        };
+        _ = menu.Items.Add(item);
+        return true;
+    }
+
+    /// <summary>可"打开所在位置/复制"的真实文件路径：应用取 TargetPath→ShortcutPath，文件取 LaunchPath（排除 ms-settings: URI）。</summary>
+    private static string? ResolveRevealPath(SearchResult result)
+    {
+        if (result.AppItem is not null)
+        {
+            if (!string.IsNullOrWhiteSpace(result.AppItem.TargetPath) && File.Exists(result.AppItem.TargetPath))
+            {
+                return result.AppItem.TargetPath;
+            }
+            if (!string.IsNullOrWhiteSpace(result.AppItem.ShortcutPath) && File.Exists(result.AppItem.ShortcutPath))
+            {
+                return result.AppItem.ShortcutPath;
+            }
+        }
+
+        if (!string.IsNullOrWhiteSpace(result.LaunchPath)
+            && !result.LaunchPath.StartsWith("ms-settings:", StringComparison.OrdinalIgnoreCase)
+            && (File.Exists(result.LaunchPath) || Directory.Exists(result.LaunchPath)))
+        {
+            return result.LaunchPath;
+        }
+
+        return null;
+    }
+
+    /// <summary>在资源管理器中定位文件（目录则直接打开该目录）。</summary>
+    private static void RevealInExplorer(string path)
+    {
+        if (Directory.Exists(path))
+        {
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("explorer.exe", $"\"{path}\""));
+            return;
+        }
+        System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("explorer.exe", $"/select,\"{path}\""));
     }
 
     /// <summary>
@@ -468,7 +604,8 @@ internal sealed class SearchPopupWindow : MenuBarPopupWindow
                 if (!string.IsNullOrWhiteSpace(result.AppItem.AppUserModelId))
                 {
                     System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(
-                        "shell:AppsFolder\\" + result.AppItem.AppUserModelId) { UseShellExecute = true });
+                        "shell:AppsFolder\\" + result.AppItem.AppUserModelId)
+                    { UseShellExecute = true });
                     return;
                 }
                 var appPath = !string.IsNullOrWhiteSpace(result.AppItem.TargetPath)

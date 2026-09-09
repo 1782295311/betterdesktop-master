@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    BetterDesktop.Api — 信息源提供 API 契约包（外部扩展唯一依赖面）。
+    2026-09-08 独立化：把全部 public 接口 / 跨包模型 / 事件常量从各 shell-* 实现包
+    单独拎出，保留原命名空间（使用方 using 零改动），供第三方创作者引用
+    kernel + 本包即可开发外部扩展（对标 deepseek-harness 式扩展生态）。
+    本包零项目依赖（仅 WPF 基础程序集），是依赖方向上的最底层契约层。
+  -->
+  <PropertyGroup>
+    <TargetFramework>net8.0-windows10.0.19041.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <Platforms>x64</Platforms>
+    <UseWPF>true</UseWPF>
+    <RootNamespace>BetterDesktop.Api</RootNamespace>
+    <AssemblyName>BetterDesktop.Api</AssemblyName>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <NoWarn>$(NoWarn);CS1591</NoWarn>
+  </PropertyGroup>
+
+  <!-- 契约包零项目引用：接口/模型只依赖 BCL 与 WPF 基础类型。 -->
+
+</Project>

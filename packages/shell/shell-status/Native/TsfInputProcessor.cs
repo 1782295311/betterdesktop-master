@@ -7,6 +7,7 @@
 
 using System;
 using System.Runtime.InteropServices;
+using BetterDesktop.Shell.Core.Native;
 
 namespace BetterDesktop.Shell.Status.Native;
 
@@ -66,9 +67,6 @@ public static class TsfInputProcessor
 
     private const int CLSCTX_INPROC_SERVER = 1;
 
-    [DllImport("ole32.dll")]
-    private static extern int CoCreateInstance(ref Guid rclsid, IntPtr pUnkOuter, uint dwClsContext, ref Guid riid, out IntPtr ppv);
-
     /// <summary>
     /// 尝试读取当前激活的 TSF 输入法。
     /// 成功返回 true；TSF 不可用、当前是纯键盘布局、或任何 COM 失败均返回 false（调用方应降级）。
@@ -84,7 +82,7 @@ public static class TsfInputProcessor
             var clsid = ClsidTfThreadMgr;
             var iid = typeof(ITfThreadMgr).GUID;
 
-            var hr = CoCreateInstance(ref clsid, IntPtr.Zero, CLSCTX_INPROC_SERVER, ref iid, out pThreadMgr);
+            var hr = NativeMethods.CoCreateInstance(ref clsid, IntPtr.Zero, CLSCTX_INPROC_SERVER, ref iid, out pThreadMgr);
             if (hr != 0 || pThreadMgr == IntPtr.Zero)
             {
                 return false;
@@ -136,8 +134,8 @@ public static class TsfInputProcessor
         {
             var clsid = ClsidTfThreadMgr;
             var iid = typeof(ITfThreadMgr).GUID;
-            var hr = CoCreateInstance(ref clsid, IntPtr.Zero, CLSCTX_INPROC_SERVER, ref iid, out pThreadMgr);
-            sb.Append($"CoCreateInstance(hr=0x{hr:X8}, ptr=0x{pThreadMgr.ToInt64():X})");
+            var hr = NativeMethods.CoCreateInstance(ref clsid, IntPtr.Zero, CLSCTX_INPROC_SERVER, ref iid, out pThreadMgr);
+            sb.Append($"NativeMethods.CoCreateInstance(hr=0x{hr:X8}, ptr=0x{pThreadMgr.ToInt64():X})");
             if (hr != 0 || pThreadMgr == IntPtr.Zero) return sb.ToString();
 
             comObj = Marshal.GetObjectForIUnknown(pThreadMgr);

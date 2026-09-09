@@ -1,4 +1,4 @@
-﻿// shell-menu-bar 对外公开的"独立预览工厂"
+// shell-menu-bar 对外公开的"独立预览工厂"
 // 供 tools/ShellComponentsPlayground 之类验证工具一次性取到：菜单条右区按钮视觉 + 3 个独立面板 UI
 // 不引 ShellWindow（不启动独立窗口），仅返回 FrameworkElement 让验证工具嵌入大容器。
 // 所有 internal 访问集中在此处理，Playground 不关心任何 internal 类。
@@ -9,8 +9,8 @@ using System.Windows.Controls;
 using System.Windows.Media;
 using BetterDesktop.Shell.Core.Surface;
 using BetterDesktop.Shell.Core.Vibrancy;
-using BetterDesktop.Shell.Status.Contracts;
 using BetterDesktop.Shell.MenuBar.Contracts;
+using BetterDesktop.Shell.Status.Contracts;
 
 namespace BetterDesktop.Shell.MenuBar;
 
@@ -105,8 +105,8 @@ public static class PlaygroundPreviewFactory
         vibrancy ??= new NullVibrancyForPreview();
 
         // -------- 菜单条右区按钮（使用 internal MenuBarExtensions 构造） --------
-        var extensions = new List<Contracts.IMenuBarExtension>(capacity: 4);
-        extensions.Add(new Services.ControlCenterMenuBarExtension(net, vol, mic, bat, brightness, vibrancy, appearance));
+        // 控制中心不占独立按钮：由通知图标右键打开（StatusBarMenuBarExtension case Notification）。
+        var extensions = new List<BetterDesktop.Shell.Core.Contracts.IMenuBarExtension>(capacity: 3);
         if (ime is not null) extensions.Add(new Services.ImeMenuBarExtension(ime, vibrancy, appearance));
         if (cpu is not null) extensions.Add(new Services.CpuMenuBarExtension(cpu, vibrancy, appearance));
         extensions.Add(new Services.CalendarMenuBarExtension(vibrancy, appearance));
@@ -164,7 +164,9 @@ public static class PlaygroundPreviewFactory
             imePanel = w.BuildPreviewContent();
         }
 
-        var cal = new Windows.CalendarPopupWindow(vibrancy, appearance);
+        // 预览用真实日历数据（走同一套工厂装配，与运行时同源）
+        var cal = new Windows.CalendarPopupWindow(
+            BetterDesktop.Shell.Calendar.Services.CalendarServiceFactory.CreateDefault(), vibrancy, appearance);
         var ccFeatures = Services.ControlCenterFeatureCatalog.Build(vibrancy, appearance, net, vol, mic, bat, brightness);
         var cc = new Windows.ControlCenterWindow(ccFeatures, vol, mic, brightness, vibrancy, appearance);
 

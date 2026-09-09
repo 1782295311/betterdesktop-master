@@ -14,11 +14,18 @@ namespace BetterDesktop.Shell.MenuBar.Windows;
 /// <summary>WiFi 密码输入弹窗：自绘界面，输入后直接发起连接，不跳转系统设置。</summary>
 internal sealed class WifiPasswordWindow : MenuBarPopupWindow
 {
+    // 含密码输入框：禁用 WS_EX_NOACTIVATE，否则点击后窗口不获焦点、键盘输入落不进 PasswordBox。
+    protected override bool UseNoActivateWindowStyle => false;
+
     private readonly string _ssid;
     private readonly Action<bool> _onResult; // true=连接请求已发出，false=取消/失败
     private PasswordBox? _passwordBox;
     private TextBox? _plainBox;
     private TextBlock? _errorText;
+    private System.Windows.Controls.Button? _connectBtn;
+    // S4：窗口关闭/取消后置位——轮询退出 UI 交互，但后台清理仍执行一次（connectionMode=auto
+    // 红线：错误 profile 不删会导致系统反复自动重连）。
+    private volatile bool _pollCancelled;
 
     public WifiPasswordWindow(
         string ssid,
@@ -163,6 +170,7 @@ internal sealed class WifiPasswordWindow : MenuBarPopupWindow
             Cursor = System.Windows.Input.Cursors.Hand,
             IsDefault = true
         };
+        _connectBtn = connectBtn;
         connectBtn.Click += OnConnect;
         btnRow.Children.Add(cancelBtn);
         btnRow.Children.Add(connectBtn);
@@ -172,7 +180,7 @@ internal sealed class WifiPasswordWindow : MenuBarPopupWindow
         return root;
     }
 
-    private void OnConnect(object sender, RoutedEventArgs e)
+    private async void OnConnect(object sender, RoutedEventArgs e)
     {
         // 当前显示明文 TextBox 时读明文，否则读 PasswordBox 密文
         bool plainVisible = _plainBox is { Visibility: Visibility.Visible };
@@ -184,16 +192,36 @@ internal sealed class WifiPasswordWindow : MenuBarPopupWindow
             return;
         }
 
-        bool ok = Services.WifiEnumerator.ConnectWithPassword(_ssid, pwd);
+        // 2026-09-04 回归修复：ConnectWithPassword 是同步 wlanapi（含 W5 的认证探测 + 最多两次
+        // WlanSetProfile/DPAPI），适配器忙时可达数秒——必须在后台执行，否则 UI 线程冻结（剧烈卡顿根因）。
+        // G5：连接期间按钮保持禁用直到轮询结束（防轮询期间再次点击并发写 profile）。
+        if (_connectBtn is not null)
+        {
+            _connectBtn.IsEnabled = false;
+        }
+        bool ok;
+        try
+        {
+            ok = await System.Threading.Tasks.Task.Run(() => Services.WifiEnumerator.ConnectWithPassword(_ssid, pwd));
+        }
+        catch (Exception ex)
+        {
+            BetterDesktop.Kernel.Core.DiagnosticLog.Trace("menu-bar.wifi", $"ConnectWithPassword 异常（{_ssid}）: {ex.Message}");
+            ok = false;
+        }
+
         if (!ok)
         {
             ShowError("连接请求失败，请检查密码或网络状态后重试。");
             ResetPasswordForRetry();
+            if (_connectBtn is not null)
+            {
+                _connectBtn.IsEnabled = true;
+            }
             return;
         }
 
-        // 连接请求已发出：轮询接口状态，确认连接成功后才关闭；
-        // 失败/超时则删除错误 profile 并显示错误，避免系统反复重试导致适配器繁忙。
+        // 连接请求已发出：统一等待器确认连接成功后才关闭；失败/超时则清理错误 profile。
         _ = PollConnectionAsync();
     }
 
@@ -213,51 +241,65 @@ internal sealed class WifiPasswordWindow : MenuBarPopupWindow
         _passwordBox?.Focus();
     }
 
-    /// <summary>轮询无线接口状态：最多 10 秒（密码正确连接很快，超时即判定失败），每 1 秒查一次。
-    /// 状态 1=已连接，0/6=连接失败。失败/超时后先 WlanDisconnect 释放适配器再删 profile，保证列表不崩溃、下次点击秒弹密码窗。</summary>
+    private void RestoreConnectButton()
+    {
+        if (_connectBtn is not null)
+        {
+            _connectBtn.IsEnabled = true;
+        }
+    }
+
+    /// <summary>S4：窗口关闭（取消/X/成功后 Close）置位取消标志——轮询停止触碰 UI，但后台清理仍执行。</summary>
+    protected override void OnClosed(EventArgs e)
+    {
+        _pollCancelled = true;
+        base.OnClosed(e);
+    }
+
+    /// <summary>
+    /// 统一等待连接结果（G4：走 WifiEnumerator.WaitForConnectionAsync，含 SSID 核对）。
+    /// 成功：回调 + 关窗；失败/超时：后台清理错误 profile（先断开再删，connectionMode=auto 红线）+ 报错。
+    /// 窗口已关闭（_pollCancelled）时只做清理，不触碰任何 UI（S4）。
+    /// </summary>
     private async System.Threading.Tasks.Task PollConnectionAsync()
     {
-        for (int i = 0; i < 10; i++)
+        try
         {
-            await System.Threading.Tasks.Task.Delay(1000);
-            int state = Services.WifiEnumerator.GetInterfaceState();
-            if (state == 1) // Connected
+            bool connected = await Services.WifiEnumerator.WaitForConnectionAsync(_ssid).ConfigureAwait(false);
+            if (!connected)
             {
-                await Dispatcher.InvokeAsync(() =>
+                await System.Threading.Tasks.Task.Run(() => Services.WifiEnumerator.CleanupFailedConnection(_ssid)).ConfigureAwait(false);
+            }
+            if (_pollCancelled)
+            {
+                return; // 窗口已关：清理已做，UI 交互全部跳过
+            }
+            await Dispatcher.InvokeAsync(() =>
+            {
+                if (connected)
                 {
                     _onResult(true);
                     Close();
-                });
-                return;
-            }
-            if (state == 0 || state == 6) // Disconnected / AdHocNetworkFormed = 系统已反馈连接失败
-            {
-                // 先断开释放适配器，再删除错误 profile，保证 WiFi 列表不崩溃、下次点击秒弹
-                await System.Threading.Tasks.Task.Run(() =>
+                }
+                else
                 {
-                    Services.WifiEnumerator.Disconnect();
-                    Services.WifiEnumerator.DeleteProfile(_ssid);
-                });
-                await Dispatcher.InvokeAsync(() =>
-                {
-                    ShowError("无法连接到此网络，密码可能错误，请重试。");
+                    ShowError("无法连接到此网络，密码可能错误或信号不佳，请重试。");
                     ResetPasswordForRetry();
-                });
-                return;
-            }
-            // 其他状态（关联中/搜索中/认证中/漫游中/断开中）继续等待系统反馈
+                    RestoreConnectButton();
+                }
+            });
         }
-        // 超时（30 秒系统仍未反馈）：主动断开释放适配器 + 删 profile
-        await System.Threading.Tasks.Task.Run(() =>
+        catch (Exception ex)
         {
-            Services.WifiEnumerator.Disconnect();
-            Services.WifiEnumerator.DeleteProfile(_ssid);
-        });
-        await Dispatcher.InvokeAsync(() =>
-        {
-            ShowError("连接超时，请检查密码或网络信号后重试。");
-            ResetPasswordForRetry();
-        });
+            BetterDesktop.Kernel.Core.DiagnosticLog.Trace("menu-bar.wifi", $"连接轮询异常（{_ssid}）: {ex.Message}");
+            // 兜底清理：防错误 profile 残留导致系统反复重连
+            try { await System.Threading.Tasks.Task.Run(() => Services.WifiEnumerator.CleanupFailedConnection(_ssid)).ConfigureAwait(false); }
+            catch (Exception ex2) { BetterDesktop.Kernel.Core.DiagnosticLog.Trace("menu-bar.wifi", $"兜底清理失败（{_ssid}）: {ex2.Message}"); }
+            if (!_pollCancelled)
+            {
+                await Dispatcher.InvokeAsync(RestoreConnectButton);
+            }
+        }
     }
 
     private void ShowError(string message)

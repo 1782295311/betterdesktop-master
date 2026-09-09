@@ -1,53 +1,61 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
+using System.Windows;
+using System.Windows.Input;
 using BetterDesktop.Shell.AppSource.Models;
-using BetterDesktop.Shell.ContextMenus.Contracts;
+using BetterDesktop.Shell.ContextMenus.Services;
 
 namespace BetterDesktop.Shell.StartMenu.Services;
 
 /// <summary>
-/// 程序项右键菜单构建（Step 8：开始菜单接管 AppGrabber 的固定/管理员/位置/卸载能力）。
-/// 供程序树、所有应用列表、搜索结果复用。
-/// 2026-09-02 统一收口：不再构建 WPF ContextMenu（系统样式/非 ShellWindow/失焦语义不可控），
-/// 返回 MenuItemDef 列表，由 MenuSurface.Attach 接到统一弹层（ShellWindow + 主题令牌）。
-/// 命令异常由 MenuHost 统一捕获记录，此处不再逐项 try/catch。
+/// 程序项右键接入（2026-09-05 架构收口）：开始菜单不再自绘菜单——条目右键
+/// 直接接系统原生菜单（NativeMenuPopup，explorer 同款渲染）。
+/// 【白话】"开始菜单条目的右键菜单" → 本文件 AttachNative（host=布局里的条目行/悬停框）。
+/// 有有效路径（.lnk/目标）才挂接；UWP 等无路径项不挂 = 主体未申明菜单，
+/// 按拍板「主体没申明就不实现自绘菜单，统一交由系统处理」。
 /// </summary>
 internal static class AppItemActions
 {
-    public static IReadOnlyList<MenuItemDef> BuildItems(AppItem app, StartMenuService service)
+    /// <summary>把开始菜单条目的右键接到系统原生菜单（有路径才有菜单）。</summary>
+    public static void AttachNative(FrameworkElement host, AppItem app)
     {
-        var items = new List<MenuItemDef>
+        host.MouseRightButtonUp += (_, e) =>
         {
-            new()
+            try
             {
-                Id = "start.launch",
-                Text = "启动",
-                Command = () =>
+                var paths = NativePaths(app);
+                if (paths is not { Count: > 0 })
                 {
-                    service.ActivateOrLaunch(app);
-                    service.Hide();
-                },
-            },
-            Sep("start.sep1"),
-            new() { Id = "start.pin.dock", Text = "固定到 Dock", Command = () => service.PinToZone(app, "dock") },
-            new() { Id = "start.pin.startmenu", Text = "固定到开始菜单", Command = () => service.PinToZone(app, "startmenu") },
-            new() { Id = "start.pin.taskbar", Text = "固定到任务栏", Command = () => service.PinToZone(app, "taskbar") },
-            Sep("start.sep2"),
-            new() { Id = "start.admin", Text = "以管理员运行", Command = () => service.LaunchAsAdmin(app) },
-            new() { Id = "start.location", Text = "打开文件位置", Command = () => service.OpenFileLocation(app) },
+                    return; // 无路径（UWP 等）：不弹任何自研菜单
+                }
+                var physical = host.PointToScreen(e.GetPosition(host));
+                _ = NativeMenuPopup.TryShowItems(
+                    paths, physical,
+                    (Keyboard.Modifiers & ModifierKeys.Shift) != 0);
+                e.Handled = true;
+            }
+            catch
+            {
+                // 右键接入失败不拖垮宿主交互（M10）
+            }
         };
-        if (!string.IsNullOrWhiteSpace(app.UninstallCommand))
-        {
-            items.Add(new() { Id = "start.uninstall", Text = "卸载", Command = () => service.Uninstall(app) });
-        }
-
-        return items;
     }
 
-    private static MenuItemDef Sep(string id) => new()
+    /// <summary>
+    /// 原生菜单路径源：优先 .lnk（系统菜单含"固定到任务栏/打开文件位置"全套），回退真实目标。
+    /// </summary>
+    public static IReadOnlyList<string>? NativePaths(AppItem app)
     {
-        Id = id,
-        Text = string.Empty,
-        Kind = MenuItemKind.Separator,
-    };
+        if (!string.IsNullOrWhiteSpace(app.ShortcutPath) && File.Exists(app.ShortcutPath))
+        {
+            return [app.ShortcutPath];
+        }
+        if (!string.IsNullOrWhiteSpace(app.TargetPath)
+            && (File.Exists(app.TargetPath) || Directory.Exists(app.TargetPath)))
+        {
+            return [app.TargetPath];
+        }
+        return null;
+    }
 }

@@ -14,6 +14,11 @@
     <InternalsVisibleTo Include="BetterDesktop.Shell.ContextMenu.Tests" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- CLSID 反查内置字典（GuidInfo 引擎加载；来源 ContextMenuManager GuidInfosDic.ini） -->
+    <EmbeddedResource Include="Assets\GuidInfosDic.ini" />
+  </ItemGroup>
+
   <PropertyGroup>
     <RootNamespace>BetterDesktop.Shell.ContextMenus</RootNamespace>
     <AssemblyName>BetterDesktop.Shell.ContextMenu</AssemblyName>
@@ -26,4 +31,7 @@
     <ProjectReference Include="..\shell-settings\BetterDesktop.Shell.Settings.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <ProjectReference Include="..\..\api\BetterDesktop.Api.csproj" />
+  </ItemGroup>
 </Project>

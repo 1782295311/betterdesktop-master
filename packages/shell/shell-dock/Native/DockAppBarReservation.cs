@@ -1,4 +1,4 @@
-﻿// BetterDesktop.Shell.Dock — AppBar 空间预留（Win32 SHAppBarMessage，底部 dock 专属）
+// BetterDesktop.Shell.Dock — AppBar 空间预留（Win32 SHAppBarMessage，底部 dock 专属）
 // 与 shell-menu-bar/Native/AppBarReservation 同范式（ABM_NEW → QUERYPOS+SETPOS → ABM_REMOVE），
 // 差异仅 edge=ABE_BOTTOM：dock 注册为底部 AppBar 后，explorer 自动把工作区上移，
 // **最大化窗口/桌面图标不再覆盖 dock 条带**——dock 不需要置顶就能始终可见（cairoshell 同款）。

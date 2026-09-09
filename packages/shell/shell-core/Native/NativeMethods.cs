@@ -1,4 +1,4 @@
-﻿// BetterDesktop.Shell.Core — Win32 Native 统一平台层（唯一权威互操作层）
+// BetterDesktop.Shell.Core — Win32 Native 统一平台层（唯一权威互操作层）
 //
 // 【目的】全库 ~90 处散落的 P/Invoke 重复声明收口于此（计划 2026-09-07-common-capability-extraction.md P0-1）。
 //   迁移纪律：签名/语义与原始声明保持行为等价（不重命名、不改 CharSet/MarshalAs/结构体布局）。

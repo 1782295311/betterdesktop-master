@@ -16,7 +16,7 @@ public sealed class RecentSectionProvider : IStartMenuSectionProvider
     public string Name => "recent";
 
     /// <inheritdoc />
-    public FrameworkElement BuildSection(StartMenuService service)
+    public FrameworkElement BuildSection(IStartMenuDataService service)
     {
         // 栏目显隐开关（startmenu.show-recent-programs），设置分区热更新。
         if (!service.Settings.Get("startmenu.show-recent-programs", true))

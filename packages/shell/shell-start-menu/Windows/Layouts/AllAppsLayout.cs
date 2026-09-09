@@ -21,7 +21,7 @@ namespace BetterDesktop.Shell.StartMenu.Windows.Layouts;
 /// </summary>
 public sealed class AllAppsLayout : IStartMenuLayoutProvider, IStartMenuLayoutHost
 {
-    private StartMenuService? _service;
+    private IStartMenuDataService? _service;
     private StartMenuPalette _palette = null!;
     private ListBox? _appsList;
     private readonly Dictionary<string, FrameworkElement> _groupHeaders = new(); // 字母 → 分组头元素（滚动定位用）
@@ -37,7 +37,7 @@ public sealed class AllAppsLayout : IStartMenuLayoutProvider, IStartMenuLayoutHo
     public ListBox AppsList => _appsList!;
 
     /// <inheritdoc />
-    public FrameworkElement BuildLayout(StartMenuService service)
+    public FrameworkElement BuildLayout(IStartMenuDataService service)
     {
         _service = service;
         _palette = StartMenuPalette.From(service.ThemeTokens);
@@ -373,9 +373,9 @@ public sealed class AllAppsLayout : IStartMenuLayoutProvider, IStartMenuLayoutHo
                 Cursor = Cursors.Hand
             };
             item.MouseLeftButtonUp += (_, _) => ExecuteResult(result);
-            if (result.AppItem is not null && _service is not null)
+            if (result.AppItem is not null)
             {
-                MenuSurface.Attach(item, () => AppItemActions.BuildItems(result.AppItem, _service!), _service?.Menus);
+                AppItemActions.AttachNative(item, result.AppItem);
             }
 
             _appsList.Items.Add(item);

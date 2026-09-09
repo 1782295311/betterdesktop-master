@@ -75,16 +75,6 @@ internal static class ControlCenterFeatureCatalog
             anchor => LaunchSettings("ms-settings:network-mobilehotspot")));
 
         // —— 顶部开关区：右列（小）——
-        // 专注助手（空壳：Win11 专注会话由 ms-settings:quietmoments 管理）
-        list.Add(new ControlCenterFeature("专注助手",
-            () => string.Empty,
-            anchor => LaunchSettings("ms-settings:quietmoments")));
-
-        // 台前调度（空壳：Windows 无原生等价项；唤起多任务视图 Win+Tab 通过 User32 发送 Win 组合键后续接入）
-        list.Add(new ControlCenterFeature("台前调度",
-            () => string.Empty,
-            anchor => LaunchSettings("ms-settings:multitasking")));
-
         // 投影（Win+K：投射到无线显示器 → ms-settings:project）
         list.Add(new ControlCenterFeature("投影",
             () => string.Empty,
@@ -116,6 +106,8 @@ internal static class ControlCenterFeatureCatalog
     /// 唯一实现收敛到 NativePanelStyles.OpenSystemSettings——历史上三处各写一份 Process.Start，
     /// 其中两份漏挂点击事件，表现为"文字在那儿但点了没反应"。</summary>
     private static void LaunchSettings(string uri) => NativePanelStyles.OpenSystemSettings(uri);
+
+
 
     /// <summary>
     /// 在锚点展开独立面板，越界时回拉以保证可见。

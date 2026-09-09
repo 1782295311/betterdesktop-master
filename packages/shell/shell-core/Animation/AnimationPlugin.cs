@@ -5,6 +5,11 @@ using BetterDesktop.Kernel.Contracts;
 
 namespace BetterDesktop.Shell.Core.Animation;
 
+// ============================================================
+// 【白话导航 · 动画域】凭白话需求定位到精确文件：
+//   "动画播放/缓动/时长" → AnimationService.cs（IAnimationService，全壳统一动画能力，供各 UI 包 Inject）
+// ============================================================
+
 /// <summary>
 /// 动画插件，提供动画服务。
 /// </summary>

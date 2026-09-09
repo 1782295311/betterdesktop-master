@@ -8,6 +8,13 @@ using BetterDesktop.Shell.Pinning.Services;
 
 namespace BetterDesktop.Shell.Pinning;
 
+// ============================================================
+// 【白话导航 · 固定项域】凭白话需求定位到精确文件：
+//   "固定到任务栏/开始/Dock、取消固定" → Services/PinningService.cs（IPinningService，统一固定存储）
+//   "固定项数据模型 / 变更事件"        → Contracts/PinnedItem.cs、Contracts/PinnedChangedEventArgs.cs
+//   消费方：shell-dock、shell-start-menu 通过 Inject 取用。
+// ============================================================
+
 /// <summary>
 /// 通用固定 / 收藏服务插件。
 /// 依赖 IAppSourceService（由 AppSourcePlugin 先行注册），加载时 Provide IPinningService。

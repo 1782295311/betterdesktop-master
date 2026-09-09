@@ -19,6 +19,7 @@ using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Media;
 using BetterDesktop.Shell.Settings.Contracts;
+using BetterDesktop.Shell.Settings.Surface;
 
 namespace BetterDesktop.Shell.Desktop.Sections;
 
@@ -94,8 +95,12 @@ public sealed class DesktopSection : ISettingsSection
         arrangeBody.Children.Add(TitleBlock("排列与拖动", tokens));
         arrangeBody.Children.Add(ToggleRow("自动排列（开启后图标按瀑布列排布，不可拖动换位）", settings, tokens,
             "desktop.autoArrange", false));
+        arrangeBody.Children.Add(ToggleRow("拖动图标时自动退出自动排列（保持当前布局，转为自由排布）", settings, tokens,
+            "desktop.autoExitArrangeOnDrag", true));
         arrangeBody.Children.Add(ToggleRow("拖动后对齐网格", settings, tokens,
             "desktop.snapToGrid", true));
+        arrangeBody.Children.Add(ToggleRow("跟随系统排序（explorer 右键『排序方式』实时驱动自绘图标排序）", settings, tokens,
+            "desktop.sortBridge", true));
         arrangeBody.Children.Add(ToggleRow("隐藏桌面图标（也可在桌面空白处双击切换）", settings, tokens,
             "desktop.iconsHidden", false));
 
@@ -156,17 +161,7 @@ public sealed class DesktopSection : ISettingsSection
 
     // ===== 共享 UI helper（与 ThemeSection / LeftDockSection 同风格，Section 自包含） =====
 
-    private static Border GroupCard()
-    {
-        var body = new StackPanel { Margin = new Thickness(16, 14, 16, 14) };
-        return new Border
-        {
-            Margin = new Thickness(0, 0, 0, 16),
-            CornerRadius = new CornerRadius(10),
-            Background = Brushes.Transparent,
-            Child = new Border { CornerRadius = new CornerRadius(9), Child = body }
-        };
-    }
+    private static Border GroupCard() => SettingsUi.CreateCard();
 
     private static StackPanel CardBody(Border card) => (StackPanel)((Border)card.Child!).Child!;
 
@@ -200,7 +195,7 @@ public sealed class DesktopSection : ISettingsSection
             FontSize = 13,
             Foreground = tokens.Foreground
         };
-        DockPanel.SetDock(text, Dock.Left);
+        DockPanel.SetDock(text, System.Windows.Controls.Dock.Left);
 
         var valueText = new TextBlock
         {
@@ -229,12 +224,12 @@ public sealed class DesktopSection : ISettingsSection
         };
 
         var right = new DockPanel { LastChildFill = false };
-        DockPanel.SetDock(valueText, Dock.Right);
+        DockPanel.SetDock(valueText, System.Windows.Controls.Dock.Right);
         right.Children.Add(valueText);
-        DockPanel.SetDock(slider, Dock.Left);
+        DockPanel.SetDock(slider, System.Windows.Controls.Dock.Left);
         right.Children.Add(slider);
 
-        DockPanel.SetDock(right, Dock.Right);
+        DockPanel.SetDock(right, System.Windows.Controls.Dock.Right);
         row.Children.Add(text);
         row.Children.Add(right);
         return row;

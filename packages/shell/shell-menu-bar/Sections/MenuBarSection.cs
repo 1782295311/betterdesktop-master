@@ -14,6 +14,7 @@ using System.Windows.Media;
 using BetterDesktop.Shell.MenuBar.Contracts;
 using BetterDesktop.Shell.MenuBar.Status;
 using BetterDesktop.Shell.Settings.Contracts;
+using BetterDesktop.Shell.Settings.Surface;
 
 namespace BetterDesktop.Shell.MenuBar.Sections;
 
@@ -115,18 +116,7 @@ internal sealed class MenuBarSection : ISettingsSection
 
     // ===== UI helper（与 shell-settings 的 LeftDockSection 同风格，Section 自包含） =====
 
-    private static Border GroupCard(IThemeTokens tokens)
-    {
-        var body = new StackPanel { Margin = new Thickness(16, 14, 16, 14) };
-        var inner = new Border { CornerRadius = new CornerRadius(9), Child = body };
-        return new Border
-        {
-            Margin = new Thickness(0, 0, 0, 16),
-            CornerRadius = new CornerRadius(10),
-            Background = Brushes.Transparent,
-            Child = inner
-        };
-    }
+    private static Border GroupCard(IThemeTokens tokens) => SettingsUi.CreateCard();
 
     private static StackPanel CardBody(Border card) => (StackPanel)((Border)card.Child!).Child!;
 
@@ -194,7 +184,7 @@ internal sealed class MenuBarSection : ISettingsSection
             FontSize = 13,
             Foreground = tokens.Foreground
         };
-        DockPanel.SetDock(text, Dock.Left);
+        DockPanel.SetDock(text, System.Windows.Controls.Dock.Left);
 
         var valueText = new TextBlock
         {
@@ -236,12 +226,12 @@ internal sealed class MenuBarSection : ISettingsSection
         };
 
         var right = new DockPanel { LastChildFill = false };
-        DockPanel.SetDock(valueText, Dock.Right);
+        DockPanel.SetDock(valueText, System.Windows.Controls.Dock.Right);
         right.Children.Add(valueText);
-        DockPanel.SetDock(slider, Dock.Left);
+        DockPanel.SetDock(slider, System.Windows.Controls.Dock.Left);
         right.Children.Add(slider);
 
-        DockPanel.SetDock(right, Dock.Right);
+        DockPanel.SetDock(right, System.Windows.Controls.Dock.Right);
         row.Children.Add(text);
         row.Children.Add(right);
         return row;

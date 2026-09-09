@@ -7,19 +7,37 @@
 
 using BetterDesktop.Kernel.Contracts;
 using BetterDesktop.Shell.AppSource.Contracts;
+using BetterDesktop.Shell.Core;
+using BetterDesktop.Shell.Core.Contracts;
+using BetterDesktop.Shell.Core.Services;
 using BetterDesktop.Shell.Core.Surface;
 using BetterDesktop.Shell.Core.Vibrancy;
+using BetterDesktop.Shell.Desktop.Contracts;
 using BetterDesktop.Shell.MenuBar.Contracts;
 using BetterDesktop.Shell.MenuBar.Sections;
 using BetterDesktop.Shell.MenuBar.Services;
 using BetterDesktop.Shell.MenuBar.Windows;
+using BetterDesktop.Shell.Search.Contracts;
 using BetterDesktop.Shell.Settings.Contracts;
 using BetterDesktop.Shell.Status.Contracts;
-using BetterDesktop.Shell.Search.Contracts;
-using BetterDesktop.Shell.Desktop.Contracts;
 using BetterDesktop.Shell.WindowTracker.Contracts;
 
 namespace BetterDesktop.Shell.MenuBar;
+
+// ============================================================
+// 【白话导航 · 顶部菜单栏域】凭白话需求定位到精确文件：
+//   "顶部菜单栏窗口本体"                → Windows/MenuBarWindow.cs；通用弹层基类 Windows/MenuBarPopupWindow.cs
+//   "菜单栏左区（程序/位置/下载/文档）"  → Windows/MenuBarLeftZone.cs + Services/LeftZonePopupExtensions.cs
+//   "菜单栏右区状态图标条"              → Status/MenuBarStatusStrip.cs + Services/StatusBarMenuBarExtension.cs
+//   "WiFi 列表/密码面板"               → Windows/WifiPopupWindow.cs + Services/WifiEnumerator.cs
+//   "蓝牙面板"                         → Windows/BluetoothPopupWindow.cs + Services/BluetoothEnumerator.cs
+//   "电源/电池面板"                    → Windows/PowerPopupWindow.cs + Services/PowerEnumerator.cs
+//   "输入法面板"                       → Windows/ImePopupWindow.cs + Services/ImeLayoutEnumerator.cs
+//   "CPU/内存/网络/声音/麦克风面板"     → Windows/CpuPanelWindow.cs、MemoryPanelWindow.cs、NetworkPanelWindow.cs、SoundPanelWindow.cs、MicrophonePanelWindow.cs
+//   "控制中心 / 亮度 / 主题 / 扩展中心"  → Windows/ControlCenterWindow.cs、BrightnessSliderControl.cs、ThemePopupWindow.cs、ExtensionsCenterWindow.cs
+//   "第三方往菜单栏加扩展图标"          → shell-core/Contracts/IMenuBarExtension.cs + Services/MenuBarExtensions.cs + Contracts/ExtensionCatalog.cs
+//   状态数据本身来自 shell-status（Inject I*Monitor），本域只做 UI。
+// ============================================================
 
 /// <summary>菜单栏插件：注册扩展点 + 构造 MenuBarWindow 并显示。</summary>
 public sealed class MenuBarPlugin : IPlugin
@@ -30,6 +48,7 @@ public sealed class MenuBarPlugin : IPlugin
     private MenuBarWindow? _window;
     private StatusBarMenuBarExtension? _statusBar;
     private IAppearanceService? _appearance;
+    private ISettingsService? _settings;
 
     public Task LoadAsync(IContext context, CancellationToken cancellationToken = default)
     {
@@ -56,6 +75,11 @@ public sealed class MenuBarPlugin : IPlugin
         var search = context.Get<IStartMenuSearchService>();
         // 搜索结果图标：IAppIconService（AppSourcePlugin 提供，按 AppItem 提取真实应用图标）。
         var appIcon = context.Get<IAppIconService>();
+        // 日历（shell.calendar）：农历/节假日与调休/节气/节日/系统日程/天气；未注册时降级为纯农历月视图（M10）。
+        var calendar = context.Get<BetterDesktop.Shell.Calendar.Contracts.ICalendarService>();
+        // 搜索结果右键菜单的「固定到 Dock」：IPinningService（PinningPlugin 在 Bootstrap 4.6.x 注册）；
+        // 未注册时右键菜单自动省略固定项（M10 降级）。
+        var pinning = context.Get<BetterDesktop.Shell.Pinning.Contracts.IPinningService>();
 
         // Vibrancy 必要：窗口需毛玻璃；降级为 NullVibrancy 保证不抛
         vibrancy ??= new NullVibrancy();
@@ -67,19 +91,52 @@ public sealed class MenuBarPlugin : IPlugin
         {
             _appearance = appearance;
             MenuBarTheme.SyncFrom(appearance);
-            appearance.Changed += OnAppearanceChanged;
+            // 违规1修复：跨程序集裸 event → IEventBus，Effect 托管生命周期
+            context.Effect(() => context.Events.On<AppearanceChangedArgs>(
+                ShellEvents.AppearanceChanged,
+                (e, _) =>
+                {
+                    OnAppearanceChanged(e);
+                    return Task.CompletedTask;
+                }));
         }
 
         // 右区 = 紧凑状态条（系统托盘/FPS/CPU/内存/WiFi/网速/亮度/输入法/蓝牙/音量/麦克风/电池/通知/时间/桌面）
-        _statusBar = new StatusBarMenuBarExtension(vol, mic, bat, ime, brightness, net, mem, cpu, vibrancy, appearance, settings, search, appIcon);
-        var extensions = new List<Contracts.IMenuBarExtension>(capacity: 1)
+        _statusBar = new StatusBarMenuBarExtension(vol, mic, bat, ime, brightness, net, mem, cpu, vibrancy, appearance, settings, search, appIcon, calendar, pinning);
+        var extensions = new List<IMenuBarExtension>(capacity: 1)
         {
             _statusBar
         };
 
+        // P0-3/C2: all extensions go through the registry (right-zone buttons + left-zone popup providers)
+        var registry = new MenuBarExtensionRegistry();
+        registry.Register(_statusBar);
+        registry.Register(new LogoMenuBarExtension(settingsWindow, vibrancy, appearance, context.Events));
+        registry.Register(new StacksPopupBarExtension(vibrancy, appearance, settings));
+
         // 构造并显示菜单栏主窗口
-        _window = new MenuBarWindow(extensions, vibrancy, appearance, context.Logger, settingsWindow, windowTracker, desktopBrowser, settings);
+        // events：Logo 菜单「应用提取器」等跨包入口经 IEventBus 契约（shell.appgrabber.show → shell.dock）。
+        _window = new MenuBarWindow(registry, vibrancy, appearance, context.Logger, settingsWindow, windowTracker, desktopBrowser, settings, context.Events);
         _window.Show();
+
+        // 组件开关（2026-09-07 用户拍板）：components.menubar 即时启停——启动时按设置决定是否显示；
+        // 运行中变更（自绘右键「功能管理」/ 系统右键「自绘桌面 ▸」命令桥）即时 Show/Hide，无需重启。
+        _settings = settings;
+        if (settings is not null)
+        {
+            if (!settings.Get("components.menubar", true))
+            {
+                _window.Hide();
+            }
+            // 违规1修复：跨程序集裸 event → IEventBus，Effect 托管生命周期
+            context.Effect(() => context.Events.On<SettingsChangedEventArgs>(
+                ShellEvents.SettingsChanged,
+                (e, _) =>
+                {
+                    OnSettingsChanged(e);
+                    return Task.CompletedTask;
+                }));
+        }
 
         // 设置 → 菜单栏：系统功能（系统托盘/CPU/内存/WiFi/网速/亮度/输入法/蓝牙/音量/麦克风/电池/通知/时间/桌面）
         // 的显隐统一由设置分区管理；「+」扩展中心只管外部扩展功能插件。
@@ -93,18 +150,34 @@ public sealed class MenuBarPlugin : IPlugin
         return Task.CompletedTask;
     }
 
-    private void OnAppearanceChanged(object? sender, BetterDesktop.Shell.Core.Surface.AppearanceChangedArgs e)
+    private void OnAppearanceChanged(AppearanceChangedArgs e)
     {
         MenuBarTheme.SyncFrom(_appearance);
     }
 
+    private void OnSettingsChanged(SettingsChangedEventArgs e)
+    {
+        if (e.Key != "components.menubar" || _window is null)
+        {
+            return;
+        }
+        var enabled = _settings?.Get("components.menubar", true) ?? true;
+        var dispatcher = _window.Dispatcher;
+        if (dispatcher.CheckAccess())
+        {
+            if (enabled) { _window.Show(); } else { _window.Hide(); }
+        }
+        else
+        {
+            dispatcher.BeginInvoke(new Action(() =>
+            {
+                if (enabled) { _window.Show(); } else { _window.Hide(); }
+            }));
+        }
+    }
+
     public Task UnloadAsync(CancellationToken cancellationToken = default)
     {
-        if (_appearance is not null)
-        {
-            _appearance.Changed -= OnAppearanceChanged;
-            _appearance = null;
-        }
         _window?.Close();
         _window = null;
         _statusBar?.Dispose();

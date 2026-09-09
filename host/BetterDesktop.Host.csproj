@@ -10,7 +10,20 @@
     <OutputType>WinExe</OutputType>
     <RootNamespace>BetterDesktop.Host</RootNamespace>
     <AssemblyName>BetterDesktop.Host</AssemblyName>
+    <!-- 品牌图标:exe 文件图标(资源管理器/任务栏/Alt-Tab) -->
+    <ApplicationIcon>Assets\BetterDesktop.ico</ApplicationIcon>
   </PropertyGroup>
+
+  <ItemGroup>
+    <!-- 品牌资源(嵌入程序集,pack URI 访问):应用图标 + 初始化弹窗动画 -->
+    <Resource Include="Assets\BetterDesktop.ico" />
+    <Resource Include="Assets\splash-anim-v5.mp4" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- 声明式插件树配置：LoaderService 运行时读取，输出目录保留最新 -->
+    <Content Include="cordis.yml" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
 
   <PropertyGroup>
     <!-- 主程序构建版本时间戳：每次编译以当前 UTC 时间自动生成（yyyy.MM.dd.HHmm），
@@ -35,7 +48,11 @@
     <ProjectReference Include="..\packages\shell\shell-status\BetterDesktop.Shell.Status.csproj" />
     <ProjectReference Include="..\packages\shell\shell-menu-bar\BetterDesktop.Shell.MenuBar.csproj" />
     <ProjectReference Include="..\packages\shell\shell-quick-note\BetterDesktop.Shell.QuickNote.csproj" />
-    <ProjectReference Include="..\packages\shell\Taskbar\BetterDesktop.Shell.Taskbar.csproj" />
+    <ProjectReference Include="..\packages\shell\shell-app-source\BetterDesktop.Shell.AppSource.csproj" />
+    <ProjectReference Include="..\packages\shell\shell-window-tracker\BetterDesktop.Shell.WindowTracker.csproj" />
+    <ProjectReference Include="..\packages\shell\shell-pinning\BetterDesktop.Shell.Pinning.csproj" />
+    <ProjectReference Include="..\packages\shell\shell-calendar\BetterDesktop.Shell.Calendar.csproj" />
+    <ProjectReference Include="..\packages\shell\shell-taskbar\BetterDesktop.Shell.Taskbar.csproj" />
     <ProjectReference Include="..\packages\shell\shell-start-menu\BetterDesktop.Shell.StartMenu.csproj" />
     <ProjectReference Include="..\packages\shell\shell-desktop\BetterDesktop.Shell.Desktop.csproj" />
     <ProjectReference Include="..\packages\shell\shell-context-menu\BetterDesktop.Shell.ContextMenu.csproj" />

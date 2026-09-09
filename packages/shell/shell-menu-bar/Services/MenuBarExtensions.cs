@@ -8,14 +8,26 @@ using System.Windows.Controls;
 using System.Windows.Interop;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
+using BetterDesktop.Shell.Core.Contracts;
 using BetterDesktop.Shell.Core.Surface;
 using BetterDesktop.Shell.Core.Vibrancy;
 using BetterDesktop.Shell.MenuBar.Contracts;
+using BetterDesktop.Shell.MenuBar.Status;
 using BetterDesktop.Shell.MenuBar.Windows;
 using BetterDesktop.Shell.Status.Contracts;
 using BetterDesktop.Shell.Status.Native;
 
 namespace BetterDesktop.Shell.MenuBar.Services;
+
+// ── 本文件方法级白话索引（3 个菜单栏扩展，每个 = 一个右区图标；统一实现 IMenuBarExtension）──
+//   "输入法菜单栏图标（点开标点/输入法面板）" → ImeMenuBarExtension（OnChanged 刷新、UpdateVisual 改外观；B11：回调经 UiDispatch 回 UI 线程）
+//   "CPU 菜单栏图标（点开 CPU 面板）"         → CpuMenuBarExtension（B11：OnChanged 经 UiDispatch 回 UI 线程）
+//   "日历/时间菜单栏图标（点开日历面板）"     → CalendarMenuBarExtension（DispatcherTimer 在 UI 线程，天然安全）
+//   控制中心不占独立菜单栏图标：由通知图标（Notification）双用（见 StatusBarMenuBarExtension.cs 的
+//   case Notification：左键=控制中心、右键=通知中心，同一图标空间按使用频率分左右键）。
+//   每个扩展的固定套路：GetVisual 出图标、OpenPopup/ClosePopup 控制面板、OnChanged 订阅状态、Dispose 退订。
+//   扩展如何被菜单栏收集见 shell-core 的 MenuBarExtensionRegistry；右区整条状态条见 Status/MenuBarStatusStrip.cs。
+// ────────────────────────────────────
 
 /// <summary>IME 菜单栏按钮 + 弹窗（独立面板）。左键=切换一次输入法，右键=打开面板。
 /// TSF 输入法显示真实图标；纯键盘布局显示语言代码文本（如 "ENG"），与 Windows 11 语言栏一致。</summary>
@@ -88,7 +100,10 @@ internal sealed class ImeMenuBarExtension : IMenuBarExtension, IDisposable
 
     private void OnChanged(object? sender, StatusSnapshot e)
     {
-        UpdateVisual();
+        // B11 修复：IImeMonitor.Changed 由 StatusPoller 后台线程触发，直接写控件会跨线程抛异常
+        // （被 UpdateVisual 的 try/catch 吞掉 → 图标永不刷新）。用 UiDispatch 编队回 UI 线程。
+        if (_iconImage is null) return;
+        UiDispatch.Run(_iconImage, UpdateVisual);
     }
 
     /// <summary>根据当前激活的输入法更新显示：TSF 显示图标，纯键盘布局显示语言代码。</summary>
@@ -190,10 +205,10 @@ internal sealed class CpuMenuBarExtension : IMenuBarExtension, IDisposable
 
     private void OnChanged(object? sender, StatusSnapshot e)
     {
-        if (_label is not null && !string.IsNullOrEmpty(e.ShortText))
-        {
-            _label.Text = e.ShortText;
-        }
+        // B11 修复：ICpuMonitor.Changed 来自后台线程，_label.Text 必须回 UI 线程写。
+        if (_label is null || string.IsNullOrEmpty(e.ShortText)) return;
+        var text = e.ShortText;
+        UiDispatch.Run(_label, () => _label.Text = text);
     }
 
     public void Dispose()
@@ -209,13 +224,17 @@ internal sealed class CalendarMenuBarExtension : IMenuBarExtension, IDisposable
     public string Id => "calendar";
     private readonly IVibrancyService _vibrancy;
     private readonly IAppearanceService? _appearance;
+    private readonly BetterDesktop.Shell.Calendar.Contracts.ICalendarService? _calendar;
     private CalendarPopupWindow? _popup;
     private TextBlock? _label;
     private readonly System.Windows.Threading.DispatcherTimer _ticker;
 
-    public CalendarMenuBarExtension(IVibrancyService vibrancy, IAppearanceService? appearance)
+    public CalendarMenuBarExtension(
+        IVibrancyService vibrancy,
+        IAppearanceService? appearance,
+        BetterDesktop.Shell.Calendar.Contracts.ICalendarService? calendar = null)
     {
-        _vibrancy = vibrancy; _appearance = appearance;
+        _vibrancy = vibrancy; _appearance = appearance; _calendar = calendar;
         _ticker = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromSeconds(30) };
         _ticker.Tick += (_, _) => UpdateLabel();
         _ticker.Start();
@@ -238,7 +257,7 @@ internal sealed class CalendarMenuBarExtension : IMenuBarExtension, IDisposable
 
     public void OpenPopup(Point anchorScreenTopLeft)
     {
-        _popup ??= new CalendarPopupWindow(_vibrancy, _appearance);
+        _popup ??= new CalendarPopupWindow(_calendar, _vibrancy, _appearance);
         var pos = PopupAnchor.Compute(anchorScreenTopLeft, 150, new Size(_popup.Width, 420), MenuBarMetrics.MenuBarHeight);
         _popup.ShowAt(pos);
     }
@@ -257,59 +276,4 @@ internal sealed class CalendarMenuBarExtension : IMenuBarExtension, IDisposable
         _ticker.Stop();
         _popup?.Close();
     }
-}
-
-/// <summary>控制中心（功能托盘）菜单栏按钮 + 收纳面板（独立面板）。</summary>
-internal sealed class ControlCenterMenuBarExtension : IMenuBarExtension, IDisposable
-{
-    public string Id => "control-center";
-    private readonly INetworkMonitor? _net;
-    private readonly IVolumeMonitor? _vol;
-    private readonly IMicrophoneMonitor? _mic;
-    private readonly IBatteryMonitor? _bat;
-    private readonly IBrightnessMonitor? _brightness;
-    private readonly IVibrancyService _vibrancy;
-    private readonly IAppearanceService? _appearance;
-    private ControlCenterWindow? _popup;
-
-    public ControlCenterMenuBarExtension(
-        INetworkMonitor? net, IVolumeMonitor? vol, IMicrophoneMonitor? mic, IBatteryMonitor? bat,
-        IBrightnessMonitor? brightness,
-        IVibrancyService vibrancy, IAppearanceService? appearance)
-    {
-        _net = net; _vol = vol; _mic = mic; _bat = bat; _brightness = brightness;
-        _vibrancy = vibrancy; _appearance = appearance;
-    }
-
-    public FrameworkElement GetVisual()
-    {
-        // 菜单栏图标：双横线"功能托盘"符号。不写死文字；颜色随主题（暂白）
-        var icon = new TextBlock
-        {
-            Text = "◫",
-            Foreground = MenuBarTheme.Foreground,
-            FontSize = 16,
-            FontWeight = FontWeights.SemiBold,
-            VerticalAlignment = VerticalAlignment.Center,
-            Padding = new Thickness(4, 0, 4, 0),
-            SnapsToDevicePixels = true
-        };
-        return icon;
-    }
-
-    public void OpenPopup(Point anchorScreenTopLeft)
-    {
-        if (_popup is null)
-        {
-            // 控制中心 = 功能目录：每项构造独立面板，点击唤起。共用同一批服务（数据源同步）。
-            var features = ControlCenterFeatureCatalog.Build(_vibrancy, _appearance, _net, _vol, _mic, _bat, _brightness);
-            _popup = new ControlCenterWindow(features, _vol, _mic, _brightness, _vibrancy, _appearance);
-        }
-        var pos = PopupAnchor.Compute(anchorScreenTopLeft, 30, new Size(_popup.Width, 560), MenuBarMetrics.MenuBarHeight);
-        _popup.ShowAt(pos);
-    }
-
-    public void ClosePopup() { if (_popup?.IsVisible == true) { _popup.Hide(); } }
-
-    public void Dispose() { _popup?.Close(); }
 }

@@ -1,5 +1,6 @@
 // 回收站 $I 元数据解析（计划 §8 RecycleRestoreTests）：手写字节样本 → 断言原路径解析。
-// 格式（实现头注释）：$I 文件 0x14 头 + 520 字节 UTF-16 原路径；隔离红线——解析失败即降级隐藏。
+// 格式（2026-09-04 审查 S1 修正后）：v2 = 24 字节头（version+size+time）+ 0x18 起 520 字节
+// UTF-16 原路径，总长 544；v1（280B）拒收。隔离红线——解析失败即降级隐藏。
 
 using System.Text;
 using BetterDesktop.Shell.ContextMenus.Services;
@@ -27,11 +28,11 @@ public class RecycleRestoreTests : IDisposable
         var r = Path.Combine(_dir, "$R000001.txt");
         var i = Path.Combine(_dir, "$I000001.txt");
 
-        var bytes = new byte[0x14 + 520];
-        // 头部：版本/长度字段按公开 $I 规范占位（解析只读 0x14 起的路径区，头部内容不参与断言）
+        var bytes = new byte[0x18 + 520];
+        // v2 头：version=2（低字节）、原大小字段占位（解析只读 0x18 起的路径区，头部其余不参与断言）
         bytes[0] = 2;
-        BitConverter.GetBytes(0x14 + 520).CopyTo(bytes, 8);
-        Encoding.Unicode.GetBytes(originalPath).CopyTo(bytes, 0x14);
+        BitConverter.GetBytes(0x18 + 520).CopyTo(bytes, 8);
+        Encoding.Unicode.GetBytes(originalPath).CopyTo(bytes, 0x18);
         File.WriteAllBytes(i, bytes);
         File.WriteAllText(r, "body");
         return (r, i);
@@ -45,6 +46,18 @@ public class RecycleRestoreTests : IDisposable
 
         Assert.Equal(original, RecycleRestore.ParseOriginalPath(r));
         Assert.True(File.Exists(i));
+    }
+
+    [Fact]
+    public void V1Meta_Rejected()
+    {
+        // v1（280B）：暂不支持 → null（还原项隐藏，不弹坏路径）
+        var r = Path.Combine(_dir, "$R000003.txt");
+        var i = Path.Combine(_dir, "$I000003.txt");
+        File.WriteAllBytes(i, new byte[280]);
+        File.WriteAllText(r, "body");
+
+        Assert.Null(RecycleRestore.ParseOriginalPath(r));
     }
 
     [Fact]

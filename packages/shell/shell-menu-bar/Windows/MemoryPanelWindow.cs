@@ -11,21 +11,41 @@ using BetterDesktop.Shell.Status.Native;
 
 namespace BetterDesktop.Shell.MenuBar.Windows;
 
+// ── 本文件方法级白话索引（内存面板，白话 → 方法）──
+//   "内存占用直方图"            → BuildHistogram（返回 refresh 回调供外部推数据）
+//   "内存占用百分比条"          → BuildUsageBar
+//   "占内存最多的进程行"        → BuildProcessRow（进程名友好化 ResolveFriendlyName、图标 BuildProcessIcon）
+//   "内存条/物理插槽信息行"     → BuildRamRow
+//   "外部把数据推进面板"        → Attach；定时刷新 OnTick；占用条动画 PushBar
+// 面板族同构：均继承 MenuBarPopupWindow，Build* 静态构 UI、Attach 接数据、*ViewModel 承载数据。
+// B8 已修：IsVisibleChanged 隐藏 Pause/显示 Resume、Closed CloseSelf 停 timer 并释放控件树闭包。
+// ────────────────────────────────────
+
 internal sealed class MemoryPanelWindow : MenuBarPopupWindow
 {
+    private ViewModel? _vm;
+
     public MemoryPanelWindow(IVibrancyService vibrancy, IAppearanceService? appearance = null)
         : base(vibrancy, appearance)
     {
         Width = NativePanelStyles.DefaultWidth;
         MinWidth = NativePanelStyles.DefaultWidth;
         SizeToContent = SizeToContent.Height;
+        // B8：面板隐藏即停 1s 轮询（按需刷新，不再对不可见窗口空转、不再经 refresh 闭包钉住控件树）；
+        // 重新显示时恢复并立即刷一帧；窗口最终关闭时彻底停止并释放闭包。
+        IsVisibleChanged += (_, e) =>
+        {
+            if (e.NewValue is true) _vm?.Resume();
+            else _vm?.Pause();
+        };
+        Closed += (_, _) => _vm?.CloseSelf();
     }
 
     public FrameworkElement BuildPreviewContent() => BuildContent();
 
     protected override FrameworkElement BuildContent()
     {
-        var vm = new ViewModel();
+        var vm = _vm = new ViewModel();
         var root = NativePanelStyles.Root(withColumn: col =>
         {
             col.Children.Add(NativePanelStyles.Title("MEM"));
@@ -35,7 +55,7 @@ internal sealed class MemoryPanelWindow : MenuBarPopupWindow
 
             col.Children.Add(NativePanelStyles.Separator(top: 6, bottom: 6));
 
-            // 占用条（23.28 GB / 31.63 GB）
+            // 占用条（已用 / 总量，数值由 ViewModel.OnTick 实时填充）
             col.Children.Add(BuildUsageBar(vm, out var refreshUsage));
 
             col.Children.Add(NativePanelStyles.Separator(top: 10, bottom: 4));
@@ -320,8 +340,9 @@ internal sealed class MemoryPanelWindow : MenuBarPopupWindow
         private Action? _refreshUsage;
         private Action<(IReadOnlyList<MemoryTopProcessNative> processes, IReadOnlyList<MemoryPhysicalSlotNative> ram)>? _setLists;
 
-        public string UsageLabel { get; private set; } = "23.28 GB\n31.63 GB";
-        public double UsagePercent01 { get; private set; } = 0.736;
+        // 中性初值，真实占用由构造末尾与 Attach 的 OnTick 立即覆盖（不展示硬编码示例数值）。
+        public string UsageLabel { get; private set; } = "—\n—";
+        public double UsagePercent01 { get; private set; }
 
         public ViewModel()
         {
@@ -332,6 +353,25 @@ internal sealed class MemoryPanelWindow : MenuBarPopupWindow
             _timer.Tick += OnTick;
             _timer.Start();
             OnTick(null, EventArgs.Empty);
+        }
+
+        /// <summary>面板隐藏：停止 1s 轮询，避免对不可见 UI 空转（B8）。</summary>
+        public void Pause() => _timer.Stop();
+
+        /// <summary>面板重新显示：恢复轮询并立即刷一帧，避免先看到旧数据（B8）。</summary>
+        public void Resume()
+        {
+            if (!_timer.IsEnabled) _timer.Start();
+            OnTick(null, EventArgs.Empty);
+        }
+
+        /// <summary>窗口最终关闭：停轮询并释放 refresh 闭包对控件树的引用（B8）。</summary>
+        public void CloseSelf()
+        {
+            _timer.Stop();
+            _refreshHist = null;
+            _refreshUsage = null;
+            _setLists = null;
         }
 
         public void Attach(Action<double[]> refreshHist, Action refreshUsage,

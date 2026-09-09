@@ -18,6 +18,20 @@ using Microsoft.Win32;
 
 namespace BetterDesktop.Shell.Status.Native;
 
+// ── 本文件方法级白话索引（白话 → 方法）──
+//   "枚举所有键盘布局/输入法（带缓存）" → Enumerate（底层 EnumerateViaInputDll 走 input.dll 表）
+//   "当前激活的布局句柄 HKL / KLID"     → GetActiveHkl / GetActiveTsKlid
+//   "中/英文切换"                       → ToggleChineseEnglish
+//   "读当前是中文还是英文状态"          → ReadConversionNativeMode / ReadConversionModeViaImeWindow
+//   "循环切换一次输入法"                → CycleOnce（C10 相关：Reorder 插入位置）
+//   "当前激活的 TSF 输入法 / 立即激活 TSF 配置" → GetActiveTsKlid / ActivateTsProfile（B6 已修：同一 RCW 只 Release 一次）
+//   "激活指定 TSF 配置 / 加载布局"      → ActivateTsProfile；HKL→KLID 换算 HklToKlid
+//   "布局显示名/语言代码/CLSID 解析"    → ResolveTsDisplayName、GetLanguageCode、TsClsidToHex、ParseLayoutOrTip
+//   "标记列表里哪个是当前激活项"        → ApplyActiveFlags / ComputeIsActive
+//   "释放 GDI 图标句柄"                 → ReleaseIcon
+//   文件尾部 ImeNaming：输入法显示名规范化。TSF 文本输入处理见 TsfInputProcessor.cs。
+// ────────────────────────────────────
+
 /// <summary>一个真实键盘布局/输入法项。KlidHex 为完整 32 位（8 位十六进制，大写）。</summary>
 public sealed record KeyboardLayoutItem(
     string KlidHex,        // 完整 8 位十六进制，如 "00000409" / "E0200804"；TSF 时为 CLSID 去掉 {} 的 32 位
@@ -112,8 +126,10 @@ public static partial class KeyboardLayoutInterop
             var obj = new TfInputProcessorProfilesClass();
             var profiles = (ITfInputProcessorProfiles)obj;
             var hr = profiles.GetActiveLanguageProfile(langid, out var clsid, out var profile, out _);
+            // B6 修复：obj 与 profiles 指向同一 RCW（接口强转不产生新 RCW），只能 Release 一次。
+            // 原先再 ReleaseComObject(obj) 必抛 InvalidComObjectException，被 catch 吞掉，
+            // 导致本方法恒返回 null（TSF 活跃输入法识别从未生效）。对照 TsfInputProcessor 单次释放范式。
             Marshal.ReleaseComObject(profiles);
-            Marshal.ReleaseComObject(obj);
             if (hr < 0) return null;
             if (clsid == Guid.Empty) return null;
             return TsClsidToHex(clsid.ToString("B"));
@@ -132,8 +148,8 @@ public static partial class KeyboardLayoutInterop
             var obj = new TfInputProcessorProfilesClass();
             var profiles = (ITfInputProcessorProfiles)obj;
             var hr = profiles.ActivateProfile(ref clsid, langId, ref profile);
+            // B6 修复：同一 RCW 只 Release 一次（重复释放会抛异常被吞、使本方法恒返回 false）。
             Marshal.ReleaseComObject(profiles);
-            Marshal.ReleaseComObject(obj);
             return hr >= 0;
         }
         catch
@@ -1095,7 +1111,9 @@ public static partial class KeyboardLayoutInterop
             {
                 existing.Add(key);
             }
-            ApplyOrderToPreload(preload, Reorder(existing, key, setDefault ? 0 : (setDefault ? 0 : existing.Count - 1)));
+            // C10 修复：非默认布局追加到末尾（existing.Count），而非倒数第二（existing.Count-1）。
+            // Reorder 内部会钳制 index 不越界，末尾插入语义与注释「非默认则追加到末尾」一致。
+            ApplyOrderToPreload(preload, Reorder(existing, key, setDefault ? 0 : existing.Count));
 
             Apply(); // 加载新布局，让当前会话生效
             return true;
@@ -1226,7 +1244,7 @@ public static partial class KeyboardLayoutInterop
         if (key is null) return IntPtr.Zero;
         try
         {
-            long value = Convert.ToInt64(key, 16);
+            long value = System.Convert.ToInt64(key, 16);
             return new IntPtr((long)(uint)value);
         }
         catch

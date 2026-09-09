@@ -1,6 +1,7 @@
 // BetterDesktop.Kernel.Loader — LoaderService 实现（ADR-002 loader 落地）
 // 一切皆插件：loader 自身也是插件；读取 cordis.yml → 按启用标记装配
 
+using System.Linq;
 using BetterDesktop.Kernel.Contracts;
 using YamlDotNet.Serialization;
 
@@ -28,13 +29,19 @@ public sealed class LoaderService : IPlugin
     public IReadOnlyList<LoaderEntryReport> Reports { get; private set; } = Array.Empty<LoaderEntryReport>();
 
     /// <inheritdoc />
-    public Task LoadAsync(IContext context, CancellationToken cancellationToken = default)
+    /// <remarks>
+    /// 全程不使用 ConfigureAwait(false)：保留调用方同步上下文（通常为 UI 线程），
+    /// 确保每个子插件 LoadAsync 的同步段（含 WPF 窗口构造）在 UI 线程执行，
+    /// 与原 Bootstrap.cs 硬编码 context.Plugin() 的线程行为等价。
+    /// 串行加载语义不变：逐个 await 子插件句柄，不并行。
+    /// </remarks>
+    public async Task LoadAsync(IContext context, CancellationToken cancellationToken = default)
     {
         var reports = new List<LoaderEntryReport>();
         LoaderConfig config;
         try
         {
-            var text = File.ReadAllText(ResolveConfigPath(_options.ConfigPath));
+            var text = await File.ReadAllTextAsync(ResolveConfigPath(_options.ConfigPath), cancellationToken);
             var deserializer = new DeserializerBuilder().Build();
             config = deserializer.Deserialize<LoaderConfig>(text) ?? new LoaderConfig();
         }
@@ -69,14 +76,30 @@ public sealed class LoaderService : IPlugin
                 continue;
             }
             var handle = context.Plugin(plugin);
-            handle.AwaitAsync().GetAwaiter().GetResult();
+            await handle.AwaitAsync();
             _handles.Add(handle);
-            var status = handle.State == PluginState.Failed ? LoaderEntryStatus.Failed : LoaderEntryStatus.Loaded;
+
+            LoaderEntryStatus status;
+            if (handle.State == PluginState.Failed)
+            {
+                status = LoaderEntryStatus.Failed;
+            }
+            else if (handle.State == PluginState.Pending)
+            {
+                var pendingDeps = string.Join(", ", plugin.Inject.Select(t => t.Name));
+                context.Logger.Warn(
+                    $"插件条目 {entry.Id}（{plugin.Name}）停在 Pending，等待依赖注入：{pendingDeps}；"
+                    + "依赖服务由后续插件 Provide 后内核将自动重启加载。");
+                status = LoaderEntryStatus.Pending;
+            }
+            else
+            {
+                status = LoaderEntryStatus.Loaded;
+            }
             reports.Add(new LoaderEntryReport(entry, status) { Handle = handle });
         }
 
         Reports = reports;
-        return Task.CompletedTask;
     }
 
     /// <summary>

@@ -1,0 +1,36 @@
+<Window x:Class="BetterDesktop.Host.Views.SplashWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Better Desktop"
+        Width="800"
+        Height="450"
+        WindowStyle="None"
+        AllowsTransparency="True"
+        Background="Transparent"
+        WindowStartupLocation="CenterScreen"
+        Topmost="True"
+        ResizeMode="NoResize"
+        ShowInTaskbar="False"
+        Icon="/Assets/BetterDesktop.ico"
+        SnapsToDevicePixels="True"
+        UseLayoutRounding="True">
+    <!-- 初始化弹窗:深色圆角卡片 + 品牌启动动画(16:9 回正定格版)。
+         关闭时机(任一先到):动画播完 / 鼠标点击跳过 / 解码失败 / 10s 超时兜底。 -->
+    <Border x:Name="Card"
+            Background="#FF0D1117"
+            BorderBrush="#33FFFFFF"
+            BorderThickness="1"
+            CornerRadius="18"
+            MouseLeftButtonDown="Card_OnMouseLeftButtonDown">
+        <Grid x:Name="CardClip"
+              ClipToBounds="True"
+              SizeChanged="CardClip_OnSizeChanged">
+            <MediaElement x:Name="Player"
+                          Stretch="Fill"
+                          LoadedBehavior="Play"
+                          UnloadedBehavior="Stop"
+                          MediaEnded="Player_OnMediaEnded"
+                          MediaFailed="Player_OnMediaFailed" />
+        </Grid>
+    </Border>
+</Window>
