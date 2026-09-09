@@ -53,6 +53,8 @@ if ($MyInvocation.InvocationName -ne '.') {
     $tracked = @(& git -C $root ls-files) | Where-Object { $_ -like '*.md' }
     foreach ($rel in $tracked) {
         if ($rel -match '(^|/|\\)archived(/|\\|$)') { continue }
+        # 历史规划/性能记录文档豁免（一阶段收口前的产物，不追责硬换行）
+        if ($rel -match '^docs/(plans|performance)/') { continue }
         $full = Join-Path $root $rel
         if (-not (Test-Path $full -PathType Leaf)) { continue }
         $mdFiles += $full

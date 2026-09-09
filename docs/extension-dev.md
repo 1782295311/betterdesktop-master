@@ -83,39 +83,19 @@
 ## 3. 插件生命周期与装配
 
 ```csharp
-// 插件基础接口（kernel）
-public interface IPlugin
-{
-    string Name { get; }
-    IReadOnlyList<Type> Inject { get; }                 // 声明所需依赖；全部可用前内核保持 PENDING
-    Task LoadAsync(IContext context, CancellationToken ct = default);
-    Task UnloadAsync(CancellationToken ct = default);
-}
+// 插件基础接口（kernel） public interface IPlugin { string Name { get; } IReadOnlyList<Type> Inject { get; }                 // 声明所需依赖；全部可用前内核保持 PENDING Task LoadAsync(IContext context, CancellationToken ct = default); Task UnloadAsync(CancellationToken ct = default); }
 ```
 
 ```csharp
-// 服务定位器（kernel）
-context.Get<T>();             // 取已注入的服务（T 是 BetterDesktop.Api 里的接口）
-context.Provide<T>(svc);      // 向内核注册自己的服务（供其他插件消费）
-context.Effect(cleanup);      // 注册卸载清理器（UnloadAsync 之外的一切副作用）
+// 服务定位器（kernel） context.Get<T>();             // 取已注入的服务（T 是 BetterDesktop.Api 里的接口） context.Provide<T>(svc);      // 向内核注册自己的服务（供其他插件消费） context.Effect(cleanup);      // 注册卸载清理器（UnloadAsync 之外的一切副作用）
 ```
 
 **装配三段式**（参考 shell-menu-bar/MenuBarPlugin.cs）：
 
 ```csharp
-public sealed class MyPlugin : IPlugin
-{
-    public string Name => "my-extension";
-    public IReadOnlyList<Type> Inject => [typeof(IMemoryMonitor), typeof(ISettingsService)];
+public sealed class MyPlugin : IPlugin { public string Name => "my-extension"; public IReadOnlyList<Type> Inject => [typeof(IMemoryMonitor), typeof(ISettingsService)];
 
-    public async Task LoadAsync(IContext context, CancellationToken ct)
-    {
-        var mem = context.Get<IMemoryMonitor>();          // 1. 取信息源
-        var settings = context.Get<ISettingsService>();
-        using var sub = settings.Subscribe(...);           // 2. 订阅事件（若有）
-        using var effect = context.Effect(() => Cleanup()); // 3. 注册卸载清理
-    }
-}
+    public async Task LoadAsync(IContext context, CancellationToken ct) { var mem = context.Get<IMemoryMonitor>();          // 1. 取信息源 var settings = context.Get<ISettingsService>(); using var sub = settings.Subscribe(...);           // 2. 订阅事件（若有） using var effect = context.Effect(() => Cleanup()); // 3. 注册卸载清理 } }
 ```
 
 > `Inject` 声明依赖 → 内核自动等待依赖就绪 → `LoadAsync` 时才保证可 `Get<T>()`。这是「按需加载」的落点：插件依赖不满足时自动 PENDING，不阻塞系统启动。
@@ -127,27 +107,19 @@ public sealed class MyPlugin : IPlugin
 ### 4.1 状态监控（同步出数、异步采集）
 
 ```csharp
-var mem = context.Get<IMemoryMonitor>();
-var snap = mem.GetSnapshot();                       // 语义快照：72% / 内存占用 72%... / Warning
-mem.Changed += (_, s) => UpdateUi(s.ShortText, s.Severity);  // 差异变化才触发，无需自行轮询
+var mem = context.Get<IMemoryMonitor>(); var snap = mem.GetSnapshot();                       // 语义快照：72% / 内存占用 72%... / Warning mem.Changed += (_, s) => UpdateUi(s.ShortText, s.Severity);  // 差异变化才触发，无需自行轮询
 ```
 
 ### 4.2 事件订阅（跨域同步）
 
 ```csharp
-var bus = context.Get<IEventBus>();
-using var s1 = bus.Subscribe(ShellEvents.SettingsChanged, e =>
-    ((SettingsChangedEventArgs)e).Key == "my-plugin.flag");
-using var s2 = bus.Subscribe(ShellEvents.AppearanceChanged, e =>
-    ApplyTheme((AppearanceChangedArgs)e));
+var bus = context.Get<IEventBus>(); using var s1 = bus.Subscribe(ShellEvents.SettingsChanged, e => ((SettingsChangedEventArgs)e).Key == "my-plugin.flag"); using var s2 = bus.Subscribe(ShellEvents.AppearanceChanged, e => ApplyTheme((AppearanceChangedArgs)e));
 ```
 
 ### 4.3 大列表预取（异步 + 取消）
 
 ```csharp
-var icons = context.Get<IAppIconService>();
-await icons.PrefetchAsync(appList, ct);              // 后台批量预取，不阻塞 UI
-var icon = await icons.GetIconAsync(app, ct);        // 高清优先，带缓存
+var icons = context.Get<IAppIconService>(); await icons.PrefetchAsync(appList, ct);              // 后台批量预取，不阻塞 UI var icon = await icons.GetIconAsync(app, ct);        // 高清优先，带缓存
 ```
 
 ---
@@ -157,84 +129,46 @@ var icon = await icons.GetIconAsync(app, ct);        // 高清优先，带缓存
 ### 5.1 菜单栏扩展（右区按钮 / 左区弹窗）
 
 ```csharp
-// 实现 IMenuBarExtension（BetterDesktop.Api）
-public sealed class WeatherButton : IMenuBarExtension
-{
-    public string Id => "weather";
-    public FrameworkElement? GetVisual() => new TextBlock { Text = "☁" };
-    public void OpenPopup(Point anchor) { /* 打开独立弹窗（ShellWindow） */ }
-    public void ClosePopup() { /* 统一收起 */ }
-}
-// 装配：在 LoadAsync 里把实例提供给 IMenuBarExtensionRegistry（或内核装配处注册）
+// 实现 IMenuBarExtension（BetterDesktop.Api） public sealed class WeatherButton : IMenuBarExtension { public string Id => "weather"; public FrameworkElement? GetVisual() => new TextBlock { Text = "☁" }; public void OpenPopup(Point anchor) { /* 打开独立弹窗（ShellWindow） */ } public void ClosePopup() { /* 统一收起 */ } } // 装配：在 LoadAsync 里把实例提供给 IMenuBarExtensionRegistry（或内核装配处注册）
 ```
 
 ### 5.2 搜索 Provider（开始菜单搜索即插即用）
 
 ```csharp
-public sealed class MySearchProvider : ISearchResultProvider
-{
-    public string Name => "my-notes";
-    public IReadOnlyList<SearchResult> Search(string query, CancellationToken ct)
-    {
-        // 同步返回、遵守 ct；内部异常记日志不冒泡（M10）
-    }
-}
+public sealed class MySearchProvider : ISearchResultProvider { public string Name => "my-notes"; public IReadOnlyList<SearchResult> Search(string query, CancellationToken ct) { // 同步返回、遵守 ct；内部异常记日志不冒泡（M10） } }
 ```
 
 ### 5.3 日历条目提供者
 
 ```csharp
-public sealed class TodoProvider : ICalendarEntryProvider
-{
-    public string Id => "todo";
-    public string DisplayName => "待办";
-    public bool IsEnabled => true;
-    public event EventHandler? EntriesChanged;            // 数据变化时触发
-    public IReadOnlyList<CalendarEntry> GetEntries(DateOnly from, DateOnly to) { /* 同步出数 */ }
-}
+public sealed class TodoProvider : ICalendarEntryProvider { public string Id => "todo"; public string DisplayName => "待办"; public bool IsEnabled => true; public event EventHandler? EntriesChanged;            // 数据变化时触发 public IReadOnlyList<CalendarEntry> GetEntries(DateOnly from, DateOnly to) { /* 同步出数 */ } }
 ```
 
 ### 5.4 开始菜单布局 / 栏目（只依赖数据契约，不依赖实现类）
 
 ```csharp
-// 布局扩展：只拿到 IStartMenuDataService（数据契约），看不到 StartMenuService 实现
-public sealed class MyLayout : IStartMenuLayoutProvider
-{
-    public string Name => "my-layout";
-    public FrameworkElement BuildLayout(IStartMenuDataService service)
-        => /* 用 service.GetAllApps() / GetProgramTree() / ThemeTokens 构建 UI */;
-}
+// 布局扩展：只拿到 IStartMenuDataService（数据契约），看不到 StartMenuService 实现 public sealed class MyLayout : IStartMenuLayoutProvider { public string Name => "my-layout"; public FrameworkElement BuildLayout(IStartMenuDataService service) => /* 用 service.GetAllApps() / GetProgramTree() / ThemeTokens 构建 UI */; }
 ```
 
 ### 5.5 插件窗口（由内核托管外壳，插件只提供内容）
 
 ```csharp
-public sealed class MyPanel : IShellPluginWindow
-{
-    public UIElement Content => new TextBlock { Text = "我的面板" };
-    public PluginWindowConfig Config => new() { WindowKey = "my-panel", AllowResize = ResizeMode.CanResize };
-    public void OnThemeChanged(ThemeSnapshot theme) { /* 自定义绘制时响应主题变化 */ }
-}
+public sealed class MyPanel : IShellPluginWindow { public UIElement Content => new TextBlock { Text = "我的面板" }; public PluginWindowConfig Config => new() { WindowKey = "my-panel", AllowResize = ResizeMode.CanResize }; public void OnThemeChanged(ThemeSnapshot theme) { /* 自定义绘制时响应主题变化 */ } }
 ```
 
 ---
 
 ## 6. 三原则（本仓库一切代码的铁律）
 
-1. **功能复用**：同一能力只在一处实现。接口在 `BetterDesktop.Api`，实现只在对应 shell-* 包，
-   任何第三方/内部 UI 一律经 `IContext.Get<T>()` 消费，禁止复制实现。
-2. **数据同步**：单一数据源。如内存/CPU/电量等状态统一由 `I*Monitor` 产出、`IStatusPoller` 广播，
-   所有面板共享同一份快照——一处采集、处处同步；亮度读写走 `IBrightnessMonitor` 单一入口。
-3. **功能异步**：重活不阻塞 UI。采集/扫描/压缩/联网一律后台（`Task.Run` / 异步 API + CancellationToken），
-   UI 只订阅结果。扩展的 `Search` / `GetEntries` 等同步方法须轻量（内部缓存预取，同步出数）。
+1. **功能复用**：同一能力只在一处实现。接口在 `BetterDesktop.Api`，实现只在对应 shell-* 包， 任何第三方/内部 UI 一律经 `IContext.Get<T>()` 消费，禁止复制实现。
+2. **数据同步**：单一数据源。如内存/CPU/电量等状态统一由 `I*Monitor` 产出、`IStatusPoller` 广播， 所有面板共享同一份快照——一处采集、处处同步；亮度读写走 `IBrightnessMonitor` 单一入口。
+3. **功能异步**：重活不阻塞 UI。采集/扫描/压缩/联网一律后台（`Task.Run` / 异步 API + CancellationToken）， UI 只订阅结果。扩展的 `Search` / `GetEntries` 等同步方法须轻量（内部缓存预取，同步出数）。
 
 ---
 
 ## 7. 代码规范提醒（开源前必读）
 
-- **命名空间遮蔽陷阱**：`BetterDesktop.Api` 带入了 `BetterDesktop.Shell.Convert` / `BetterDesktop.Shell.Dock`
-  等**根命名空间**，引用 api 的包内写 `Convert.ToXxx(...)`（System.Convert）或 `Dock.Left`（WPF 枚举）会被
-  命名空间链优先解析而报错。**一律全限定**：`System.Convert.ToXxx(...)`、`System.Windows.Controls.Dock.Left`。
+- **命名空间遮蔽陷阱**：`BetterDesktop.Api` 带入了 `BetterDesktop.Shell.Convert` / `BetterDesktop.Shell.Dock` 等**根命名空间**，引用 api 的包内写 `Convert.ToXxx(...)`（System.Convert）或 `Dock.Left`（WPF 枚举）会被 命名空间链优先解析而报错。**一律全限定**：`System.Convert.ToXxx(...)`、`System.Windows.Controls.Dock.Left`。
 - 外部扩展同理：不要在你的插件里 `using BetterDesktop.Shell.Convert.Contracts;` 后写裸 `Convert.ToByte`。
 - 注释要求：每个公开接口/模型必须有 XML 文档注释（生成文档 + 0 警告门禁）；文件头写「白话 → 位置」导航。
 - 命名空间与目录：新契约放 `packages/api/<域>/`，**保留文件内命名空间不变**（使用方 using 零改动）。
@@ -244,12 +178,10 @@ public sealed class MyPanel : IShellPluginWindow
 ## 8. 构建与验证
 
 ```powershell
-dotnet build BetterDesktop.slnx -v q --nologo      # 0 警告 0 错误（TreatWarningsAsErrors）
-dotnet test  BetterDesktop.slnx -v q --nologo --no-build  # 345 用例全过
+dotnet build BetterDesktop.slnx -v q --nologo      # 0 警告 0 错误（TreatWarningsAsErrors） dotnet test  BetterDesktop.slnx -v q --nologo --no-build  # 345 用例全过
 ```
 
-门禁：`BetterDesktop.Api` 是**零项目依赖**契约包（仅 BCL + WPF 基础类型）——
-任何接口新增依赖都必须收敛到 API 包内部类型，不得反向引用实现包（防循环依赖）。
+门禁：`BetterDesktop.Api` 是**零项目依赖**契约包（仅 BCL + WPF 基础类型）—— 任何接口新增依赖都必须收敛到 API 包内部类型，不得反向引用实现包（防循环依赖）。
 
 ---
 

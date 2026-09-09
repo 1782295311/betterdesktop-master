@@ -22,6 +22,7 @@
 | `Data/holidays-2026.json`、`holidays-2027.json` | 内置年表（EmbeddedResource，days 待官方安排录入） |
 
 ## 依赖
+
 - `kernel`（IPlugin/IContext/IKernelLogger）、`shell-settings`（预留设置键）
 - 被 `shell-menu-bar` 消费（`CalendarPopupWindow` 月视图 + `CalendarDayPopupWindow` 日详情）
 
@@ -30,14 +31,7 @@
 `days` 数组需按**国务院办公厅放假安排**录入（调休补班无法推算，必须手工填）：
 
 ```json
-{
-  "year": 2026,
-  "meta": { "source": "国务院办公厅节假日安排", "updatedAt": "", "note": "..." },
-  "days": [
-    { "date": "2026-01-01", "name": "元旦", "workday": false },
-    { "date": "2026-01-04", "name": "元旦调休补班", "workday": true }
-  ]
-}
+{ "year": 2026, "meta": { "source": "国务院办公厅节假日安排", "updatedAt": "", "note": "..." }, "days": [ { "date": "2026-01-01", "name": "元旦", "workday": false }, { "date": "2026-01-04", "name": "元旦调休补班", "workday": true } ] }
 ```
 
 - `workday=false` → 日历显示"休"；`workday=true` → 显示"班"
@@ -47,20 +41,11 @@
 ## 便签接口怎么用（未来的 quick-note）
 
 ```csharp
-internal sealed class NoteEntryProvider : ICalendarEntryProvider
-{
-    public string Id => "note";
-    public string DisplayName => "便签";
-    public bool IsEnabled => true;
-    public event EventHandler? EntriesChanged;   // 便签增删改时触发
+internal sealed class NoteEntryProvider : ICalendarEntryProvider { public string Id => "note"; public string DisplayName => "便签"; public bool IsEnabled => true; public event EventHandler? EntriesChanged;   // 便签增删改时触发
 
-    public IReadOnlyList<CalendarEntry> GetEntries(DateOnly from, DateOnly to)
-        => _store.Query(from, to)
-                 .Select(n => new CalendarEntry(n.Date, CalendarEntryKind.Note, n.Title, n.Excerpt));
-}
+    public IReadOnlyList<CalendarEntry> GetEntries(DateOnly from, DateOnly to) => _store.Query(from, to) .Select(n => new CalendarEntry(n.Date, CalendarEntryKind.Note, n.Title, n.Excerpt)); }
 
-// quick-note 插件装配处：
-context.Get<ICalendarService>()?.Register(new NoteEntryProvider(_noteStore));
+// quick-note 插件装配处： context.Get<ICalendarService>()?.Register(new NoteEntryProvider(_noteStore));
 ```
 
 注册后：月视图该日出现小圆点，点开日详情出现「便签」分组。**日历与 UI 不需要任何改动。**
