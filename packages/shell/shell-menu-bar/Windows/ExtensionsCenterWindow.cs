@@ -24,7 +24,7 @@ internal sealed class ExtensionsCenterWindow : MenuBarPopupWindow
     private const double ListMaxHeight = 380;
 
     /// <summary>已落地的外部扩展（开关可真实启停）；其余为规划条目，开关先持久化意图。</summary>
-    private static readonly HashSet<string> Implemented = new() { "quick-note", "programs-menu" };
+    private static readonly HashSet<string> Implemented = new() { "quick-note", "programs-menu", "clipboard-history" };
 
     private readonly ISettingsService? _settings;
     private readonly Action<MenuBarStatusButtonId, bool>? _applyVisibility;

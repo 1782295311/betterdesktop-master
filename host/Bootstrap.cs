@@ -7,6 +7,7 @@ using BetterDesktop.Kernel.Core;
 using BetterDesktop.Kernel.Hmr;
 using BetterDesktop.Kernel.Loader;
 using BetterDesktop.Kernel.Timer;
+using BetterDesktop.Shell.Clipboard;
 using BetterDesktop.Shell.Convert.Services;
 using BetterDesktop.Shell.Core;
 using BetterDesktop.Shell.Core.Native;
@@ -139,6 +140,7 @@ public static class Bootstrap
                 ["calendar"] = () => new BetterDesktop.Shell.Calendar.CalendarPlugin(),
                 ["menu-bar"] = () => new MenuBarPlugin(),
                 ["quick-note"] = () => new QuickNotePlugin(),
+                ["clipboard-history"] = () => new ClipboardPlugin(),
             },
         };
         var loader = new LoaderService(loaderOptions);

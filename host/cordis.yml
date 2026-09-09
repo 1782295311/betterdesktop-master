@@ -85,3 +85,5 @@ plugins:
   # 20. 快速笔记（扩展中心开关驱动的常驻浮窗）
   - id: quick-note
     name: quick-note
+  - id: clipboard-history
+    name: clipboard-history

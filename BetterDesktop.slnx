@@ -189,6 +189,16 @@
       <Platform Project="x64" />
     </Project>
   </Folder>
+  <Folder Name="/packages/shell/shell-clipboard/">
+    <Project Path="packages/shell/shell-clipboard/BetterDesktop.Shell.Clipboard.csproj">
+      <Platform Project="x64" />
+    </Project>
+  </Folder>
+  <Folder Name="/packages/shell/shell-clipboard-tests/">
+    <Project Path="packages/shell/shell-clipboard-tests/BetterDesktop.Shell.Clipboard.Tests.csproj">
+      <Platform Project="x64" />
+    </Project>
+  </Folder>
   <Folder Name="/packages/shell/shell-context-menu/">
     <Project Path="packages/shell/shell-context-menu/BetterDesktop.Shell.ContextMenu.csproj">
       <Platform Project="x64" />

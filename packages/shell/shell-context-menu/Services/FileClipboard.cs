@@ -36,7 +36,7 @@ public static class FileClipboard
             data.SetData(DataFormats.FileDrop, paths.ToArray());
             var effect = cut ? DropEffectMove : DropEffectCopy;
             data.SetData(DropEffectFormat, new MemoryStream(BitConverter.GetBytes(effect)));
-            Clipboard.SetDataObject(data, copy: true);
+            System.Windows.Clipboard.SetDataObject(data, copy: true);
         }
         catch
         {
@@ -51,7 +51,7 @@ public static class FileClipboard
         cut = false;
         try
         {
-            var data = Clipboard.GetDataObject();
+            var data = System.Windows.Clipboard.GetDataObject();
             if (data is null || !data.GetDataPresent(DataFormats.FileDrop))
             {
                 return false;
@@ -79,7 +79,7 @@ public static class FileClipboard
     {
         try
         {
-            Clipboard.Clear();
+            System.Windows.Clipboard.Clear();
         }
         catch
         {

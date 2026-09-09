@@ -363,11 +363,11 @@ internal sealed class SearchPopupWindow : MenuBarPopupWindow
         if (!string.IsNullOrEmpty(path))
         {
             hasItem |= AddMenuItem(menu, "打开所在位置", isDefault: false, () => RevealInExplorer(path));
-            hasItem |= AddMenuItem(menu, "复制路径", isDefault: false, () => Clipboard.SetText(path));
+            hasItem |= AddMenuItem(menu, "复制路径", isDefault: false, () => System.Windows.Clipboard.SetText(path));
         }
         else if (result.LaunchPath is not null && result.LaunchPath.StartsWith("ms-settings:", StringComparison.OrdinalIgnoreCase))
         {
-            hasItem |= AddMenuItem(menu, "复制链接", isDefault: false, () => Clipboard.SetText(result.LaunchPath));
+            hasItem |= AddMenuItem(menu, "复制链接", isDefault: false, () => System.Windows.Clipboard.SetText(result.LaunchPath));
         }
 
         if (!hasItem)

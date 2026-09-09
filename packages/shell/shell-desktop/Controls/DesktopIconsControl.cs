@@ -2471,7 +2471,7 @@ public sealed class DesktopIconsControl : ScrollViewer, IDisposable
         }
         try
         {
-            Clipboard.SetText(string.Join(Environment.NewLine, paths));
+            System.Windows.Clipboard.SetText(string.Join(Environment.NewLine, paths));
         }
         catch (Exception ex)
         {

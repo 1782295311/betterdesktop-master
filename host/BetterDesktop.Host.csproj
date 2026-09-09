@@ -49,6 +49,7 @@
     <ProjectReference Include="..\packages\shell\shell-status\BetterDesktop.Shell.Status.csproj" />
     <ProjectReference Include="..\packages\shell\shell-menu-bar\BetterDesktop.Shell.MenuBar.csproj" />
     <ProjectReference Include="..\packages\shell\shell-quick-note\BetterDesktop.Shell.QuickNote.csproj" />
+    <ProjectReference Include="..\packages\shell\shell-clipboard\BetterDesktop.Shell.Clipboard.csproj" />
     <ProjectReference Include="..\packages\shell\shell-app-source\BetterDesktop.Shell.AppSource.csproj" />
     <ProjectReference Include="..\packages\shell\shell-window-tracker\BetterDesktop.Shell.WindowTracker.csproj" />
     <ProjectReference Include="..\packages\shell\shell-pinning\BetterDesktop.Shell.Pinning.csproj" />

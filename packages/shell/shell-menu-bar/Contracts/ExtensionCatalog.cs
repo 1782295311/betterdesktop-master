@@ -49,6 +49,7 @@ internal static class ExtensionCatalog
         new ExtensionDescriptor("weather", "天气", "桌面天气卡片（和风天气）", "天"),
         new ExtensionDescriptor("screenshot", "截屏工具", "区域/全屏截屏与标注", "截"),
         new ExtensionDescriptor("dynamic-desktop", "动态桌面", "动态壁纸桌面", "动"),
+        new ExtensionDescriptor("clipboard-history", "剪贴板历史", "记录剪贴板历史，搜索/收藏/一键粘贴（Ctrl+Shift+V）", "剪"),
     };
 
     /// <summary>
