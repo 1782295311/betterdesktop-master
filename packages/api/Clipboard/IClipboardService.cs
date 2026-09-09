@@ -56,11 +56,37 @@ public interface IClipboardService
     /// <summary>纯文本写回。</summary>
     void CopyEntryAsPlainText(ClipboardEntry entry);
 
-    /// <summary>写回并粘贴到前台窗口（基础路径，自动分段等增强属 v1.1）。</summary>
+    /// <summary>写回并粘贴到前台窗口（基础路径；大段自动分段，代码/图片/文件单次）。</summary>
     void PasteEntryToActiveWindow(ClipboardEntry entry);
+
+    /// <summary>纯文本写回并粘贴到前台窗口（面板 Ctrl+Enter 路径）。</summary>
+    void PasteEntryAsPlainTextToActiveWindow(ClipboardEntry entry);
+
+    /// <summary>多选合并粘贴：多条纯文本以分隔符拼接后一次粘贴（面板多选合并）。</summary>
+    void MergePasteToActiveWindow(IEnumerable<ClipboardEntry> entries, string? separator = null);
 
     /// <summary>文件条目：在资源管理器中打开位置并选中。</summary>
     void OpenFileLocation(ClipboardEntry entry);
+
+    // ---------- L 按序粘贴状态机（v1.3；消费方按 Enter 依次触发 PasteNextSequential） ----------
+
+    /// <summary>按序粘贴是否处于激活且未完成状态。</summary>
+    bool IsSequentialPasteActive { get; }
+
+    /// <summary>剩余待粘贴条数。</summary>
+    int SequentialRemaining { get; }
+
+    /// <summary>开始按序粘贴（列表非空；覆盖已有会话）。</summary>
+    void BeginSequentialPaste(IReadOnlyList<ClipboardEntry> entries);
+
+    /// <summary>粘贴下一条（未激活/已完成时无操作并记日志）。</summary>
+    void PasteNextSequential();
+
+    /// <summary>取消按序粘贴会话。</summary>
+    void CancelSequentialPaste();
+
+    /// <summary>重置按序粘贴会话（无日志，程序化复位用）。</summary>
+    void ResetSequentialPaste();
 
     // ---------- 录入（OCR/外部来源，M1 契约预留） ----------
 
@@ -72,14 +98,26 @@ public interface IClipboardService
     /// <summary>监控是否开启（扩展中心开关控制监控活性，服务本体常驻）。</summary>
     bool IsMonitoringEnabled { get; }
 
+    /// <summary>当前是否处于临时暂停。</summary>
+    bool IsTemporarilyPaused { get; }
+
+    /// <summary>暂停剩余秒数（未暂停为 0）。</summary>
+    int PauseRemainingSeconds { get; }
+
     /// <summary>临时暂停（默认 60 秒）后自动恢复。</summary>
     void PauseTemporarily(int seconds = 60);
 
     /// <summary>立即恢复监控。</summary>
     void Resume();
 
-    /// <summary>打开历史面板（UI 后续阶段接线，契约现就绪）。</summary>
+    /// <summary>打开历史面板（懒创建单实例）。</summary>
     void OpenHistoryWindow();
+
+    /// <summary>关闭历史面板。</summary>
+    void CloseHistoryWindow();
+
+    /// <summary>收藏视图开关（面板打开时同步）。</summary>
+    bool ShowFavoritesOnly { get; set; }
 
     // ---------- 事件 ----------
 

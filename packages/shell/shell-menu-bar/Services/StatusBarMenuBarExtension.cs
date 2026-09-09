@@ -39,6 +39,7 @@ internal sealed class StatusBarMenuBarExtension : IMenuBarExtension, IDisposable
     private readonly IAppIconService? _appIcon;
     private readonly BetterDesktop.Shell.Calendar.Contracts.ICalendarService? _calendar;
     private readonly BetterDesktop.Shell.Pinning.Contracts.IPinningService? _pinning;
+    private readonly BetterDesktop.Shell.Clipboard.Contracts.IClipboardService? _clipboard;
 
     private MenuBarStatusStrip? _strip;
     private SearchPopupWindow? _searchPopup;
@@ -72,7 +73,8 @@ internal sealed class StatusBarMenuBarExtension : IMenuBarExtension, IDisposable
         IStartMenuSearchService? search = null,
         IAppIconService? appIcon = null,
         BetterDesktop.Shell.Calendar.Contracts.ICalendarService? calendar = null,
-        BetterDesktop.Shell.Pinning.Contracts.IPinningService? pinning = null)
+        BetterDesktop.Shell.Pinning.Contracts.IPinningService? pinning = null,
+        BetterDesktop.Shell.Clipboard.Contracts.IClipboardService? clipboard = null)
     {
         _vol = vol;
         _mic = mic;
@@ -89,6 +91,7 @@ internal sealed class StatusBarMenuBarExtension : IMenuBarExtension, IDisposable
         _appIcon = appIcon;
         _calendar = calendar;
         _pinning = pinning;
+        _clipboard = clipboard;
     }
 
     public FrameworkElement GetVisual()
@@ -168,7 +171,7 @@ internal sealed class StatusBarMenuBarExtension : IMenuBarExtension, IDisposable
                 case MenuBarStatusButtonId.Search:
                     // 搜索：弹出搜索面板（程序/设置/文件）。服务缺失时面板内显示"不可用"占位（M10）。
                     ShowPopup(ref _searchPopup,
-                        () => new SearchPopupWindow(_search, _appIcon, _vibrancy, _appearance, _pinning),
+                        () => new SearchPopupWindow(_search, _appIcon, _vibrancy, _appearance, _pinning, _clipboard),
                         e.Source, buttonWidth, new Size(440, 500));
                     break;
 

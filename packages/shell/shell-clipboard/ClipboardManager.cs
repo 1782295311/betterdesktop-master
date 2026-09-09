@@ -15,6 +15,8 @@ using System.Windows.Threading;
 using BetterDesktop.Kernel.Contracts;
 using BetterDesktop.Shell.Clipboard.Contracts;
 using BetterDesktop.Shell.Clipboard.Native;
+using BetterDesktop.Shell.Core.Surface;
+using BetterDesktop.Shell.Core.Vibrancy;
 
 namespace BetterDesktop.Shell.Clipboard;
 
@@ -51,6 +53,14 @@ public class ClipboardManager : IClipboardService
     private const string StorageFileName = "clipboard_history.json";
     private const string ImagesRelativeDir = "clipboard\\images";
     private const string EncryptionHeader = "CBENC1\0";
+
+    // ---------- Phase B：热键 / 分段 / 合并 / 按序粘贴（K/D/L 组） ----------
+    private const int HotKeyIdPanel = 0x01;        // Ctrl+Shift+V：打开面板
+    private const int HotKeyIdFavorites = 0x02;    // Ctrl+Shift+P：收藏视图
+    private const int HotKeyIdPause = 0x03;        // Ctrl+Shift+Backspace：暂停/恢复
+    private const int SequentialPasteDelayMs = 250; // 分段/按序粘贴段间间隔
+    private const string DefaultMergeSeparator = "\r\n";
+    private const uint HotKeyModifiers = ClipboardNative.ModControl | ClipboardNative.ModShift;
 
     // ---------- 隐私黑名单（F 组，探索版同款） ----------
     private static readonly HashSet<string> PrivacyBlacklistProcesses = new(StringComparer.OrdinalIgnoreCase)
@@ -93,9 +103,66 @@ public class ClipboardManager : IClipboardService
     private uint _lastSequenceNumber;
     private DispatcherTimer? _pauseResumeTimer;
 
-    public ClipboardManager(IKernelLogger logger, string? storageDir = null)
+    // Phase B：热键注册表（id → 是否注册成功；0x581 冲突单键降级，不影响其余键）。
+    private readonly Dictionary<int, bool> _hotKeyRegistered = new();
+    private readonly IAppearanceService? _appearance;
+    private readonly IVibrancyService? _vibrancy;
+    private bool _showFavoritesOnly;
+    private List<ClipboardEntry>? _sequentialQueue;
+    private int _sequentialIndex;
+    private ClipboardHistoryWindow? _historyWindow;
+
+    // G6/K5 配置化运行时值（默认=常量契约值，设置分区可覆盖；锁保护）。
+    private int _capacityLimit = MaxHistoryItems;
+    private int _pinnedLimit = MaxPinnedItems;
+    private long _maxImageBytes = MaxImageBytes;
+    private long _maxTotalImageBytes = MaxTotalImageBytes;
+    private TimeSpan _expirationAge = ExpirationAge;
+
+    /// <summary>应用运行时设置（G6/K5 配置化；任一参数为 null 保持现值；非法值忽略并记日志）。</summary>
+    public void ApplyRuntimeSettings(
+        int? capacity = null,
+        int? pinnedLimit = null,
+        long? maxImageBytes = null,
+        long? maxTotalImageBytes = null,
+        TimeSpan? expirationAge = null)
+    {
+        lock (_sync)
+        {
+            if (capacity is > 0)
+            {
+                _capacityLimit = capacity.Value;
+            }
+
+            if (pinnedLimit is > 0)
+            {
+                _pinnedLimit = pinnedLimit.Value;
+            }
+
+            if (maxImageBytes is > 0)
+            {
+                _maxImageBytes = maxImageBytes.Value;
+            }
+
+            if (maxTotalImageBytes is > 0)
+            {
+                _maxTotalImageBytes = maxTotalImageBytes.Value;
+            }
+
+            if (expirationAge is { } age && age > TimeSpan.Zero)
+            {
+                _expirationAge = age;
+            }
+        }
+
+        _logger.Info($"[Clipboard] 运行时设置已应用：容量={_capacityLimit} 收藏上限={_pinnedLimit} 保留={_expirationAge.TotalDays:0}天");
+    }
+
+    public ClipboardManager(IKernelLogger logger, string? storageDir = null, IAppearanceService? appearance = null, IVibrancyService? vibrancy = null)
     {
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+        _appearance = appearance;
+        _vibrancy = vibrancy;
         _storageDir = storageDir ?? Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "BetterDesktop");
         _storageFilePath = Path.Combine(_storageDir, StorageFileName);
@@ -335,7 +402,8 @@ public class ClipboardManager : IClipboardService
                         var data = new DataObject();
                         if (!string.IsNullOrEmpty(entry.HtmlContent))
                         {
-                            data.SetData(DataFormats.Html, entry.HtmlContent);
+                            // CF_HTML 头包装（生死线 7 ②）：禁止裸 HTML SetData（Word/微信乱码）。
+                            data.SetData(DataFormats.Html, ClipboardNative.WrapHtmlForClipboard(entry.HtmlContent));
                         }
 
                         if (!string.IsNullOrEmpty(entry.RtfContent))
@@ -425,10 +493,255 @@ public class ClipboardManager : IClipboardService
 
     public void PasteEntryToActiveWindow(ClipboardEntry entry)
     {
+        if (entry is null)
+        {
+            throw new ArgumentNullException(nameof(entry));
+        }
+
+        // D3 自动分段（用户无感）：大段（HTML ≥2 块级段 / 纯文本 ≥2 空行段）→ 分段依次带格式粘贴；
+        // 单段/短条目 → 原单次粘贴路径。代码条目不分段（代码完整性优先，强制纯文本单次写回）。
+        var segments = GetSegments(entry);
+        if (segments is not null)
+        {
+            foreach (var segment in segments)
+            {
+                CopySegmentToClipboard(segment);
+                Thread.Sleep(SequentialPasteDelayMs);
+                SendPaste();
+                Thread.Sleep(SequentialPasteDelayMs);
+            }
+
+            TouchEntry(entry);
+            return;
+        }
+
         CopyEntryToClipboard(entry);
         Thread.Sleep(50);
         SendPaste();
         TouchEntry(entry);
+    }
+
+    public void PasteEntryAsPlainTextToActiveWindow(ClipboardEntry entry)
+    {
+        if (entry is null)
+        {
+            throw new ArgumentNullException(nameof(entry));
+        }
+
+        CopyEntryAsPlainText(entry);
+        Thread.Sleep(50);
+        SendPaste();
+        TouchEntry(entry);
+    }
+
+    /// <summary>内部粘贴片段（D3 自动分段产物；IsHtml=true 表示须经 CF_HTML 头包装写回）。</summary>
+    internal sealed record PasteSegment(string Content, bool IsHtml);
+
+    /// <summary>
+    /// 判定并切分大段条目：返回 null 表示不分段（走原单次粘贴）；否则为依次粘贴的片段。
+    /// HTML/RichText 按块级边界切分（保留内联格式）；纯文本按空行拆段；代码/图片/文件不分段。
+    /// </summary>
+    internal IReadOnlyList<PasteSegment>? GetSegments(ClipboardEntry entry)
+    {
+        if (entry is null)
+        {
+            return null;
+        }
+
+        // 代码/图片/文件：不分段（代码完整性、图片/文件单对象语义）。
+        if (entry.Category == ContentCategory.Code || entry.ContentType == ClipboardItemKind.Image || entry.ContentType == ClipboardItemKind.Files)
+        {
+            return null;
+        }
+
+        if (entry.ContentType is ClipboardItemKind.Html or ClipboardItemKind.RichText && !string.IsNullOrEmpty(entry.HtmlContent))
+        {
+            var htmlSegments = ClipboardSegmenter.SplitHtml(entry.HtmlContent);
+            if (htmlSegments.Count >= 2)
+            {
+                return htmlSegments
+                    .Where(s => !string.IsNullOrWhiteSpace(s.Content))
+                    .Select(s => new PasteSegment(s.Content, !s.IsFallback))
+                    .ToList();
+            }
+
+            return null;
+        }
+
+        if (entry.ContentType == ClipboardItemKind.Text && !string.IsNullOrEmpty(entry.Content))
+        {
+            var textSegments = ClipboardSegmenter.SplitText(entry.Content);
+            if (textSegments.Count >= 2)
+            {
+                return textSegments.Select(t => new PasteSegment(t, false)).ToList();
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>写单个片段到剪贴板（写前置抑制令牌；HTML 段经 CF_HTML 头包装）。</summary>
+    internal void CopySegmentToClipboard(PasteSegment segment)
+    {
+        if (segment is null)
+        {
+            throw new ArgumentNullException(nameof(segment));
+        }
+
+        Volatile.Write(ref _suppressCapture, 1);
+        bool wrote = false;
+        try
+        {
+            if (segment.IsHtml)
+            {
+                var data = new DataObject();
+                data.SetData(DataFormats.Html, ClipboardNative.WrapHtmlForClipboard(segment.Content));
+                string plain = ClipboardSegmenter.StripToPlainTextForWrite(segment.Content);
+                if (!string.IsNullOrEmpty(plain))
+                {
+                    data.SetText(plain);
+                }
+
+                System.Windows.Clipboard.SetDataObject(data, true);
+            }
+            else
+            {
+                System.Windows.Clipboard.SetText(segment.Content);
+            }
+
+            wrote = true;
+        }
+        finally
+        {
+            if (!wrote)
+            {
+                Volatile.Write(ref _suppressCapture, 0);
+            }
+        }
+    }
+
+    /// <summary>D5 多选合并粘贴：多条纯文本以分隔符合并一次粘贴。</summary>
+    public void MergePasteToActiveWindow(IEnumerable<ClipboardEntry> entries, string? separator = null)
+    {
+        if (entries is null)
+        {
+            throw new ArgumentNullException(nameof(entries));
+        }
+
+        var list = entries.Where(e => e is not null).ToList();
+        if (list.Count == 0)
+        {
+            return;
+        }
+
+        string merged = BuildMergeText(list, string.IsNullOrEmpty(separator) ? DefaultMergeSeparator : separator);
+
+        Volatile.Write(ref _suppressCapture, 1);
+        bool wrote = false;
+        try
+        {
+            System.Windows.Clipboard.SetText(merged);
+            wrote = true;
+        }
+        finally
+        {
+            if (!wrote)
+            {
+                Volatile.Write(ref _suppressCapture, 0);
+            }
+        }
+
+        Thread.Sleep(50);
+        SendPaste();
+        foreach (var entry in list)
+        {
+            TouchEntry(entry);
+        }
+    }
+
+    /// <summary>合并文本拼接（纯函数，供单测；空列表返回空串）。</summary>
+    internal static string BuildMergeText(IReadOnlyList<ClipboardEntry> entries, string separator)
+    {
+        if (entries is null || entries.Count == 0)
+        {
+            return string.Empty;
+        }
+
+        var sb = new StringBuilder();
+        for (int i = 0; i < entries.Count; i++)
+        {
+            if (i > 0)
+            {
+                sb.Append(separator);
+            }
+
+            sb.Append(entries[i].PlainText);
+        }
+
+        return sb.ToString();
+    }
+
+    // ---------- L 按序粘贴状态机（v1.3，服务层纯逻辑） ----------
+
+    public bool IsSequentialPasteActive => _sequentialQueue is { Count: > 0 } && _sequentialIndex < _sequentialQueue.Count;
+
+    public int SequentialRemaining => IsSequentialPasteActive ? _sequentialQueue!.Count - _sequentialIndex : 0;
+
+    public void BeginSequentialPaste(IReadOnlyList<ClipboardEntry> entries)
+    {
+        if (entries is null)
+        {
+            throw new ArgumentNullException(nameof(entries));
+        }
+
+        var list = entries.Where(e => e is not null).ToList();
+        if (list.Count == 0)
+        {
+            throw new ArgumentException("按序粘贴列表为空", nameof(entries));
+        }
+
+        _sequentialQueue = list;
+        _sequentialIndex = 0;
+        _logger.Info($"[Clipboard] 按序粘贴开始：{list.Count} 条");
+    }
+
+    public void PasteNextSequential()
+    {
+        if (!IsSequentialPasteActive)
+        {
+            _logger.Warn("[Clipboard] 按序粘贴未激活或已完成");
+            return;
+        }
+
+        var entry = _sequentialQueue![_sequentialIndex];
+        CopyEntryToClipboard(entry);
+        Thread.Sleep(50);
+        SendPaste();
+        TouchEntry(entry);
+        _sequentialIndex++;
+
+        if (_sequentialIndex >= _sequentialQueue.Count)
+        {
+            _logger.Info("[Clipboard] 按序粘贴完成");
+        }
+    }
+
+    public void CancelSequentialPaste()
+    {
+        if (_sequentialQueue is null)
+        {
+            return;
+        }
+
+        _sequentialQueue = null;
+        _sequentialIndex = 0;
+        _logger.Info("[Clipboard] 按序粘贴已取消");
+    }
+
+    public void ResetSequentialPaste()
+    {
+        _sequentialQueue = null;
+        _sequentialIndex = 0;
     }
 
     public void OpenFileLocation(ClipboardEntry entry)
@@ -494,6 +807,11 @@ public class ClipboardManager : IClipboardService
         }
     }
 
+    public bool IsTemporarilyPaused => _isTemporarilyPaused;
+
+    public int PauseRemainingSeconds =>
+        _isTemporarilyPaused ? Math.Max(0, (int)Math.Ceiling((_pauseUntil - DateTime.Now).TotalSeconds)) : 0;
+
     public void PauseTemporarily(int seconds = 60)
     {
         lock (_sync)
@@ -539,10 +857,74 @@ public class ClipboardManager : IClipboardService
         PauseStateChanged?.Invoke(false);
     }
 
+    public bool ShowFavoritesOnly
+    {
+        get => _showFavoritesOnly;
+        set
+        {
+            _showFavoritesOnly = value;
+            RunOnUi(() =>
+            {
+                if (_historyWindow is not null)
+                {
+                    _historyWindow.ShowFavoritesOnly = value;
+                }
+            });
+        }
+    }
+
+    /// <summary>UI 线程跳转（宿主 Dispatcher；无宿主时直跑，测试友好）。</summary>
+    private static void RunOnUi(Action action)
+    {
+        var dispatcher = Application.Current?.Dispatcher;
+        if (dispatcher is not null)
+        {
+            dispatcher.Invoke(action);
+        }
+        else
+        {
+            action();
+        }
+    }
+
     public void OpenHistoryWindow()
     {
-        // Phase A：历史面板 UI 属 Phase B（蓝图 = 归档计划 J 组）。契约现就绪，此处诚实提示。
-        _logger.Warn("[Clipboard] OpenHistoryWindow 已调用，历史面板 UI 尚未接线（Phase B）");
+        RunOnUi(() =>
+        {
+            try
+            {
+                if (_historyWindow is null)
+                {
+                    _historyWindow = new ClipboardHistoryWindow(this, _appearance, _vibrancy);
+                    _historyWindow.Closed += (_, _) => _historyWindow = null;
+                }
+
+                _historyWindow.ShowFavoritesOnly = _showFavoritesOnly;
+                _historyWindow.ShowAtCursor();
+                _historyWindow.Activate();
+                _logger.Info("[Clipboard] 历史面板已打开");
+            }
+            catch (Exception ex)
+            {
+                _logger.Warn($"[Clipboard] 打开历史面板失败：{ex.Message}");
+            }
+        });
+    }
+
+    public void CloseHistoryWindow()
+    {
+        RunOnUi(() =>
+        {
+            try
+            {
+                _historyWindow?.Close();
+                _historyWindow = null;
+            }
+            catch (Exception ex)
+            {
+                _logger.Warn($"[Clipboard] 关闭历史面板失败：{ex.Message}");
+            }
+        });
     }
 
     // ---------- IClipboardService : 事件 ----------
@@ -563,6 +945,7 @@ public class ClipboardManager : IClipboardService
             }
 
             StartClipboardListener();
+            RegisterHotkeys();
             LoadFromFile();
             CleanupExpiredEntries();
             _cleanupTimer ??= new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(CleanupIntervalMs) };
@@ -588,6 +971,7 @@ public class ClipboardManager : IClipboardService
                 return;
             }
 
+            UnregisterHotkeys();
             StopClipboardListener();
             _cleanupTimer?.Stop();
             if (_cleanupTimer is not null)
@@ -670,8 +1054,106 @@ public class ClipboardManager : IClipboardService
             handled = true;
             OnClipboardUpdate();
         }
+        else if (msg == ClipboardNative.WmHotKey)
+        {
+            // 全局热键（K 组）：与监听共用同一 HwndSource 收 WM_HOTKEY（3101 纪律）。
+            handled = true;
+            HandleHotKey(wParam.ToInt32());
+        }
 
         return IntPtr.Zero;
+    }
+
+    // ---------- Phase B：全局热键（K 组，3101-global-hotkey 纪律：0x581 捕获 + 配对释放） ----------
+
+    private void RegisterHotkeys()
+    {
+        if (_listenerHwnd == IntPtr.Zero)
+        {
+            return;
+        }
+
+        _hotKeyRegistered.Clear();
+        RegisterHotKeyCore(HotKeyIdPanel, ClipboardNative.VK_V);
+        RegisterHotKeyCore(HotKeyIdFavorites, ClipboardNative.VK_P);
+        RegisterHotKeyCore(HotKeyIdPause, ClipboardNative.VK_BACK);
+    }
+
+    private void RegisterHotKeyCore(int id, byte vk)
+    {
+        try
+        {
+            bool ok = ClipboardNative.RegisterHotKey(_listenerHwnd, id, HotKeyModifiers, vk);
+            _hotKeyRegistered[id] = ok;
+            if (!ok)
+            {
+                // 0x581（组合键被占）：单键降级，不影响其余键与监听本身。
+                _logger.Warn($"[Clipboard] 热键注册失败（Win32 {Marshal.GetLastWin32Error()}，组合键可能被占用）：id={id}");
+            }
+        }
+        catch (Exception ex)
+        {
+            _hotKeyRegistered[id] = false;
+            _logger.Warn($"[Clipboard] 热键注册异常（id={id}）：{ex.Message}");
+        }
+    }
+
+    private void UnregisterHotkeys()
+    {
+        foreach (var kv in _hotKeyRegistered)
+        {
+            if (!kv.Value)
+            {
+                continue;
+            }
+
+            try
+            {
+                ClipboardNative.UnregisterHotKey(_listenerHwnd, kv.Key);
+            }
+            catch (Exception ex)
+            {
+                _logger.Warn($"[Clipboard] 热键注销异常（id={kv.Key}）：{ex.Message}");
+            }
+        }
+
+        _hotKeyRegistered.Clear();
+    }
+
+    private void HandleHotKey(int id)
+    {
+        switch (id)
+        {
+            case HotKeyIdPanel:
+                // L 按序粘贴激活期间：Ctrl+Shift+V 优先逐条粘贴，而非打开面板。
+                if (IsSequentialPasteActive)
+                {
+                    PasteNextSequential();
+                }
+                else
+                {
+                    OpenHistoryWindow();
+                }
+
+                break;
+
+            case HotKeyIdFavorites:
+                ShowFavoritesOnly = !ShowFavoritesOnly;
+                OpenHistoryWindow();
+                break;
+
+            case HotKeyIdPause:
+                if (_isTemporarilyPaused)
+                {
+                    Resume();
+                }
+                else
+                {
+                    PauseTemporarily();
+                }
+
+                break;
+        }
     }
 
     /// <summary>剪贴板变化入口：WndProc（广播）与轮询兜底共用。消费式抑制令牌 → 暂停 → 隐私 → 捕获。</summary>
@@ -758,9 +1240,9 @@ public class ClipboardManager : IClipboardService
                 byte[]? png = ToPngBytes(image);
                 if (png is not null && png.Length > 0)
                 {
-                    if (png.Length > MaxImageBytes)
+                    if (png.Length > _maxImageBytes)
                     {
-                        _logger.Info($"[Clipboard] 图片超 {MaxImageBytes / 1024 / 1024}MB 上限，跳过捕获");
+                        _logger.Info($"[Clipboard] 图片超 {_maxImageBytes / 1024 / 1024}MB 上限，跳过捕获");
                         return snapshot;
                     }
 
@@ -1010,7 +1492,7 @@ public class ClipboardManager : IClipboardService
         int pinnedCount = _history.Count(e => e.IsPinned);
 
         // 收藏超限：驱逐最旧收藏。
-        while (pinnedCount > MaxPinnedItems)
+        while (pinnedCount > _pinnedLimit)
         {
             ClipboardEntry? oldestPinned = _history.LastOrDefault(e => e.IsPinned);
             if (oldestPinned is null)
@@ -1024,7 +1506,7 @@ public class ClipboardManager : IClipboardService
         }
 
         // 总量超限：驱逐最旧非收藏。
-        int maxUnpinned = MaxHistoryItems - _history.Count(e => e.IsPinned);
+        int maxUnpinned = _capacityLimit - _history.Count(e => e.IsPinned);
         int unpinned = _history.Count(e => !e.IsPinned);
         while (unpinned > maxUnpinned)
         {
@@ -1045,7 +1527,7 @@ public class ClipboardManager : IClipboardService
         long total = _history
             .Where(e => e.ContentType == ClipboardItemKind.Image)
             .Sum(e => e.SizeBytes);
-        if (total <= MaxTotalImageBytes)
+        if (total <= _maxTotalImageBytes)
         {
             return;
         }
@@ -1062,7 +1544,7 @@ public class ClipboardManager : IClipboardService
             total -= e.SizeBytes;
             _history.RemoveAt(i);
             TryDeleteImageFile(e);
-            if (total <= MaxTotalImageBytes)
+            if (total <= _maxTotalImageBytes)
             {
                 break;
             }
@@ -1071,7 +1553,7 @@ public class ClipboardManager : IClipboardService
 
     internal void CleanupExpiredEntries()
     {
-        DateTime cutoff = DateTime.Now - ExpirationAge;
+        DateTime cutoff = DateTime.Now - _expirationAge;
         int removedCount = 0;
         lock (_sync)
         {
@@ -1093,7 +1575,7 @@ public class ClipboardManager : IClipboardService
 
         if (removedCount > 0)
         {
-            _logger.Info($"[Clipboard] 清理 {removedCount} 条过期记录（> {ExpirationAge.TotalDays:0} 天）");
+            _logger.Info($"[Clipboard] 清理 {removedCount} 条过期记录（> {_expirationAge.TotalDays:0} 天）");
         }
     }
 

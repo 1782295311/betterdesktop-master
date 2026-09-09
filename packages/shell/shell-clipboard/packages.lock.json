@@ -8,11 +8,26 @@
       "betterdesktop.kernel": {
         "type": "Project"
       },
+      "betterdesktop.kernel.hmr": {
+        "type": "Project",
+        "dependencies": {
+          "BetterDesktop.Kernel": "[1.3.0, )"
+        }
+      },
       "betterdesktop.shell.core": {
         "type": "Project",
         "dependencies": {
           "BetterDesktop.Api": "[1.3.0, )",
           "BetterDesktop.Kernel": "[1.3.0, )"
+        }
+      },
+      "betterdesktop.shell.settings": {
+        "type": "Project",
+        "dependencies": {
+          "BetterDesktop.Api": "[1.3.0, )",
+          "BetterDesktop.Kernel": "[1.3.0, )",
+          "BetterDesktop.Kernel.Hmr": "[1.3.0, )",
+          "BetterDesktop.Shell.Core": "[1.3.0, )"
         }
       }
     }

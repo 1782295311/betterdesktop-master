@@ -363,7 +363,8 @@
         "dependencies": {
           "BetterDesktop.Api": "[1.3.0, )",
           "BetterDesktop.Kernel": "[1.3.0, )",
-          "BetterDesktop.Shell.Core": "[1.3.0, )"
+          "BetterDesktop.Shell.Core": "[1.3.0, )",
+          "BetterDesktop.Shell.Settings": "[1.3.0, )"
         }
       },
       "betterdesktop.shell.contextmenu": {

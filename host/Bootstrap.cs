@@ -243,6 +243,19 @@ public static class Bootstrap
                             context.Logger.Info($"[menu-cmd] 切换自绘桌面(命令桥): components.desktop={!curDesktop}");
                         }
                         break;
+                    case "clipboard-history":
+                        // 系统右键「剪贴板历史…」/菜单栏按钮 → 单实例管道 → 打开历史面板。
+                        var clipboard = context.Get<BetterDesktop.Shell.Clipboard.Contracts.IClipboardService>();
+                        if (clipboard is not null)
+                        {
+                            clipboard.OpenHistoryWindow();
+                            context.Logger.Info("[menu-cmd] 打开剪贴板历史");
+                        }
+                        else
+                        {
+                            context.Logger.Info("[menu-cmd] 剪贴板服务未注册（shell-clipboard 未加载）");
+                        }
+                        break;
                     case "convert":
                     case "convert-more":
                         // 系统文件右键「转换为… / 更多格式…」（2026-09-07）：弹自绘转换菜单（光标处），

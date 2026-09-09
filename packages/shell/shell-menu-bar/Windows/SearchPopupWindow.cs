@@ -15,6 +15,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
@@ -48,9 +49,11 @@ internal sealed class SearchPopupWindow : MenuBarPopupWindow
     private readonly IStartMenuSearchService? _search;
     private readonly IAppIconService? _appIcon;
     private readonly IPinningService? _pinning;
+    private readonly BetterDesktop.Shell.Clipboard.Contracts.IClipboardService? _clipboard;
     private readonly DispatcherTimer _debounce;
     private TextBox? _queryBox;
     private StackPanel? _resultHost;
+    private FrameworkElement? _recentClipboardBlock;
     private int _generation; // 丢弃过期结果：每次新搜索递增，异步回写前比对
 
     public SearchPopupWindow(
@@ -58,12 +61,14 @@ internal sealed class SearchPopupWindow : MenuBarPopupWindow
         IAppIconService? appIcon,
         IVibrancyService vibrancy,
         IAppearanceService? appearance = null,
-        IPinningService? pinning = null)
+        IPinningService? pinning = null,
+        BetterDesktop.Shell.Clipboard.Contracts.IClipboardService? clipboard = null)
         : base(vibrancy, appearance)
     {
         _search = search;
         _appIcon = appIcon;
         _pinning = pinning;
+        _clipboard = clipboard;
         Width = DefaultWidth;
         MinWidth = DefaultWidth;
         SizeToContent = SizeToContent.Height;
@@ -118,11 +123,12 @@ internal sealed class SearchPopupWindow : MenuBarPopupWindow
             if (string.IsNullOrWhiteSpace(_queryBox.Text))
             {
                 ShowEmpty("输入关键字开始搜索");
+                SetRecentClipboardVisible(true);
                 return;
             }
+            SetRecentClipboardVisible(false);
             _debounce.Start();
-        };
-        _queryBox.PreviewKeyDown += (_, e) =>
+        }; _queryBox.PreviewKeyDown += (_, e) =>
         {
             // Esc 关闭面板
             if (e.Key == System.Windows.Input.Key.Escape) { Close(); e.Handled = true; }
@@ -130,6 +136,14 @@ internal sealed class SearchPopupWindow : MenuBarPopupWindow
         column.Children.Add(inputBorder);
 
         column.Children.Add(CreateSeparator());
+
+        // ---- 最近复制区块（I7）：未输入时展示最近复制内容 + 面板入口 ----
+        _recentClipboardBlock = CreateRecentClipboardBlock();
+        if (_recentClipboardBlock is not null)
+        {
+            column.Children.Add(_recentClipboardBlock);
+            column.Children.Add(CreateSeparator());
+        }
 
         // ---- 结果区 ----
         _resultHost = new StackPanel { Orientation = Orientation.Vertical };
@@ -643,6 +657,90 @@ internal sealed class SearchPopupWindow : MenuBarPopupWindow
         };
         SetThemeBinding(hint, TextBlock.ForegroundProperty, "ThemeMutedForeground");
         _resultHost.Children.Add(hint);
+    }
+
+    private void SetRecentClipboardVisible(bool visible)
+    {
+        if (_recentClipboardBlock is not null)
+        {
+            _recentClipboardBlock.Visibility = visible ? Visibility.Visible : Visibility.Collapsed;
+        }
+    }
+
+    /// <summary>最近复制区块：最近一条内容 + 「查看历史面板」入口（点击开面板）。</summary>
+    private FrameworkElement? CreateRecentClipboardBlock()
+    {
+        if (_clipboard is null)
+        {
+            return null;
+        }
+
+        var last = _clipboard.GetLastCopiedContent();
+        if (last is null)
+        {
+            return null;
+        }
+
+        var block = new Border
+        {
+            CornerRadius = new CornerRadius(8),
+            Background = Brushes.White,
+            Padding = new Thickness(10, 8, 10, 8),
+            Cursor = Cursors.Hand,
+            SnapsToDevicePixels = true,
+            UseLayoutRounding = true,
+        };
+        var row = new StackPanel { Orientation = Orientation.Horizontal };
+        row.Children.Add(new TextBlock
+        {
+            Text = "📋",
+            FontSize = 14,
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(0, 0, 8, 0),
+        });
+
+        var textColumn = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
+        string preview = last.ContentOrPath ?? "(空)";
+        if (preview.Length > 60)
+        {
+            preview = preview[..60] + "…";
+        }
+
+        textColumn.Children.Add(new TextBlock
+        {
+            Text = "最近复制",
+            FontSize = 10,
+            Foreground = new SolidColorBrush(Color.FromRgb(0x8A, 0x8A, 0x8A)),
+        });
+        textColumn.Children.Add(new TextBlock
+        {
+            Text = preview.Replace('\n', ' '),
+            FontSize = 12,
+            Foreground = new SolidColorBrush(Color.FromRgb(0x20, 0x20, 0x20)),
+            TextTrimming = TextTrimming.CharacterEllipsis,
+            MaxWidth = 300,
+            Margin = new Thickness(0, 2, 0, 0),
+        });
+        row.Children.Add(textColumn);
+
+        var hint = new TextBlock
+        {
+            Text = "查看历史 →",
+            FontSize = 10,
+            Foreground = new SolidColorBrush(Color.FromRgb(0x4A, 0x90, 0xD9)),
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(10, 0, 0, 0),
+        };
+        row.Children.Add(hint);
+        block.Child = row;
+
+        block.MouseLeftButtonUp += (_, e) =>
+        {
+            _clipboard!.OpenHistoryWindow();
+            Close();
+            e.Handled = true;
+        };
+        return block;
     }
 
     private static Border CreateSeparator()
