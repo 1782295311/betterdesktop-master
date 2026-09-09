@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "dependencies": {
+    "net8.0-windows10.0.19041": {
+      "betterdesktop.api": {
+        "type": "Project"
+      },
+      "betterdesktop.kernel": {
+        "type": "Project"
+      },
+      "betterdesktop.kernel.hmr": {
+        "type": "Project",
+        "dependencies": {
+          "BetterDesktop.Kernel": "[1.0.0, )"
+        }
+      },
+      "betterdesktop.shell.core": {
+        "type": "Project",
+        "dependencies": {
+          "BetterDesktop.Api": "[1.0.0, )",
+          "BetterDesktop.Kernel": "[1.0.0, )"
+        }
+      }
+    }
+  }
+}

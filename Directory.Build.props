@@ -1,0 +1,11 @@
+<Project>
+  <!--
+    Directory.Build.props — 仓库级构建属性（一阶段收口 2026-09-09）
+    依赖治理：RestorePackagesWithLockFile 启用 NuGet 锁定文件，
+    保证任意机器/任意时刻 restore 得到完全一致的依赖图（可复现构建）。
+    背书与选型理由见 docs/architecture/ADR-004.md。
+  -->
+  <PropertyGroup>
+    <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
+  </PropertyGroup>
+</Project>

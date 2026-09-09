@@ -33,3 +33,11 @@ poc/
 
 # 本机运行日志与临时脚本
 Temp/
+
+# C4: Playground 开发参考截图不入库（体积大且为个人环境快照）
+tools/ShellComponentsPlayground/*.png
+tools/ShellComponentsPlayground/*.jpg
+tools/ShellComponentsPlayground/*.jpeg
+
+# 一次性会话修复脚本（保留但不入库）
+scripts/_scratch/
