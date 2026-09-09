@@ -542,7 +542,7 @@ public sealed class DesktopBrowser : IDesktopBrowser
 
     // ======== explorer 桌面排序桥接（desktop.sortBridge） ========
     // 用户经 explorer 原生菜单改「排序方式」（写入 Bags\1\Desktop 的 Sort/SortDir），
-    // 自绘网格 ≤1.5s 自动跟随——explorer 菜单是自绘桌面排序的唯一入口（自绘菜单已退役）。
+    // 自绘网格 ≤1.5s 自动跟随——explorer 菜单是自绘桌面排序的唯一入口（桌面右键自绘 2026-09-07 回归，排序入口不变）。
 
     private void EnsureSortBridge()
     {

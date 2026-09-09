@@ -241,7 +241,8 @@ public sealed class DesktopPlugin : IPlugin
             var appearance = _context.Get<IAppearanceService>();
             var convertMenu = _context.Get<BetterDesktop.Shell.Convert.Contracts.IConvertMenuService>();
             var archiveService = _context.Get<BetterDesktop.Shell.Convert.Contracts.IArchiveService>();
-            _window = new DesktopWindow(_browser, vibrancy, appearance, _settings, convertMenu, archiveService, _context?.Events);
+            var clipboard = _context.Get<BetterDesktop.Shell.Clipboard.Contracts.IClipboardService>();
+            _window = new DesktopWindow(_browser, vibrancy, appearance, _settings, convertMenu, archiveService, _context?.Events, clipboard);
             _window.Show();
             DiagnosticLog.Trace("shell.desktop", "启动：窗口已显示，隐藏原生图标");
 

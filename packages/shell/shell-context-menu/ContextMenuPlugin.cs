@@ -24,11 +24,14 @@ namespace BetterDesktop.Shell.ContextMenus;
 // ============================================================
 
 /// <summary>
-/// 右键菜单插件（context-menu）——2026-09-05 架构收口后的定位：
-/// ①系统原生菜单接管（NativeMenuPopup：桌面/开始菜单/文件管理器等未申明自绘菜单的表面统一交给系统）；
-/// ②系统右键菜单管理器（MenuManager：注册表层枚举/启停/新建/注入/备份）。
-/// 自绘右键菜单已全面退役：dock 图标/应用提取器的菜单由 shell-dock 自管
-/// （DockItemTemplate + DockMenuPopup）；主体未申明菜单的表面不弹任何自研菜单。
+/// 右键菜单插件（context-menu）——2026-09-07 架构现状：
+/// ①桌面/图标右键自绘菜单（2026-09-07 用户拍板回归：DesktopIconsControl 构建 + DesktopMenuPopup
+///   渲染，WPF ContextMenu 零 IContextMenu 依赖——系统原生接入稳定性不达标：拖动关联崩溃、
+///   菜单类型错乱、非 explorer 进程聚合第三方扩展 0xC0000005 实锤）；
+/// ②系统原生菜单接管（NativeMenuPopup：开始菜单/文件管理器/未申明自绘菜单的表面统一交给系统）；
+/// ③系统右键菜单管理器（MenuManager：注册表层枚举/启停/新建/注入/备份）。
+/// 历史沿革：2026-09-05 曾全面退役自绘右键（桌面统一走系统原生），2026-09-07 用户拍板回归
+/// 自绘——桌面空白与图标条目一律自绘菜单（仅基础操作，不含第三方 shell 扩展项，代价已确认）。
 /// </summary>
 public sealed class ContextMenuPlugin : IPlugin
 {
@@ -38,9 +41,9 @@ public sealed class ContextMenuPlugin : IPlugin
 
     public Task LoadAsync(IContext context, CancellationToken cancellationToken = default)
     {
-        // 【回归修复 2026-09-06 / P2-6】自绘管线退役后桌面/文件管理器右键恒走系统原生菜单
-        //（NativeMenuPopup / DesktopMenuDelegation），context-menu.mode 不再参与行为判定
-        //（旧值 custom = 完全不弹菜单的退化残留已移除；设置键保留兼容旧设置文件）。
+        // 2026-09-07 回归自绘：桌面/图标右键由 shell-desktop 自绘（DesktopIconsControl +
+        // DesktopMenuPopup），context-menu.mode 不再参与行为判定（旧值 custom 残留已移除，
+        // 设置键保留兼容旧设置文件）。
 
         context.Provide<IFileClassifier>(new FileClassifier());
 

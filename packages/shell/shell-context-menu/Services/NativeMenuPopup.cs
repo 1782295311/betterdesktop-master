@@ -44,11 +44,12 @@ namespace BetterDesktop.Shell.ContextMenus.Services;
 /// <summary>系统原生右键弹层（IContextMenu HMENU → TrackPopupMenuEx；全部 COM 在常驻 STA 线程）。</summary>
 public static class NativeMenuPopup
 {
-    /// <summary>渲染模式设置键（保留兼容旧设置文件；自绘管线退役后不再参与行为判定）。</summary>
+    /// <summary>渲染模式设置键（保留兼容旧设置文件；桌面已回归自绘，本键不再参与行为判定）。</summary>
     public const string ModeKey = "context-menu.mode";
 
     /// <summary>
-    /// 是否原生模式。自绘管线退役后恒为 true（custom 与 native 同路，均弹系统原生菜单）——
+    /// 是否原生模式。桌面空白/图标右键 2026-09-07 回归自绘后，本组件仍服务开始菜单/文件管理器等
+    /// 未申明自绘的表面，恒为 true（custom 与 native 同路，均弹系统原生菜单）——
     /// 【回归修复 2026-09-06 / P2-6】旧语义 custom = 完全不弹菜单（自绘回滚开关的退化残留），
     /// 桌面右键不应存在"无菜单"状态。
     /// </summary>

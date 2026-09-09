@@ -37,7 +37,7 @@ namespace BetterDesktop.Shell.Desktop.Controls;
 //   "拖拽中触发重建后续拖"              → ExitArrangeAndContinueDrag / ResumeDragAfterRebuild；按路径找格子 FindCellByPath/EnumerateCells/ClearDragState
 //   "选中/双击打开"                     → SelectForClick/SyncSelectionVisual、Open/StartFile/StartExplorerFolder/StartFileShellNamespace/OpenSettings
 //   "拖到回收站"                        → UpdateRecycleDropState
-//   "右键菜单（统一路由）"              → BuildIconMenuEntries（图标）/ BuildBackgroundMenuEntries（空白），渲染交 NativeMenuPopup
+//   "右键菜单（统一路由）"              → BuildIconMenuEntries（图标）/ BuildBackgroundMenuEntries（空白），渲染交 DesktopMenuPopup（自绘）
 // ────────────────────────────────────
 
 /// <summary>右键路由的图标目标（cell→entry 映射；原 DesktopMenuTemplates 定义，收口后本地化）。</summary>
@@ -50,6 +50,7 @@ public sealed class DesktopIconsControl : ScrollViewer, IDisposable
     private readonly ISettingsService? _settings;
     private readonly BetterDesktop.Shell.Convert.Contracts.IConvertMenuService? _convertMenu;
     private readonly BetterDesktop.Shell.Convert.Contracts.IArchiveService? _archive;
+    private readonly BetterDesktop.Shell.Clipboard.Contracts.IClipboardService? _clipboard;
     private readonly IEventBus? _events;
     private IDisposable? _settingsSub;
 
@@ -112,12 +113,14 @@ public sealed class DesktopIconsControl : ScrollViewer, IDisposable
         ISettingsService? settings = null,
         BetterDesktop.Shell.Convert.Contracts.IConvertMenuService? convertMenu = null,
         BetterDesktop.Shell.Convert.Contracts.IArchiveService? archive = null,
-        IEventBus? events = null)
+        IEventBus? events = null,
+        BetterDesktop.Shell.Clipboard.Contracts.IClipboardService? clipboard = null)
     {
         _browser = browser;
         _settings = settings;
         _convertMenu = convertMenu;
         _archive = archive;
+        _clipboard = clipboard;
         _events = events;
         Background = Brushes.Transparent; // Transparent 可 HitTest：整个桌面区域接收鼠标事件
         // 对齐 cairoshell DesktopFolderViewStyle：横向滚动（纵向禁用），先填满一列再横向开新列
@@ -134,7 +137,7 @@ public sealed class DesktopIconsControl : ScrollViewer, IDisposable
         DragOver += OnDragOver;
         Drop += OnDrop;
 
-        // 2026-09-05 收口：桌面自绘菜单退役——空白/图标条目右键统一走系统原生菜单（ShowMenu）。
+        // 2026-09-07 回归自绘：桌面空白/图标条目右键一律自绘菜单（ShowMenu → DesktopMenuPopup）。
         MouseRightButtonUp += OnMenuServiceMouseUp;
 
         // 计划 G1 全键盘：F2/Del/Shift+Del/Ctrl+C·X·V·A/Ctrl+Shift+C/Alt+Enter 真实响应——
@@ -1783,8 +1786,8 @@ public sealed class DesktopIconsControl : ScrollViewer, IDisposable
         }
     }
 
-    // 2026-09-05 收口：旧自绘右键菜单（BuildIconMenu/BuildBlankMenu，DesktopMenuStyling 工厂）随
-    // 中央菜单管线一并退役——桌面右键统一走系统原生菜单（ShowMenu → NativeMenuPopup）。
+    // 2026-09-05 曾随中央菜单管线退役旧自绘右键菜单（BuildIconMenu/BuildBlankMenu，DesktopMenuStyling 工厂）；
+    // 2026-09-07 用户拍板回归自绘（ShowMenu → DesktopMenuPopup），此前的退役说明作废。
 
     // ======== 内联重命名 ========
 
@@ -2001,7 +2004,7 @@ public sealed class DesktopIconsControl : ScrollViewer, IDisposable
 
     // ===== 统一右键菜单路由（2026-09-05 收口后唯一路径）：
     //   本区域只构建菜单项定义（BuildIconMenuEntries 图标 / BuildBackgroundMenuEntries 空白），
-    //   渲染交给 shell-context-menu 的 NativeMenuPopup（系统原生菜单）；旧自绘 BuildIconMenu/BuildBlankMenu 已退役。 =====
+    //   渲染交给 shell-desktop 的 DesktopMenuPopup（WPF 自绘菜单；2026-09-07 回归自绘）。 =====
 
     private void OnMenuServiceMouseUp(object sender, MouseButtonEventArgs e)
     {
@@ -2317,6 +2320,18 @@ public sealed class DesktopIconsControl : ScrollViewer, IDisposable
         if (_browser.CanPaste)
         {
             items.Add(new MenuItemDef { Id = "paste", Text = "粘贴", Kind = MenuItemKind.Command, GestureText = "Ctrl+V", Command = () => InvokeBrowserPaste() });
+        }
+        // 剪贴板历史（2026-09-09 自绘菜单补全）：Ctrl+Shift+V 同款全局热键，任何桌面位置直达历史面板。
+        if (_clipboard is not null)
+        {
+            items.Add(new MenuItemDef
+            {
+                Id = "clipboardHistory",
+                Text = "剪贴板历史…",
+                Kind = MenuItemKind.Command,
+                GestureText = "Ctrl+Shift+V",
+                Command = () => _clipboard.OpenHistoryWindow(),
+            });
         }
         items.Add(new MenuItemDef { Id = "sep3", Text = "", Kind = MenuItemKind.Separator });
         items.Add(new MenuItemDef

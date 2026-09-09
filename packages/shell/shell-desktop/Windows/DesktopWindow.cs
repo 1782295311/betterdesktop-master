@@ -101,6 +101,7 @@ internal sealed class DesktopWindow : ShellWindow
     private readonly ISettingsService? _settings;
     private readonly BetterDesktop.Shell.Convert.Contracts.IConvertMenuService? _convertMenu;
     private readonly BetterDesktop.Shell.Convert.Contracts.IArchiveService? _archive;
+    private readonly BetterDesktop.Shell.Clipboard.Contracts.IClipboardService? _clipboard;
     private readonly IEventBus? _events;
     private IDisposable? _settingsSub;
     private DesktopIconsControl? _icons;
@@ -113,13 +114,15 @@ internal sealed class DesktopWindow : ShellWindow
         ISettingsService? settings = null,
         BetterDesktop.Shell.Convert.Contracts.IConvertMenuService? convertMenu = null,
         BetterDesktop.Shell.Convert.Contracts.IArchiveService? archive = null,
-        IEventBus? events = null)
+        IEventBus? events = null,
+        BetterDesktop.Shell.Clipboard.Contracts.IClipboardService? clipboard = null)
         : base(appearance, vibrancy)
     {
         _browser = browser;
         _settings = settings;
         _convertMenu = convertMenu;
         _archive = archive;
+        _clipboard = clipboard;
         _events = events;
         Events = events;
 
@@ -139,7 +142,7 @@ internal sealed class DesktopWindow : ShellWindow
         DesktopMenuDelegation.SetWallpaperOcclusion = SetWallpaperOcclusionImpl;
 
         // 图标网格：瀑布列（先填列后换列），避开顶部菜单栏条带 + 底部 dock/原生任务栏
-        _icons = new DesktopIconsControl(_browser, _settings, _convertMenu, _archive, _events);
+        _icons = new DesktopIconsControl(_browser, _settings, _convertMenu, _archive, _events, _clipboard);
         UpdateIconsReserve();
         ApplyIconsHidden();
 

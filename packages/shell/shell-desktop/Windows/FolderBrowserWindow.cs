@@ -68,7 +68,7 @@ public sealed class FolderBrowserWindow : ShellWindow
 
         BuildContent();
 
-        // 2026-09-05 收口：文件管理器条目右键 → 系统原生菜单（自绘管线退役，无条件挂接）。
+        // 文件管理器条目右键 → 系统原生菜单（自绘桌面空白/图标右键 2026-09-07 已回归自绘，文件管理器条目维持原生）。
         PreviewMouseRightButtonUp += OnMenuMouseUp;
     }
 

@@ -24,7 +24,7 @@ namespace BetterDesktop.Shell.Convert;
 
 /// <summary>
 /// 文档转换插件（shell-convert）：ConversionMatrix + EngineRegistry + 泛化 ConversionService。
-/// 2026-09-05 收口：ConvertMenuContributor 随中央自绘菜单管线退役（转换入口暂无挂点——
+/// 2026-09-07：转换入口挂点 = 桌面图标右键「转换为 ▸」（BuildIconMenuEntries）+ 系统右键级联 + 通配「更多格式…」（弹完整自绘菜单）。
 /// 待各主体在自管菜单中显式申明转换项时恢复）；转换服务与引擎预热保持可用。
 /// </summary>
 public sealed class ConvertPlugin : IPlugin
