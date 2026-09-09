@@ -21,10 +21,15 @@ public sealed class PluginHandleSubject : IResourceSubject
     }
 
     /// <inheritdoc />
-    public string Id => _handle.GetType().FullName ?? nameof(PluginHandle);
+    /// B3 修复：改用插件实例唯一键（PluginHandle.InstanceId）。
+    /// 旧实现返回 GetType().FullName，全部插件共享同一字符串，导致
+    /// ResourceGovernor 按 Id 去重时只监控第一个插件、其余注册全被跳过；
+    /// CordisContext.RemovePlugin 又用同一键注销，任一插件卸载即清空唯一监控对象。
+    public string Id => _handle.InstanceId;
 
     /// <inheritdoc />
-    public string? DisplayName => _handle.GetType().Name;
+    /// 诊断显示用插件名（旧实现返回 GetType().Name 恒为 "PluginHandle"，无辨识度）。
+    public string? DisplayName => _handle.PluginName;
 
     /// <inheritdoc />
     /// 所有进 Context 的插件默认可自愈（遵循"所有插件均可自愈"决策）。

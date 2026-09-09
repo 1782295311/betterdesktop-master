@@ -6,6 +6,22 @@ using BetterDesktop.Kernel.Contracts;
 
 namespace BetterDesktop.Kernel.Core;
 
+// ============================================================
+// 【白话导航 · Cordis 插件内核】凭白话需求定位到精确文件（Contracts/ 为对外契约，Core/ 为实现）：
+//   "插件怎么写 / 生命周期接口"        → Contracts/IPlugin.cs、IPluginHandle.cs、PluginState.cs
+//   "服务注册与获取（Provide/Get/Inject）" → 本文件 CordisContext.cs（契约 Contracts/IContext.cs）
+//   "单个插件的加载/卸载/状态句柄"     → Core/PluginHandle.cs
+//   "跨插件事件通信"                  → Core/EventBus.cs（契约 Contracts/IEventBus.cs；事件名集中在 ShellEvents/HmrEvents）
+//   "热重载（HMR 换插件不重启）"       → kernel-hmr/HmrManager.cs（双 ALC 切换 + 状态迁移 + 回滚）
+//   "按清单加载插件 / 程序集隔离"      → kernel-loader/LoaderService.cs + kernel-hmr/PluginLoadContext.cs（AssemblyLoadContext）
+//   "插件依赖排序 / 加载顺序"          → kernel-hmr/PluginDependencyResolver.cs
+//   "CPU/内存资源配额与治理"          → Core/ResourceGovernor.cs（IResourceGovernor.cs）
+//   "电源管理（睡眠/休眠感知）"        → Core/PowerManagement.cs
+//   "统一定时器"                      → kernel-timer/TimerService.cs
+//   "内核日志 / 诊断"                 → Core/KernelLogger.cs、Core/DiagnosticLog.cs
+//   "能力声明与权限"                  → Core/Capability.cs、Core/CapabilityPermission.cs
+// ============================================================
+
 /// <summary>内核上下文实现（ADR-002 D1 冻结面）。</summary>
 public sealed class CordisContext : IContext, IDisposable
 {
@@ -13,6 +29,7 @@ public sealed class CordisContext : IContext, IDisposable
     private readonly List<CordisContext> _children = new();
     private readonly Dictionary<Type, object> _services = new();
     private readonly List<PluginHandle> _plugins = new();
+    private readonly Dictionary<Type, List<PluginHandle>> _injectCache = new();
     private readonly List<EffectRegistration> _rootEffects = new();
     private readonly EventBus _eventBus;
     private readonly KernelLogger _logger;
@@ -94,6 +111,16 @@ public sealed class CordisContext : IContext, IDisposable
         ArgumentNullException.ThrowIfNull(plugin);
         var handle = new PluginHandle(this, plugin);
         _plugins.Add(handle);
+        // 构建依赖缓存：按 Inject 类型索引插件句柄，Provide 时 O(1) 查找替代 O(N) 全量遍历
+        foreach (var injectType in plugin.Inject)
+        {
+            if (!_injectCache.TryGetValue(injectType, out var list))
+            {
+                list = new List<PluginHandle>();
+                _injectCache[injectType] = list;
+            }
+            list.Add(handle);
+        }
         _ = handle.StartAsync();
         // 注册到内存治理器：所有进 Context 的插件都被真实监控，消除治理器空转。
         // 治理器在进程级持续超致命阈值时触发 C1 宿主自重启兜底（不擅自逐个杀 in-process 插件）。
@@ -108,10 +135,22 @@ public sealed class CordisContext : IContext, IDisposable
     internal void RemovePlugin(PluginHandle handle)
     {
         _plugins.Remove(handle);
-        // 同步从内存治理器注销（按类型名 id，与 PluginHandleSubject.Id 对齐）。
+        // 同步从依赖缓存移除：遍历该插件的 Inject 类型，从对应缓存列表中删除句柄
+        foreach (var injectType in handle.InjectTypes)
+        {
+            if (_injectCache.TryGetValue(injectType, out var list))
+            {
+                list.Remove(handle);
+                if (list.Count == 0)
+                {
+                    _injectCache.Remove(injectType);
+                }
+            }
+        }
+        // 同步从内存治理器注销（按插件实例唯一键，与 PluginHandleSubject.Id 对齐；B3 修复）。
         if (GetService(typeof(IResourceGovernor)) is IResourceGovernor gov)
         {
-            gov.UnregisterSubject(handle.GetType().FullName ?? nameof(PluginHandle));
+            gov.UnregisterSubject(handle.InstanceId);
         }
     }
 
@@ -142,12 +181,15 @@ public sealed class CordisContext : IContext, IDisposable
         });
     }
 
-    /// <summary>通知依赖指定类型的插件（递归到子上下文）。</summary>
+    /// <summary>通知依赖指定类型的插件（递归到子上下文）。通过依赖缓存 O(1) 查找替代 O(N) 全量遍历。</summary>
     internal void NotifyDependents(Type serviceType)
     {
-        foreach (var plugin in _plugins)
+        if (_injectCache.TryGetValue(serviceType, out var dependents))
         {
-            plugin.OnServiceChanged(serviceType);
+            foreach (var plugin in dependents)
+            {
+                plugin.OnServiceChanged(serviceType);
+            }
         }
         foreach (var child in _children)
         {

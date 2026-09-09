@@ -22,6 +22,13 @@ public sealed class PluginHandle : IPluginHandle
         _plugin = plugin;
     }
 
+    /// <summary>
+    /// 插件实例唯一键（B3 修复：治理器注册/注销均以本键寻址）。
+    /// 不用 PluginName 的原因：HMR 双 ALC 切换时新实例可能先于旧实例注销完成注册，
+    /// 同名会被 ResourceGovernor 按 Id 去重跳过；用实例 GUID 则每个 handle 天然唯一。
+    /// </summary>
+    internal string InstanceId { get; } = Guid.NewGuid().ToString("N");
+
     /// <inheritdoc />
     public PluginState State
     {
@@ -36,6 +43,9 @@ public sealed class PluginHandle : IPluginHandle
 
     /// <summary>诊断用：插件名称。</summary>
     public string PluginName => _plugin.Name;
+
+    /// <summary>依赖缓存用：插件声明的 Inject 类型（注册后不可变，IPlugin.Inject 为 get-only）。</summary>
+    internal IReadOnlyList<Type> InjectTypes => _plugin.Inject;
 
     /// <summary>登记 effect（由 Context.Effect 在加载期调用）。</summary>
     internal void AddEffect(EffectRegistration registration)
@@ -189,7 +199,6 @@ public sealed class PluginHandle : IPluginHandle
         catch (Exception ex)
         {
             _context.Logger.Error($"插件 {_plugin.Name} 加载失败：{ex}");
-            DiagnosticLog.Trace("Plugin", $"FAILED {_plugin.Name}: {ex.GetType().Name}: {ex.Message}");
             SetState(PluginState.Failed);
         }
     }
