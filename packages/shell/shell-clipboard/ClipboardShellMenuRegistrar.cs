@@ -22,6 +22,11 @@ internal static class ClipboardShellMenuRegistrar
             return;
         }
 
+        // 历史残留治理：旧版路径 bug 曾在 4 场景生成空壳键 …\shell\shell（explorer 枚举到
+        // 无显示名/无 command 的 shell 键 → 右键出现裸「shell」项，点击导致资源管理器卡顿）。
+        // 每次注册前清理，杜绝复活。
+        CleanLegacyShellStubs();
+
         string host = $"\"{hostPath}\"";
         (string RegPath, string Args)[] scenes =
         {
@@ -53,6 +58,12 @@ internal static class ClipboardShellMenuRegistrar
                         {
                             using var cmdWrite = Registry.CurrentUser.CreateSubKey(path + @"\command");
                             cmdWrite.SetValue(string.Empty, command);
+                            // 旧注册无图标：顺带补齐（图标 = 宿主 exe，标识 BetterDesktop 身份）。
+                            if (existing.GetValue("Icon") is null)
+                            {
+                                using var keyWrite = Registry.CurrentUser.CreateSubKey(path);
+                                keyWrite.SetValue("Icon", host);
+                            }
                         }
                         continue;
                     }
@@ -60,8 +71,26 @@ internal static class ClipboardShellMenuRegistrar
 
                 using var key = Registry.CurrentUser.CreateSubKey(path);
                 key.SetValue("MUIVerb", DisplayText);
+                key.SetValue("Icon", host);
                 using var commandKey = key.CreateSubKey("command");
                 commandKey.SetValue(string.Empty, command);
+            }
+            catch (Exception)
+            {
+                // 注册表被占用/权限异常：跳过该场景，不影响其余与整体启动。
+            }
+        }
+    }
+
+    /// <summary>清理旧版路径 bug 留下的空壳 …\shell\shell 键（4 场景）；键不存在则静默跳过。</summary>
+    private static void CleanLegacyShellStubs()
+    {
+        string[] scenes = { @"*\shell", @"Directory\shell", @"Directory\Background\shell", @"DesktopBackground\shell" };
+        foreach (var scene in scenes)
+        {
+            try
+            {
+                Registry.CurrentUser.DeleteSubKeyTree($@"Software\Classes\{scene}\shell", throwOnMissingSubKey: false);
             }
             catch (Exception)
             {

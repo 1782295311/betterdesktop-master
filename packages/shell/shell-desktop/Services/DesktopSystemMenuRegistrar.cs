@@ -45,7 +45,8 @@ public static class DesktopSystemMenuRegistrar
             key.SetValue(null, UiDisplayName);
             key.SetValue("MUIVerb", UiDisplayName);
             key.SetValue("Icon", $"\"{exe}\"");
-            key.SetValue("SubCommands", string.Empty);
+            // SubCommands 必须填子命令名列表（逗号分隔）；空值 = 级联菜单无法展开（Win11 实测）。
+            key.SetValue("SubCommands", "toggle-clipboard,toggle-icons,toggle-menubar,toggle-dock,toggle-taskbar");
 
             EnsureUiSub(exe, key, "toggle-icons", "桌面图标显隐");
             EnsureUiSub(exe, key, "toggle-menubar", "菜单栏显隐");
@@ -176,7 +177,10 @@ public static class DesktopSystemMenuRegistrar
         key.SetValue(null, "转换为 ▸");
         key.SetValue("MUIVerb", "转换为 ▸");
         key.SetValue("Icon", $"\"{exe}\"");
-        key.SetValue("SubCommands", string.Empty);
+        // SubCommands 必须填子命令名列表（逗号分隔）；空值 = 级联菜单无法展开（Win11 实测）。
+        // 层级红线：级联内不再放「更多格式…」convert-more（点击又弹完整自绘菜单 = 三级跳层），
+        // 完整菜单由通配「更多格式…」（BetterDesktopMore）单入口承载，级联保持纯二级。
+        key.SetValue("SubCommands", string.Join(",", usable.Select(t => "convert-to-" + t.Format)));
 
         foreach (var t in usable)
         {
@@ -187,14 +191,7 @@ public static class DesktopSystemMenuRegistrar
             cmd.SetValue(null, $"\"{exe}\" --menu-cmd {cmdName} \"%1\"");
         }
 
-        using (var sub = key.CreateSubKey(@"shell\convert-more"))
-        {
-            sub.SetValue("MUIVerb", "更多格式…");
-            using var cmd = sub.CreateSubKey("command");
-            cmd.SetValue(null, $"\"{exe}\" --menu-cmd convert-more \"%1\"");
-        }
-
-        DiagnosticLog.Trace("shell.desktop", $"「转换为 ▸」已注册: {ext} → {usable.Count + 1} 子命令");
+        DiagnosticLog.Trace("shell.desktop", $"「转换为 ▸」已注册: {ext} → {usable.Count} 子命令");
     }
 
     /// <summary>注销系统转换菜单（功能管理开关）：删通配入口 + 全部扩展专属级联。</summary>
@@ -282,7 +279,17 @@ public static class DesktopSystemMenuRegistrar
         key.SetValue(null, "压缩到 ▸");
         key.SetValue("MUIVerb", "压缩到 ▸");
         key.SetValue("Icon", $"\"{exe}\"");
-        key.SetValue("SubCommands", string.Empty);
+        // SubCommands 必须填子命令名列表（逗号分隔）；空值 = 级联菜单无法展开（Win11 实测）。
+        var compressCmds = new List<string> { "compress-zip" };
+        if (BetterDesktop.Shell.Convert.Services.ArchiveService.ProbeSevenZip())
+        {
+            compressCmds.Add("compress-7z");
+        }
+        if (BetterDesktop.Shell.Convert.Services.ArchiveService.ProbeRar())
+        {
+            compressCmds.Add("compress-rar");
+        }
+        key.SetValue("SubCommands", string.Join(",", compressCmds));
 
         // zip：内置引擎，永远注册
         using (var zip = key.CreateSubKey(@"shell\compress-zip"))
@@ -320,7 +327,8 @@ public static class DesktopSystemMenuRegistrar
         key.SetValue(null, "解压到 ▸");
         key.SetValue("MUIVerb", "解压到 ▸");
         key.SetValue("Icon", $"\"{exe}\"");
-        key.SetValue("SubCommands", string.Empty);
+        // SubCommands 必须填子命令名列表（逗号分隔）；空值 = 级联菜单无法展开（Win11 实测）。
+        key.SetValue("SubCommands", "unzip-here,unzip-to");
 
         using (var here = key.CreateSubKey(@"shell\unzip-here"))
         {
