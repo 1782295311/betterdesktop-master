@@ -9,6 +9,7 @@ using BetterDesktop.Kernel.Loader;
 using BetterDesktop.Kernel.Timer;
 using BetterDesktop.Shell.Convert.Services;
 using BetterDesktop.Shell.Core;
+using BetterDesktop.Shell.Core.Native;
 using BetterDesktop.Shell.Core.Surface;
 using BetterDesktop.Shell.Core.Vibrancy;
 using BetterDesktop.Shell.Core.Windowing;
@@ -424,7 +425,7 @@ public static class Bootstrap
                     dpi = 1.0;
                 }
 
-                if (GetCursorPos(out var pt))
+                if (NativeMethods.GetCursorPos(out var pt))
                 {
                     BetterDesktop.Shell.Desktop.Services.DesktopMenuPopup.Show(
                         entries, new System.Windows.Point(pt.X / dpi, pt.Y / dpi));
@@ -452,13 +453,5 @@ public static class Bootstrap
 
         return context;
     }
-
-    // 光标物理坐标（转换菜单弹在鼠标处；与自绘桌面 GetCursorPos 同域）——类级 P/Invoke
-    [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
-    private struct NativePoint { public int X; public int Y; }
-
-    [System.Runtime.InteropServices.DllImport("user32.dll")]
-    [return: System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.Bool)]
-    private static extern bool GetCursorPos(out NativePoint lpPoint);
 }
 
