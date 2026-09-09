@@ -105,22 +105,14 @@ public static class DesktopSystemMenuRegistrar
         }
     }
 
-    /// <summary>文本/数据类常见扩展（2026-09-09 精简显示）：各自注册专属级联「格式转换 ▸」，
-    /// 子命令 = 该类型矩阵全量（引擎缺失项照常显示、点击时宿主检测反馈）。
-    /// epub/mobi/Office/图片/PDF 等外部引擎依赖类型无系统级联，由自绘右键「格式转换」置灰全量承载。</summary>
-    private static readonly string[] QuickExtensions =
-        [".txt", ".log", ".md", ".markdown", ".html", ".htm", ".json", ".xml", ".yaml", ".yml", ".csv", ".tsv"];
-
-    /// <summary>直转可用性：首选与兜底引擎都在纯托管白名单（无需外部进程，缺依赖也能转）。</summary>
+    // 直转可用性：首选与兜底引擎都在纯托管白名单（无需外部进程，缺依赖也能转）。
     private static bool IsUsable(ConversionTarget t) =>
         t.Prefer is EngineKind.Managed or EngineKind.Image or EngineKind.PdfText
         && (t.Fallback is null
             or EngineKind.Managed or EngineKind.Image or EngineKind.PdfText);
 
-    /// <summary>
-    /// 注册系统文件右键转换入口（2026-09-09 精简版）：
-    /// 文本/数据 12 扩展各注册专属级联「格式转换 ▸」（子命令 = 矩阵全量，打开即所有选项，
-    /// 引擎缺失项照常显示、点击时宿主检测反馈）。
+    /// <summary>注册系统文件右键转换入口（2026-09-09 全扩展版）：矩阵全部可转输入扩展各自注册
+    /// 专属级联「格式转换 ▸」（子命令 = 矩阵全量，打开即所有选项，引擎缺失项照常显示、点击时宿主检测反馈）。
     /// 旧通配「更多格式…」（*\shell\BetterDesktopMore）已移除——全量级联不再需要兜底入口。
     /// 幂等：每次启动先清旧键树再重建（旧版 *\shell\BetterDesktopConvert 级联结构自动迁移）。
     /// </summary>
@@ -137,13 +129,13 @@ public static class DesktopSystemMenuRegistrar
 
             // 注销历史通配入口（2026-09-09 移除；旧键残留一并清理）。
             Registry.CurrentUser.DeleteSubKeyTree(@"Software\Classes\*\shell\BetterDesktopMore", throwOnMissingSubKey: false);
-            foreach (var ext in QuickExtensions)
+            foreach (var ext in BetterDesktop.Shell.Convert.Services.ConversionMatrix.AllInputExtensions)
             {
                 EnsureQuickSubmenu(exe, ext);
             }
 
             DiagnosticLog.Trace("shell.desktop",
-                $"系统转换菜单已注册: {QuickExtensions.Length} 类扩展专属级联「格式转换 ▸」（全量）");
+                $"系统转换菜单已注册: {BetterDesktop.Shell.Convert.Services.ConversionMatrix.AllInputExtensions.Count} 类扩展专属级联「格式转换 ▸」（全量）");
         }
         catch (Exception ex)
         {
@@ -184,19 +176,19 @@ public static class DesktopSystemMenuRegistrar
         DiagnosticLog.Trace("shell.desktop", $"「格式转换 ▸」已注册: {ext} → {targets.Count} 子命令");
     }
 
-    /// <summary>注销系统转换菜单（功能管理开关）：删通配入口 + 全部扩展专属级联。</summary>
+    /// <summary>注销系统转换菜单（功能管理开关）：删全部扩展专属级联。</summary>
     public static void UnregisterConvert()
     {
         try
         {
             Registry.CurrentUser.DeleteSubKeyTree(@"Software\Classes\*\shell\BetterDesktopMore", throwOnMissingSubKey: false);
             Registry.CurrentUser.DeleteSubKeyTree(@"Software\Classes\*\shell\BetterDesktopConvert", throwOnMissingSubKey: false);
-            foreach (var ext in QuickExtensions)
+            foreach (var ext in BetterDesktop.Shell.Convert.Services.ConversionMatrix.AllInputExtensions)
             {
                 Registry.CurrentUser.DeleteSubKeyTree(
                     @"Software\Classes\" + ext + @"\shell\BetterDesktopConvert", throwOnMissingSubKey: false);
             }
-            DiagnosticLog.Trace("shell.desktop", "系统转换菜单已注销（通配 + 扩展专属）");
+            DiagnosticLog.Trace("shell.desktop", "系统转换菜单已注销（全扩展级联）");
         }
         catch (Exception ex)
         {
@@ -209,7 +201,7 @@ public static class DesktopSystemMenuRegistrar
     {
         try
         {
-            foreach (var ext in QuickExtensions)
+            foreach (var ext in BetterDesktop.Shell.Convert.Services.ConversionMatrix.AllInputExtensions)
             {
                 if (Registry.CurrentUser.OpenSubKey(@"Software\Classes\" + ext + @"\shell\BetterDesktopConvert") is not null)
                 {

@@ -68,13 +68,16 @@ public partial class App : Application
             {
                 try
                 {
+                    // 拉起时带 --menu-cmd-hosted：被拉起的宿主走静默装配（无 splash/主界面），
+                    // 服务就绪后直接执行命令——用户点右键功能只看到功能界面，看不到主程序。
                     var psi = new ProcessStartInfo(hostExe)
                     {
                         UseShellExecute = false,
                         WorkingDirectory = AppContext.BaseDirectory,
+                        Arguments = $"--menu-cmd-hosted \"{cmdAction}\" \"{cmdPath}\"",
                     };
                     using var proc = Process.Start(psi);
-                    Diag($"宿主进程已拉起 pid={proc?.Id ?? -1}");
+                    Diag($"宿主进程已拉起 pid={proc?.Id ?? -1}（静默装配）");
                     for (var i = 0; i < 48; i++)
                     {
                         Thread.Sleep(250);
@@ -103,6 +106,16 @@ public partial class App : Application
             }
             Shutdown(0);
             return;
+        }
+
+        // 静默服务装配：--menu-cmd 无实例时以此参数拉起（--menu-cmd-hosted <action> <path>）。
+        // 不显示 splash/主界面，仅装配服务（含命令管道），装配完成后经管道自送执行右键命令——
+        // 用户点「剪贴板历史…」等直接看到功能界面，看不到主程序打开。
+        if (args.Length >= 2 && string.Equals(args[0], "--menu-cmd-hosted", StringComparison.Ordinal))
+        {
+            _hostedAction = args[1];
+            _hostedPath = args.Length >= 3 ? args[2] : string.Empty;
+            // 不 return：继续单实例互斥 + 静默装配（splash 分支按 _hostedAction 跳过）。
         }
 
         // 自绘桌面开关（2026-09-07 系统右键菜单入口）：--toggle-desktop → 有实例经命令桥热切，
@@ -173,6 +186,13 @@ public partial class App : Application
             // OnLastWindowClose,它一关闭 WPF 就会退出进程,Closed 里的 Bootstrap 将失去上下文。
             ShutdownMode = ShutdownMode.OnExplicitShutdown;
 
+            if (_hostedAction is not null)
+            {
+                // 静默装配：无 splash、无主界面，仅加载服务；完成后经命令管道自送执行右键命令。
+                _ = HostedBootstrapAsync();
+                return;
+            }
+
             var splash = new Views.SplashWindow();
             splash.Closed += async (_, _) =>
             {
@@ -198,5 +218,27 @@ public partial class App : Application
     {
         HostWatchdog.Release();
         base.OnExit(e);
+    }
+
+    // ---- 静默服务装配（--menu-cmd-hosted） ----
+
+    private string? _hostedAction;
+    private string? _hostedPath;
+
+    /// <summary>静默装配：无 splash/主界面，加载服务后经命令管道自送执行右键命令（面板直接出）。</summary>
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Reliability", "CA2000:Dispose objects before losing scope",
+        Justification = "Bootstrap.Build 返回宿主根 IContext，生命周期=进程，由宿主退出时统一释放，静默装配不可中途 Dispose")]
+    private async Task HostedBootstrapAsync()
+    {
+        try
+        {
+            await Bootstrap.Build();
+            // 命令管道 server 已在 Build 内就绪：自送命令执行（剪贴板面板等直接弹出）。
+            MenuCommandPipe.TrySend(_hostedAction!, _hostedPath ?? string.Empty);
+        }
+        catch (Exception ex)
+        {
+            HostWatchdog.RestartFromFatal("Bootstrap.Build(hosted)", ex);
+        }
     }
 }

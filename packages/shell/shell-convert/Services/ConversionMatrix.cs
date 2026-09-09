@@ -29,6 +29,9 @@ public static class ConversionMatrix
     /// <summary>是否可转换（右键菜单整项显隐的快速判定）。</summary>
     public static bool IsConvertible(string extension) => GetTargets(extension).Count > 0;
 
+    /// <summary>全部已登记可转输入扩展名（系统右键级联注册用：每种类型全量平铺「格式转换 ▸」，引擎缺失项照常显示）。</summary>
+    public static IReadOnlyList<string> AllInputExtensions { get; } = new List<string>(Rows.Keys);
+
     /// <summary>多输入合并目标（全部为 pdf 且 ≥2 时可合并为一个 pdf）。</summary>
     public static ConversionTarget MergePdf { get; } = new(
         "pdf", "合并 PDF", ConversionTarget.MergePdfMarker, 1, EngineKind.PdfCompose);
