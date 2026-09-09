@@ -170,7 +170,7 @@ public sealed class ConvertMenuService : IConvertMenuService
             items.Add(new MenuItemDef
             {
                 Id = "convertTo",
-                Text = "转换为",
+                Text = "格式转换",
                 Kind = MenuItemKind.Submenu,
                 Children = children,
             });

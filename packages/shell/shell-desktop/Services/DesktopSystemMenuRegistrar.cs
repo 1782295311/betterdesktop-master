@@ -162,27 +162,28 @@ public static class DesktopSystemMenuRegistrar
         cmd.SetValue(null, $"\"{exe}\" --menu-cmd convert \"%1\"");
     }
 
-    /// <summary>文本/数据扩展专属级联「转换为 ▸」：子命令 = 矩阵目标中纯托管可用项 + 更多格式…。</summary>
+    /// <summary>文本/数据扩展专属级联「格式转换 ▸」：子命令 = 矩阵全部目标（含引擎缺失项——
+    /// 打开即为所有选项，可用性由点击时宿主检测/反馈，与自绘菜单置灰同哲学）。</summary>
     private static void EnsureQuickSubmenu(string exe, string ext)
     {
         var regPath = @"Software\Classes\" + ext + @"\shell\BetterDesktopConvert";
-        var usable = ConversionMatrix.GetTargets(ext).Where(IsUsable).ToList();
-        if (usable.Count == 0)
+        var targets = ConversionMatrix.GetTargets(ext);
+        if (targets.Count == 0)
         {
-            return; // 该类型无纯托管直转目标 → 只保留通配「更多格式…」兜底
+            return; // 该类型无任何可转目标 → 只保留通配「更多格式…」兜底
         }
 
         Registry.CurrentUser.DeleteSubKeyTree(regPath, throwOnMissingSubKey: false);
         using var key = Registry.CurrentUser.CreateSubKey(regPath);
-        key.SetValue(null, "转换为 ▸");
-        key.SetValue("MUIVerb", "转换为 ▸");
+        key.SetValue(null, "格式转换 ▸");
+        key.SetValue("MUIVerb", "格式转换 ▸");
         key.SetValue("Icon", $"\"{exe}\"");
         // SubCommands 必须填子命令名列表（逗号分隔）；空值 = 级联菜单无法展开（Win11 实测）。
         // 层级红线：级联内不再放「更多格式…」convert-more（点击又弹完整自绘菜单 = 三级跳层），
         // 完整菜单由通配「更多格式…」（BetterDesktopMore）单入口承载，级联保持纯二级。
-        key.SetValue("SubCommands", string.Join(",", usable.Select(t => "convert-to-" + t.Format)));
+        key.SetValue("SubCommands", string.Join(",", targets.Select(t => "convert-to-" + t.Format)));
 
-        foreach (var t in usable)
+        foreach (var t in targets)
         {
             var cmdName = "convert-to-" + t.Format;
             using var sub = key.CreateSubKey("shell\\" + cmdName);
@@ -191,7 +192,7 @@ public static class DesktopSystemMenuRegistrar
             cmd.SetValue(null, $"\"{exe}\" --menu-cmd {cmdName} \"%1\"");
         }
 
-        DiagnosticLog.Trace("shell.desktop", $"「转换为 ▸」已注册: {ext} → {usable.Count} 子命令");
+        DiagnosticLog.Trace("shell.desktop", $"「格式转换 ▸」已注册: {ext} → {targets.Count} 子命令");
     }
 
     /// <summary>注销系统转换菜单（功能管理开关）：删通配入口 + 全部扩展专属级联。</summary>
