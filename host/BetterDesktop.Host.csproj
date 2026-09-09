@@ -27,11 +27,12 @@
 
   <PropertyGroup>
     <!-- 主程序构建版本时间戳：每次编译以当前 UTC 时间自动生成（yyyy.MM.dd.HHmm），
-         落入 文件版本 FileVersion 与 信息版本 InformationalVersion，保证"编译版本"始终新鲜；
-         AssemblyVersion 保持默认稳定值，避免运行时引用绑定随每次构建漂移。 -->
+         落入 文件版本 FileVersion 与 信息版本 InformationalVersion 后缀，保证"编译版本"始终新鲜；
+         AssemblyVersion 由 Directory.Build.props 统一为 1.3.0.0（稳定），避免运行时引用绑定随每次构建漂移。 -->
     <BuildStamp>$([System.DateTime]::UtcNow.ToString("yyyy.MM.dd.HHmm"))</BuildStamp>
     <FileVersion>$(BuildStamp)</FileVersion>
-    <InformationalVersion>1.0-$(BuildStamp)</InformationalVersion>
+    <!-- 产品版本统一 1.3.0（Directory.Build.props），后缀编译时间戳保证构建新鲜度 -->
+    <InformationalVersion>1.3.0-$(BuildStamp)</InformationalVersion>
   </PropertyGroup>
 
   <ItemGroup>
