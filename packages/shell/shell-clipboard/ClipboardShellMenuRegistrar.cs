@@ -37,20 +37,29 @@ internal static class ClipboardShellMenuRegistrar
             {
                 // regPath 已含 shell（如 "*\shell"），这里只追加键名。
                 string path = $@"Software\Classes\{regPath}\{KeyName}";
-                // 避让：已存在（含用户自定义同名项）不覆盖，保持幂等与用户优先。
+                string command = args.Length > 0
+                    ? $"{host} --menu-cmd clipboard-history {args}"
+                    : $"{host} --menu-cmd clipboard-history";
+                // 避让：已有同名项不覆盖（保持用户优先）。例外：command 指向 BetterDesktop.Host.exe
+                // 的旧路径（构建输出迁移/宿主升级）时更新为新路径，保证右键入口始终可用。
                 using (var existing = Registry.CurrentUser.OpenSubKey(path))
                 {
                     if (existing is not null && existing.GetValue("MUIVerb") is not null)
                     {
+                        using var cmdKey = existing.OpenSubKey("command");
+                        var existingCmd = cmdKey?.GetValue(string.Empty) as string;
+                        if (existingCmd is not null &&
+                            existingCmd.Contains("BetterDesktop.Host.exe", StringComparison.OrdinalIgnoreCase))
+                        {
+                            using var cmdWrite = Registry.CurrentUser.CreateSubKey(path + @"\command");
+                            cmdWrite.SetValue(string.Empty, command);
+                        }
                         continue;
                     }
                 }
 
                 using var key = Registry.CurrentUser.CreateSubKey(path);
                 key.SetValue("MUIVerb", DisplayText);
-                string command = args.Length > 0
-                    ? $"{host} --menu-cmd clipboard-history {args}"
-                    : $"{host} --menu-cmd clipboard-history";
                 using var commandKey = key.CreateSubKey("command");
                 commandKey.SetValue(string.Empty, command);
             }

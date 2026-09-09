@@ -1,5 +1,7 @@
 using System;
+using System.Diagnostics;
 using System.Linq;
+using System.Threading;
 using System.Windows;
 using BetterDesktop.Kernel.Core;
 
@@ -40,13 +42,67 @@ public partial class App : Application
 
         if (args.Length >= 2 && string.Equals(args[0], "--menu-cmd", StringComparison.Ordinal))
         {
-            if (MenuCommandPipe.TrySend(args[1], args.Length >= 3 ? args[2] : string.Empty))
+            var cmdAction = args[1];
+            var cmdPath = args.Length >= 3 ? args[2] : string.Empty;
+            // 命令进程 sink 未注入（宿主完整启动才 SetSink），Trace 不可见；写独立诊断文件供右键功能排查。
+            var diagFile = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "bdt-menu-cmd.log");
+            void Diag(string msg)
             {
+                try { System.IO.File.AppendAllText(diagFile, $"[{DateTime.Now:HH:mm:ss}] {msg}\r\n"); } catch { }
+            }
+
+            Diag($"进入 --menu-cmd action={cmdAction} path={cmdPath} exe={Environment.ProcessPath}");
+            if (MenuCommandPipe.TrySend(cmdAction, cmdPath))
+            {
+                Diag("转发成功（已有实例）");
                 Shutdown(0);
                 return;
             }
-            // 无运行实例：继续正常启动（命令丢弃并记日志）
-            DiagnosticLog.Trace("menu-cmd", $"无运行实例，命令丢弃: {args[1]} {args.Skip(2)}");
+
+            // 无运行实例：宿主已退出时右键命令仍需可用——拉起宿主进程，等待命令管道就绪后重发命令。
+            // 宿主启动完成（含插件加载）才起命令管道；循环重发直到成功或超时（上限 ~12s）。
+            // 注意：此处必须 return，不再"继续正常启动"——否则会与拉起的宿主抢单实例锁重复启动。
+            Diag("无运行实例，拉起宿主并等待转发");
+            var hostExe = Environment.ProcessPath;
+            if (!string.IsNullOrEmpty(hostExe))
+            {
+                try
+                {
+                    var psi = new ProcessStartInfo(hostExe)
+                    {
+                        UseShellExecute = false,
+                        WorkingDirectory = AppContext.BaseDirectory,
+                    };
+                    using var proc = Process.Start(psi);
+                    Diag($"宿主进程已拉起 pid={proc?.Id ?? -1}");
+                    for (var i = 0; i < 48; i++)
+                    {
+                        Thread.Sleep(250);
+                        if (proc is not null && proc.HasExited)
+                        {
+                            Diag($"宿主已退出（拉起失败?）exit={proc.ExitCode}");
+                            break; // 宿主拉起失败/立即退出，命令无法送达
+                        }
+                        if (MenuCommandPipe.TrySend(cmdAction, cmdPath))
+                        {
+                            Diag($"转发成功（第 {i + 1} 次尝试）");
+                            Shutdown(0);
+                            return;
+                        }
+                    }
+                    Diag("等待宿主就绪超时，命令未送达");
+                }
+                catch (Exception ex)
+                {
+                    Diag($"拉起宿主异常: {ex}");
+                }
+            }
+            else
+            {
+                Diag("无法解析宿主路径");
+            }
+            Shutdown(0);
+            return;
         }
 
         // 自绘桌面开关（2026-09-07 系统右键菜单入口）：--toggle-desktop → 有实例经命令桥热切，
