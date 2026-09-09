@@ -367,7 +367,7 @@ public static class Bootstrap
                     context.Logger.Info($"[menu-cmd] convert-to 不支持: {filePath} → {target}");
                     Application.Current.Dispatcher.InvokeAsync(() =>
                         System.Windows.MessageBox.Show(
-                            $"当前文件不支持直接转换为 {target}\n\n请改用「更多格式…」查看完整目标列表。", "格式转换"));
+                            $"当前文件类型不支持转换为 {target}。", "格式转换"));
                     return;
                 }
 

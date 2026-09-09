@@ -50,7 +50,7 @@ public sealed class DesktopIconsControl : ScrollViewer, IDisposable
     private readonly ISettingsService? _settings;
     private readonly BetterDesktop.Shell.Convert.Contracts.IConvertMenuService? _convertMenu;
     private readonly BetterDesktop.Shell.Convert.Contracts.IArchiveService? _archive;
-    private readonly BetterDesktop.Shell.Clipboard.Contracts.IClipboardService? _clipboard;
+    private readonly Func<BetterDesktop.Shell.Clipboard.Contracts.IClipboardService?>? _clipboardFactory;
     private readonly IEventBus? _events;
     private IDisposable? _settingsSub;
 
@@ -114,13 +114,13 @@ public sealed class DesktopIconsControl : ScrollViewer, IDisposable
         BetterDesktop.Shell.Convert.Contracts.IConvertMenuService? convertMenu = null,
         BetterDesktop.Shell.Convert.Contracts.IArchiveService? archive = null,
         IEventBus? events = null,
-        BetterDesktop.Shell.Clipboard.Contracts.IClipboardService? clipboard = null)
+        Func<BetterDesktop.Shell.Clipboard.Contracts.IClipboardService?>? clipboardFactory = null)
     {
         _browser = browser;
         _settings = settings;
         _convertMenu = convertMenu;
         _archive = archive;
-        _clipboard = clipboard;
+        _clipboardFactory = clipboardFactory;
         _events = events;
         Background = Brushes.Transparent; // Transparent 可 HitTest：整个桌面区域接收鼠标事件
         // 对齐 cairoshell DesktopFolderViewStyle：横向滚动（纵向禁用），先填满一列再横向开新列
@@ -2322,7 +2322,9 @@ public sealed class DesktopIconsControl : ScrollViewer, IDisposable
             items.Add(new MenuItemDef { Id = "paste", Text = "粘贴", Kind = MenuItemKind.Command, GestureText = "Ctrl+V", Command = () => InvokeBrowserPaste() });
         }
         // 剪贴板历史（2026-09-09 自绘菜单补全）：Ctrl+Shift+V 同款全局热键，任何桌面位置直达历史面板。
-        if (_clipboard is not null)
+        // 延迟解析：插件加载并行，桌面窗口创建时 clipboard 可能未注册（Func 构建菜单时解析，必然已注册）。
+        var clipboard = _clipboardFactory?.Invoke();
+        if (clipboard is not null)
         {
             items.Add(new MenuItemDef
             {
@@ -2330,7 +2332,7 @@ public sealed class DesktopIconsControl : ScrollViewer, IDisposable
                 Text = "剪贴板历史…",
                 Kind = MenuItemKind.Command,
                 GestureText = "Ctrl+Shift+V",
-                Command = () => _clipboard.OpenHistoryWindow(),
+                Command = () => clipboard.OpenHistoryWindow(),
             });
         }
         items.Add(new MenuItemDef { Id = "sep3", Text = "", Kind = MenuItemKind.Separator });

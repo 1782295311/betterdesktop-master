@@ -105,9 +105,9 @@ public static class DesktopSystemMenuRegistrar
         }
     }
 
-    // 文本/数据类常见扩展（2026-09-07 精简显示）：各自注册专属级联「转换为 ▸」，
-    // 子命令 = 该类型矩阵目标中纯托管可用项 + 更多格式…；epub/mobi/Office/图片/PDF 等
-    // 外部引擎依赖或需参数的类型不在此列——由通配「更多格式…」弹完整自绘菜单兜底（那里按类型/引擎置灰全量）。
+    /// <summary>文本/数据类常见扩展（2026-09-09 精简显示）：各自注册专属级联「格式转换 ▸」，
+    /// 子命令 = 该类型矩阵全量（引擎缺失项照常显示、点击时宿主检测反馈）。
+    /// epub/mobi/Office/图片/PDF 等外部引擎依赖类型无系统级联，由自绘右键「格式转换」置灰全量承载。</summary>
     private static readonly string[] QuickExtensions =
         [".txt", ".log", ".md", ".markdown", ".html", ".htm", ".json", ".xml", ".yaml", ".yml", ".csv", ".tsv"];
 
@@ -118,9 +118,10 @@ public static class DesktopSystemMenuRegistrar
             or EngineKind.Managed or EngineKind.Image or EngineKind.PdfText);
 
     /// <summary>
-    /// 注册系统文件右键转换入口（2026-09-07 精简版）：
-    /// ① 通配「更多格式…」（*\shell\BetterDesktopMore，点击弹完整自绘菜单——所有类型的兜底入口）；
-    /// ② 文本/数据 12 扩展各注册专属级联「转换为 ▸」（子命令按该类型矩阵+引擎可用动态生成，只显示用得上）。
+    /// 注册系统文件右键转换入口（2026-09-09 精简版）：
+    /// 文本/数据 12 扩展各注册专属级联「格式转换 ▸」（子命令 = 矩阵全量，打开即所有选项，
+    /// 引擎缺失项照常显示、点击时宿主检测反馈）。
+    /// 旧通配「更多格式…」（*\shell\BetterDesktopMore）已移除——全量级联不再需要兜底入口。
     /// 幂等：每次启动先清旧键树再重建（旧版 *\shell\BetterDesktopConvert 级联结构自动迁移）。
     /// </summary>
     public static void EnsureConvertRegistered()
@@ -134,32 +135,20 @@ public static class DesktopSystemMenuRegistrar
                 return;
             }
 
-            EnsureMoreEntry(exe);
+            // 注销历史通配入口（2026-09-09 移除；旧键残留一并清理）。
+            Registry.CurrentUser.DeleteSubKeyTree(@"Software\Classes\*\shell\BetterDesktopMore", throwOnMissingSubKey: false);
             foreach (var ext in QuickExtensions)
             {
                 EnsureQuickSubmenu(exe, ext);
             }
 
             DiagnosticLog.Trace("shell.desktop",
-                $"系统转换菜单已注册: 更多格式…(通配) + {QuickExtensions.Length} 类扩展专属级联");
+                $"系统转换菜单已注册: {QuickExtensions.Length} 类扩展专属级联「格式转换 ▸」（全量）");
         }
         catch (Exception ex)
         {
             DiagnosticLog.Trace("shell.desktop", $"系统转换菜单注册失败: {ex.Message}");
         }
-    }
-
-    /// <summary>通配「更多格式…」：HKCU\Software\Classes\*\shell\BetterDesktopMore → 弹完整自绘菜单。</summary>
-    private static void EnsureMoreEntry(string exe)
-    {
-        // 旧版通配级联键树迁移清理（* → 更多格式… 单入口）
-        Registry.CurrentUser.DeleteSubKeyTree(@"Software\Classes\*\shell\BetterDesktopConvert", throwOnMissingSubKey: false);
-
-        using var key = Registry.CurrentUser.CreateSubKey(@"Software\Classes\*\shell\BetterDesktopMore");
-        key.SetValue(null, "更多格式…");
-        key.SetValue("Icon", $"\"{exe}\"");
-        using var cmd = key.CreateSubKey("command");
-        cmd.SetValue(null, $"\"{exe}\" --menu-cmd convert \"%1\"");
     }
 
     /// <summary>文本/数据扩展专属级联「格式转换 ▸」：子命令 = 矩阵全部目标（含引擎缺失项——
@@ -215,12 +204,19 @@ public static class DesktopSystemMenuRegistrar
         }
     }
 
-    /// <summary>系统转换菜单当前是否已注册（功能管理开关的 IsChecked 状态源，以通配入口为准）。</summary>
+    /// <summary>系统转换菜单当前是否已注册（功能管理开关的 IsChecked 状态源；2026-09-09 起以任一扩展专属级联为准）。</summary>
     public static bool IsConvertRegistered()
     {
         try
         {
-            return Registry.CurrentUser.OpenSubKey(@"Software\Classes\*\shell\BetterDesktopMore") is not null;
+            foreach (var ext in QuickExtensions)
+            {
+                if (Registry.CurrentUser.OpenSubKey(@"Software\Classes\" + ext + @"\shell\BetterDesktopConvert") is not null)
+                {
+                    return true;
+                }
+            }
+            return false;
         }
         catch
         {

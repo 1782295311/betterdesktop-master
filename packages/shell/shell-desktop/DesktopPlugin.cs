@@ -241,8 +241,10 @@ public sealed class DesktopPlugin : IPlugin
             var appearance = _context.Get<IAppearanceService>();
             var convertMenu = _context.Get<BetterDesktop.Shell.Convert.Contracts.IConvertMenuService>();
             var archiveService = _context.Get<BetterDesktop.Shell.Convert.Contracts.IArchiveService>();
-            var clipboard = _context.Get<BetterDesktop.Shell.Clipboard.Contracts.IClipboardService>();
-            _window = new DesktopWindow(_browser, vibrancy, appearance, _settings, convertMenu, archiveService, _context?.Events, clipboard);
+            // 剪贴板服务延迟解析：插件加载并行，desktop 窗口创建时 clipboard-history 可能尚未注册
+            //（Get 返回 null）→ 传 Func，右键菜单构建时（用户操作时）必然已注册。
+            _window = new DesktopWindow(_browser, vibrancy, appearance, _settings, convertMenu, archiveService, _context?.Events,
+                () => _context?.Get<BetterDesktop.Shell.Clipboard.Contracts.IClipboardService>());
             _window.Show();
             DiagnosticLog.Trace("shell.desktop", "启动：窗口已显示，隐藏原生图标");
 
