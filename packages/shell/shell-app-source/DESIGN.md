@@ -5,12 +5,14 @@
 ## 0. 现状盘点（2026-08-22 实地核查）
 
 已实现（真实代码）：
+
 - `IAppSourceService`：`ScanStartMenu` / `ScanInstalledApps` / `GetNewlyInstalledApps` / `MarkAppsSeen` / `ResolveFromPath`，语义与实现一致。
 - `AppSourceService`：开始菜单扫描（用户+公共 Programs）、卸载注册表三视图（HKCU / HKLM / WOW6432Node）、排除列表（中英文）、系统组件/系统工具/文档目标过滤、`installed-seen.json` 快照（首次全量记为已见）、DisplayIcon→InstallLocation 回退解析。
 - `ShellLinkResolver`：LNK / URL / EXE 解析。
 - 模型：`AppItem` / `AppItemId`（强类型）/ `AppSource`（StartMenu | Installed | Store | UserAdded）。
 
 缺失 / 待办（★）：
+
 - ★ `IAppIconService`：README 已声明但**代码中不存在**（图标实际在 shell-dock 的 `IDockIconService` + `Win32IconProvider`）——应上移到本插件，消除职责重复。
 - ★ 没有独立 `IPlugin` 入口：当前由 `DockPlugin` 手动 `new AppSourceService(...)` 并 `context.Provide<IAppSourceService>`，导致应用来源与 Dock 强耦合。
 - ★ UWP/AppX 完整枚举（AUMID）未做（`AppSource.Store` 分支目前为空）。
@@ -24,14 +26,14 @@
 2. **图标提取栈**：`IIconProvider` + `Win32IconProvider` + `DockIconService`（缓存/预取）全在 dock；app-source 目录 `find -iname "*icon*"` 为空——即 README 声称的 `IAppIconService` 从未实现，图标职责整体错位在 dock。
 
 **合并方案（★）**：
+
 - 以 app-source 版 `ShellLinkResolver` 为唯一实现；dock 侧统一映射 `AppSource → DockAppType`（需补 `Url` 映射：URL 快捷方式在 AppSource 侧保留 `StartMenu` 来源，DockAppType.Url 由扩展名派生）。
 - `IIconProvider`/`Win32IconProvider`/`DockIconService` 上移为 app-source 的 `IAppIconService`（接口语义一致：GetIconAsync/Invalidate/PrefetchAsync）；`DockIconService` 缓存逻辑一并迁移，dock 只保留对 `IAppIconService` 的 `Inject` 引用。
 - 移除后 dock 侧删除：`Services/ShellLinkResolver.cs`、`Services/IIconProvider.cs`、`Services/Win32IconProvider.cs`（原 8 处调用点改为消费 app-source 服务）。
 
 ## 1. 目标与边界
 
-**做什么**：统一的应用数据来源服务——扫描（开始菜单/已安装/Store）、图标获取、新装检测快照。为 Dock / AppGrabber / Launchpad / 新装通知等 UI 插件提供**唯一**数据来源。
-**不做什么**：不持有固定/运行状态（那是 dock 的 `IDockPinnedService` 职责）；不渲染 UI；不做启动逻辑；不涉及窗口（UI 插件统一继承 `shell-core.Surface.ShellWindow`，与数据层无关）。
+**做什么**：统一的应用数据来源服务——扫描（开始菜单/已安装/Store）、图标获取、新装检测快照。为 Dock / AppGrabber / Launchpad / 新装通知等 UI 插件提供**唯一**数据来源。 **不做什么**：不持有固定/运行状态（那是 dock 的 `IDockPinnedService` 职责）；不渲染 UI；不做启动逻辑；不涉及窗口（UI 插件统一继承 `shell-core.Surface.ShellWindow`，与数据层无关）。
 
 ## 2. 架构
 

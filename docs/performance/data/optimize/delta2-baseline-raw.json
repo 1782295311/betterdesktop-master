@@ -1,0 +1,167 @@
+{
+  "timestamp": "2026-09-07T23:14:40.2366083\u002B08:00",
+  "mode": "baseline",
+  "baseline_characterization": {
+    "results": [
+      {
+        "plugin_count": 0,
+        "median_ms": 0.11,
+        "p95_ms": 0.114,
+        "p99_ms": 0.128,
+        "mean_ms": 0.102,
+        "stddev_ms": 0.022,
+        "samples_us": [
+          0.11,
+          0.114,
+          0.082,
+          0.128,
+          0.075
+        ]
+      },
+      {
+        "plugin_count": 20,
+        "median_ms": 0.705,
+        "p95_ms": 0.712,
+        "p99_ms": 7.334,
+        "mean_ms": 2.014,
+        "stddev_ms": 2.974,
+        "samples_us": [
+          0.712,
+          0.705,
+          0.644,
+          0.675,
+          7.334
+        ]
+      },
+      {
+        "plugin_count": 50,
+        "median_ms": 1.481,
+        "p95_ms": 1.513,
+        "p99_ms": 1.549,
+        "mean_ms": 1.495,
+        "stddev_ms": 0.037,
+        "samples_us": [
+          1.549,
+          1.478,
+          1.455,
+          1.481,
+          1.513
+        ]
+      }
+    ],
+    "note": "Provide latency scales linearly with plugin count (O(N) NotifyDependents)"
+  },
+  "semantic_oracle": {
+    "results": {
+      "oracle_content_cardinality": {
+        "passed": true,
+        "p1_restarted": true,
+        "p2_restarted": true,
+        "p3_not_restarted": true,
+        "detail": "All plugins Inject IServiceA must restart; plugin Inject IServiceB must not"
+      },
+      "oracle_ordering": {
+        "passed": true,
+        "expected": [
+          "ord-0",
+          "ord-1",
+          "ord-2",
+          "ord-3",
+          "ord-4"
+        ],
+        "actual": [
+          "ord-0",
+          "ord-1",
+          "ord-2",
+          "ord-3",
+          "ord-4"
+        ],
+        "detail": "Notification/restart order must match plugin registration order"
+      },
+      "oracle_identity": {
+        "passed": true,
+        "restart_count": 3,
+        "expected": 3,
+        "detail": "Each Provide\u003CIServiceA\u003E with different instance must trigger a restart"
+      },
+      "oracle_empty": {
+        "passed": true,
+        "p1_load_before": 0,
+        "p1_load_after": 0,
+        "p2_load_before": 1,
+        "p2_load_after": 1,
+        "detail": "Provide\u003CIServiceA\u003E when no plugin injects A must not trigger any restart"
+      },
+      "oracle_error": {
+        "passed": true,
+        "exception_type": "ArgumentNullException",
+        "detail": "Provide(null) must throw ArgumentNullException"
+      },
+      "mutant_non_matching_type": {
+        "mutant_detected": true,
+        "load_before": 0,
+        "load_after": 0,
+        "detail": "Mutant: Provide\u003CIServiceB\u003E to plugin Inject IServiceA must NOT trigger restart. This proves the oracle is sensitive to NotifyDependents matching behavior \u2014 if NotifyDependents were skipped entirely (true mutant), matching Provide would also not notify."
+      }
+    },
+    "all_passed": true
+  },
+  "provide_benchmark": {
+    "plugins_20": {
+      "plugin_count": 20,
+      "latency_us": {
+        "median": 2.682,
+        "p95": 2.957,
+        "p99": 3.16,
+        "mean": 2.753,
+        "stddev": 0.312,
+        "samples": [
+          2.356,
+          2.682,
+          3.16,
+          2.957,
+          2.611
+        ]
+      },
+      "allocation_bytes_per_op": {
+        "median": 397.5,
+        "mean": 397.5,
+        "samples": [
+          397.5,
+          397.5,
+          397.5,
+          397.5,
+          397.5
+        ]
+      }
+    },
+    "plugins_50": {
+      "plugin_count": 50,
+      "latency_us": {
+        "median": 6.313,
+        "p95": 6.467,
+        "p99": 7.078,
+        "mean": 4.464,
+        "stddev": 2.966,
+        "samples": [
+          6.467,
+          6.313,
+          1.292,
+          1.169,
+          7.078
+        ]
+      },
+      "allocation_bytes_per_op": {
+        "median": 765.5,
+        "mean": 765.5,
+        "samples": [
+          765.5,
+          765.5,
+          765.5,
+          765.5,
+          765.5
+        ]
+      }
+    }
+  }
+}

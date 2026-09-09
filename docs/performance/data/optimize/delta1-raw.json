@@ -1,0 +1,143 @@
+{
+  "timestamp": "2026-09-07T23:09:25.8138305\u002B08:00",
+  "baseline_characterization": {
+    "samples": [
+      {
+        "rep": 1,
+        "total_wall_ms": 543.41,
+        "first_ping_latency_ms": 542.99,
+        "ui_thread_blocked": true
+      },
+      {
+        "rep": 2,
+        "total_wall_ms": 521.28,
+        "first_ping_latency_ms": 521.02,
+        "ui_thread_blocked": true
+      },
+      {
+        "rep": 3,
+        "total_wall_ms": 528.74,
+        "first_ping_latency_ms": 528.6,
+        "ui_thread_blocked": true
+      }
+    ],
+    "note": "Baseline (Thread.Sleep) blocks UI thread; first ping latency ~= total wait time"
+  },
+  "semantic_oracle": {
+    "results": {
+      "oracle_content_cardinality": {
+        "passed": false,
+        "expected": 1,
+        "actual": 2,
+        "detail": "After kill\u2192wait\u2192restart, exactly 1 notepad process should exist"
+      },
+      "oracle_ordering": {
+        "passed": true,
+        "kill_before_restart": true,
+        "detail": "Kill timestamp must be before restart timestamp"
+      },
+      "oracle_time_visibility": {
+        "passed": true,
+        "wait_iterations": 4,
+        "max_iterations": 30,
+        "process_exited": true,
+        "detail": "Wait loop should break early when process exits (notepad exits quickly)"
+      },
+      "oracle_error_partial": {
+        "passed": false,
+        "process_count_after": 0,
+        "detail": "Even when no target process exists (kill does nothing), restart still executes"
+      },
+      "oracle_state": {
+        "passed": true,
+        "status_values": [
+          "done",
+          "done",
+          "done"
+        ],
+        "detail": "Status must be \u0027done\u0027 after operation completes"
+      },
+      "mutant_no_wait_loop": {
+        "mutant_detected": true,
+        "kill_to_restart_ms": 3.228,
+        "baseline_kill_to_restart_ms": "\u003E=100 (at least one Thread.Sleep(100))",
+        "detail": "Mutant removes wait loop: restart happens \u003C10ms after kill. Baseline guarantees restart only after process count == 0 (\u003E=100ms due to first Sleep). This proves the wait loop is semantically necessary to prevent new-old instance conflict."
+      }
+    },
+    "all_passed": false
+  },
+  "paired_ab": {
+    "baseline_samples": [
+      {
+        "rep": 1,
+        "total_wall_ms": 526.78,
+        "first_ping_latency_ms": 526.7,
+        "ui_responsive": false
+      },
+      {
+        "rep": 2,
+        "total_wall_ms": 535.84,
+        "first_ping_latency_ms": 535.68,
+        "ui_responsive": false
+      },
+      {
+        "rep": 3,
+        "total_wall_ms": 529.26,
+        "first_ping_latency_ms": 529.17,
+        "ui_responsive": false
+      },
+      {
+        "rep": 4,
+        "total_wall_ms": 523.84,
+        "first_ping_latency_ms": 523.62,
+        "ui_responsive": false
+      },
+      {
+        "rep": 5,
+        "total_wall_ms": 528.26,
+        "first_ping_latency_ms": 528.09,
+        "ui_responsive": false
+      }
+    ],
+    "candidate_samples": [
+      {
+        "rep": 1,
+        "total_wall_ms": 6.66,
+        "first_ping_latency_ms": 6.33,
+        "ui_responsive": true
+      },
+      {
+        "rep": 2,
+        "total_wall_ms": 3.31,
+        "first_ping_latency_ms": 2.99,
+        "ui_responsive": true
+      },
+      {
+        "rep": 3,
+        "total_wall_ms": 4.87,
+        "first_ping_latency_ms": 4.72,
+        "ui_responsive": true
+      },
+      {
+        "rep": 4,
+        "total_wall_ms": 3.37,
+        "first_ping_latency_ms": 3.23,
+        "ui_responsive": true
+      },
+      {
+        "rep": 5,
+        "total_wall_ms": 4.76,
+        "first_ping_latency_ms": 4.66,
+        "ui_responsive": true
+      }
+    ],
+    "summary": {
+      "baseline_ping_median_ms": 528.09,
+      "candidate_ping_median_ms": 4.66,
+      "baseline_responsive_count": 0,
+      "candidate_responsive_count": 5,
+      "ping_improvement_pct": 99.1,
+      "threshold_met": true
+    }
+  }
+}

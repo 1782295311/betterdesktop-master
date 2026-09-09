@@ -5,7 +5,7 @@
 
 ## 一、工程基线（P1 全部包适用）
 
-- 目标框架：`net8.0-windows`（ADR-001 D2 冻结，禁止任何包写其它 TFM）。
+- 目标框架：`net8.0-windows10.0.19041.0`（版本化 TFM，ADR-003 D3 裁定，访问 WinRT 等 Win10 API 所必需；禁止其它 TFM）。
 - `<Nullable>enable</Nullable>`、`<ImplicitUsings>enable</ImplicitUsings>`、`<TreatWarningsAsErrors>true</TreatWarningsAsErrors>`、`<Platforms>x64</Platforms>`。
 - 依赖选型：**内核基础包（kernel/kernel）原则上零第三方运行时依赖**；确需引入的依赖（含 MS DI 等）必须在 ADR-002 或对应决策记录中写明理由与边界。
 - 文件编码 UTF-8；换行 LF；代码格式唯一来源 = 根 `.editorconfig`（P1 起 `dotnet format --verify-no-changes` 入门禁）。

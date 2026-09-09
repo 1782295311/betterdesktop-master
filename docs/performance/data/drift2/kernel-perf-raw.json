@@ -1,0 +1,244 @@
+{
+  "timestamp": "2026-09-07T22:02:07.8529495\u002B08:00",
+  "environment": {
+    "machine": "\u68A6\u7684\u5F00\u59CB",
+    "processorCount": 20,
+    "os": "Microsoft Windows NT 10.0.26200.0",
+    "runtime": "8.0.21",
+    "gcMode": "Workstation"
+  },
+  "measurements": [
+    {
+      "name": "context-construct",
+      "unit": "ms/op",
+      "notes": "iterations=1000",
+      "samplesMs": [
+        0.0005549,
+        0.0002199,
+        0.00016639999999999998
+      ],
+      "medianMs": 0.00022,
+      "meanMs": 0.000314,
+      "stdDevMs": 0.000211,
+      "minMs": 0.000166,
+      "maxMs": 0.000555
+    },
+    {
+      "name": "provide-get-no-plugins",
+      "unit": "ms/op",
+      "notes": "iterations=10000",
+      "samplesMs": [
+        0.00082392,
+        0.00052759,
+        0.00035489
+      ],
+      "medianMs": 0.000528,
+      "meanMs": 0.000569,
+      "stdDevMs": 0.000237,
+      "minMs": 0.000355,
+      "maxMs": 0.000824
+    },
+    {
+      "name": "provide-get-with-20-plugins",
+      "unit": "ms/op",
+      "notes": "iterations=5000",
+      "samplesMs": [
+        0.01713268,
+        0.0169203,
+        0.01759682
+      ],
+      "medianMs": 0.017133,
+      "meanMs": 0.017217,
+      "stdDevMs": 0.000346,
+      "minMs": 0.01692,
+      "maxMs": 0.017597
+    },
+    {
+      "name": "plugin-register-20",
+      "unit": "ms/op",
+      "notes": "iterations=200",
+      "samplesMs": [
+        0.0192345,
+        0.018592,
+        0.018478
+      ],
+      "medianMs": 0.018592,
+      "meanMs": 0.018768,
+      "stdDevMs": 0.000408,
+      "minMs": 0.018478,
+      "maxMs": 0.019234
+    },
+    {
+      "name": "plugin-register-with-deps",
+      "unit": "ms/op",
+      "notes": "iterations=100",
+      "samplesMs": [
+        0.022192,
+        0.015931999999999998,
+        0.015822
+      ],
+      "medianMs": 0.015932,
+      "meanMs": 0.017982,
+      "stdDevMs": 0.003646,
+      "minMs": 0.015822,
+      "maxMs": 0.022192
+    },
+    {
+      "name": "eventbus-emit-1-handler",
+      "unit": "ms/op",
+      "notes": "iterations=10000",
+      "samplesMs": [
+        0.02859713,
+        0.01212216,
+        0.01244777
+      ],
+      "medianMs": 0.012448,
+      "meanMs": 0.017722,
+      "stdDevMs": 0.009419,
+      "minMs": 0.012122,
+      "maxMs": 0.028597
+    },
+    {
+      "name": "eventbus-emit-10-handlers",
+      "unit": "ms/op",
+      "notes": "iterations=5000",
+      "samplesMs": [
+        0.04669088,
+        0.0432031,
+        0.04246722
+      ],
+      "medianMs": 0.043203,
+      "meanMs": 0.04412,
+      "stdDevMs": 0.002256,
+      "minMs": 0.042467,
+      "maxMs": 0.046691
+    },
+    {
+      "name": "eventbus-parallel-10-handlers",
+      "unit": "ms/op",
+      "notes": "iterations=2000",
+      "samplesMs": [
+        0.10117995,
+        0.0477022,
+        0.037989400000000006
+      ],
+      "medianMs": 0.047702,
+      "meanMs": 0.062291,
+      "stdDevMs": 0.034028,
+      "minMs": 0.037989,
+      "maxMs": 0.10118
+    },
+    {
+      "name": "eventbus-serial-10-handlers",
+      "unit": "ms/op",
+      "notes": "iterations=2000",
+      "samplesMs": [
+        0.0342657,
+        0.0334815,
+        0.03337825
+      ],
+      "medianMs": 0.033482,
+      "meanMs": 0.033708,
+      "stdDevMs": 0.000485,
+      "minMs": 0.033378,
+      "maxMs": 0.034266
+    },
+    {
+      "name": "eventbus-waterfall-10-handlers",
+      "unit": "ms/op",
+      "notes": "iterations=2000",
+      "samplesMs": [
+        0.025879549999999998,
+        0.0250771,
+        0.022594799999999998
+      ],
+      "medianMs": 0.025077,
+      "meanMs": 0.024517,
+      "stdDevMs": 0.001712,
+      "minMs": 0.022595,
+      "maxMs": 0.02588
+    },
+    {
+      "name": "bootstrap-kernel-sequence",
+      "unit": "ms/op",
+      "notes": "iterations=100",
+      "samplesMs": [
+        0.087348,
+        0.055406000000000004,
+        0.059119000000000005
+      ],
+      "medianMs": 0.059119,
+      "meanMs": 0.067291,
+      "stdDevMs": 0.017469,
+      "minMs": 0.055406,
+      "maxMs": 0.087348
+    },
+    {
+      "name": "context-dispose-20-plugins",
+      "unit": "ms/op",
+      "notes": "iterations=500",
+      "samplesMs": [
+        0.024192599999999998,
+        0.022834599999999997,
+        0.0142534
+      ],
+      "medianMs": 0.022835,
+      "meanMs": 0.020427,
+      "stdDevMs": 0.005389,
+      "minMs": 0.014253,
+      "maxMs": 0.024193
+    },
+    {
+      "name": "memory-baseline-working-set",
+      "unit": "MB",
+      "notes": "process start baseline",
+      "samplesMs": [
+        55.53515625
+      ],
+      "medianMs": 55.535156,
+      "meanMs": 55.535156,
+      "stdDevMs": 0,
+      "minMs": 55.535156,
+      "maxMs": 55.535156
+    },
+    {
+      "name": "memory-peak-100ctx-20plugins",
+      "unit": "MB",
+      "notes": "100 contexts x 20 plugins alive",
+      "samplesMs": [
+        55.5625
+      ],
+      "medianMs": 55.5625,
+      "meanMs": 55.5625,
+      "stdDevMs": 0,
+      "minMs": 55.5625,
+      "maxMs": 55.5625
+    },
+    {
+      "name": "memory-after-dispose-working-set",
+      "unit": "MB",
+      "notes": "after all contexts disposed",
+      "samplesMs": [
+        55.5625
+      ],
+      "medianMs": 55.5625,
+      "meanMs": 55.5625,
+      "stdDevMs": 0,
+      "minMs": 55.5625,
+      "maxMs": 55.5625
+    },
+    {
+      "name": "memory-leak-delta-working-set",
+      "unit": "MB",
+      "notes": "post-dispose minus baseline",
+      "samplesMs": [
+        0.02734375
+      ],
+      "medianMs": 0.027344,
+      "meanMs": 0.027344,
+      "stdDevMs": 0,
+      "minMs": 0.027344,
+      "maxMs": 0.027344
+    }
+  ]
+}

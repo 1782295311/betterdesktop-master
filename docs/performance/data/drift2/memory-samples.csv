@@ -1,0 +1,4 @@
+phase,working_set_mb,gc_heap_mb,gc_gen0,gc_gen1,gc_gen2
+baseline,55.5352,0.4848,482,41,41
+peak,55.5625,1.4282,482,41,41
+after_dispose,55.5625,0.4950,482,41,41

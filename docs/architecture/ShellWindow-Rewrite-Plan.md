@@ -2,8 +2,7 @@
 
 ## 一、现状病灶诊断
 
-当前 `ShellWindow`（`packages/shell/shell-core/Surface/ShellWindow.cs`）经过多轮补丁，
-已经不是「设计」而是「补丁堆叠」。根本矛盾是：
+当前 `ShellWindow`（`packages/shell/shell-core/Surface/ShellWindow.cs`）经过多轮补丁， 已经不是「设计」而是「补丁堆叠」。根本矛盾是：
 
 > **WPF `WindowChrome`（非客户区合成圆角）与 `SetWindowRgn`（任意半径 region 裁剪）
 > 是两套互斥的圆角方案。** 前者由 WPF `WindowChromeWorker` 在消息循环里反复重设自己的
@@ -22,26 +21,22 @@
 | `WM_NCHITTEST` 自建 resize | `WndProcHook` | 移除 WindowChrome 后失去 resize 命中区 | 自己算边角命中，又一层逻辑 |
 
 **结论**：这些补丁每一个单独看都有道理，合在一起让基类：
+
 1. 同时侍奉两套圆角方案（WindowChrome + SetWindowRgn），职责不清；
 2. 圆角「单一来源」名存实亡——WindowChrome 的 CornerRadius 和 SetWindowRgn 的半径必须手动同步；
 3. 消息钩子里既管 region 反扑又管 resize 命中，违反单一职责；
 4. DPI/时序/旧位图残留全靠「延迟 + 重裁 + 重绘」三连兜底，不可测试、不可推理。
 
-派生窗口契约目前是：`ChromeBorder` 根 Border + `ResizeMode`/`Topmost` 等属性覆盖。
-这些契约本身没问题，问题在基类内部实现。
+派生窗口契约目前是：`ChromeBorder` 根 Border + `ResizeMode`/`Topmost` 等属性覆盖。 这些契约本身没问题，问题在基类内部实现。
 
 ---
 
 ## 二、重写设计目标
 
-1. **圆角单一来源**：彻底不用 `WindowChrome`。所有窗口形状（圆角、描边、阴影）
-   100% 由基类 `SetWindowRgn` 掌控，不再有任何 WPF 非客户区圆角参与。
-2. **职责拆分**：把「外观订阅」「窗口形状（region）」「输入命中（resize/drag）」
-   「生命周期」拆成清晰的方法，不塞进一个 `WndProcHook`。
-3. **DPI 一致**：region 尺寸与圆角半径统一走 `VisualTreeHelper.GetDpi` 换算，
-   与 WPF 内部 `DpiHelper.LogicalPixelsToDevice` 一致，消除高 DPI 错位。
-4. **可 resize 不自管 WindowChrome**：用 `WM_NCHITTEST` 自建命中区（已验证可行），
-   抽成独立方法，边界清晰。
+1. **圆角单一来源**：彻底不用 `WindowChrome`。所有窗口形状（圆角、描边、阴影） 100% 由基类 `SetWindowRgn` 掌控，不再有任何 WPF 非客户区圆角参与。
+2. **职责拆分**：把「外观订阅」「窗口形状（region）」「输入命中（resize/drag）」 「生命周期」拆成清晰的方法，不塞进一个 `WndProcHook`。
+3. **DPI 一致**：region 尺寸与圆角半径统一走 `VisualTreeHelper.GetDpi` 换算， 与 WPF 内部 `DpiHelper.LogicalPixelsToDevice` 一致，消除高 DPI 错位。
+4. **可 resize 不自管 WindowChrome**：用 `WM_NCHITTEST` 自建命中区（已验证可行）， 抽成独立方法，边界清晰。
 5. **最小化重绘**：不再无脑 `InvalidateVisual`，仅在尺寸真正变化且旧 region 失效时重裁。
 6. **派生窗口零痛迁移**：保留 `ChromeBorder` 机制；去掉对 WindowChrome 的任何依赖。
 
@@ -79,10 +74,9 @@ abstract class ShellWindow : Window
 ```
 
 **与现状的关键差异**：
+
 - `ApplyWindowChrome` 改名为 `ApplyWindowShape`，**不再碰 WindowChrome**（因为彻底不用了）。
-- `RefreshRegion` 去掉 `InvalidateVisual`；旧位图残留问题改用「resize 时只重裁 region、
-  不强制全量重绘」+ 必要时由 WPF 自身合成处理（实测模糊方块主要来自 WindowChrome 双层，
-  移除后应消失；若仍残留再针对性处理，不预支成本）。
+- `RefreshRegion` 去掉 `InvalidateVisual`；旧位图残留问题改用「resize 时只重裁 region、 不强制全量重绘」+ 必要时由 WPF 自身合成处理（实测模糊方块主要来自 WindowChrome 双层， 移除后应消失；若仍残留再针对性处理，不预支成本）。
 - `WM_NCHITTEST` 命中逻辑独立成 `HitTestResize`，不再和 region 反扑混在一段 if 里。
 
 ---
@@ -96,18 +90,14 @@ abstract class ShellWindow : Window
 | `MinimalDockWindow`/`NewAppsNotificationWindow` | 纯代码 + `ChromeBorder` | 保持 |
 | 所有窗口 | 依赖 `ResizeMode` 触发 `WM_NCHITTEST` | 基类自动处理，无需各自写 |
 
-**不破坏的契约**：`ChromeBorder`、`AppearanceService`、`VibrancyService`、
-`OnLoadedCore` 扩展点全部保留。
+**不破坏的契约**：`ChromeBorder`、`AppearanceService`、`VibrancyService`、 `OnLoadedCore` 扩展点全部保留。
 
 ---
 
 ## 五、待你确认的点
 
-1. 是否同意「彻底放弃 WindowChrome，圆角 100% 走 SetWindowRgn」这一根本决策？
-   （我已据此把 SettingsWindow 的 WindowChrome 移除并验证编译通过，方向上已无回退必要。）
-2. 新基类是否就叫 `ShellWindow`（原地重写），还是新建 `FluentWindow`/`AcrylicWindow`
-   另立类名、旧名标记 `[Obsolete]` 逐步迁移？（推荐原地重写，派生窗口改动最小。）
-3. 模糊方块若移除 WindowChrome 后仍出现，是否接受「针对性补 `InvalidateVisual`」
-   而不是现在每帧都调？（推荐按需，不预支性能。）
+1. 是否同意「彻底放弃 WindowChrome，圆角 100% 走 SetWindowRgn」这一根本决策？ （我已据此把 SettingsWindow 的 WindowChrome 移除并验证编译通过，方向上已无回退必要。）
+2. 新基类是否就叫 `ShellWindow`（原地重写），还是新建 `FluentWindow`/`AcrylicWindow` 另立类名、旧名标记 `[Obsolete]` 逐步迁移？（推荐原地重写，派生窗口改动最小。）
+3. 模糊方块若移除 WindowChrome 后仍出现，是否接受「针对性补 `InvalidateVisual`」 而不是现在每帧都调？（推荐按需，不预支性能。）
 
 确认后我开始实现（任务 #52）。

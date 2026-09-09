@@ -1,0 +1,324 @@
+{
+  "timestamp": "2026-09-07T22:59:04.3474702\u002B08:00",
+  "measurements": [
+    {
+      "name": "c1-provide-with-0-plugins",
+      "unit": "ms/op",
+      "notes": "iter=2000",
+      "samplesMs": [
+        0.00071535,
+        0.00032025,
+        0.00030135000000000003
+      ],
+      "medianMs": 0.00032,
+      "meanMs": 0.000446,
+      "stdDevMs": 0.000234,
+      "minMs": 0.000301,
+      "maxMs": 0.000715
+    },
+    {
+      "name": "c1-provide-with-5-plugins",
+      "unit": "ms/op",
+      "notes": "iter=2000",
+      "samplesMs": [
+        0.0061147499999999995,
+        0.006115300000000001,
+        0.0057222
+      ],
+      "medianMs": 0.006115,
+      "meanMs": 0.005984,
+      "stdDevMs": 0.000227,
+      "minMs": 0.005722,
+      "maxMs": 0.006115
+    },
+    {
+      "name": "c1-provide-with-10-plugins",
+      "unit": "ms/op",
+      "notes": "iter=2000",
+      "samplesMs": [
+        0.010824450000000001,
+        0.0091556,
+        0.010195399999999999
+      ],
+      "medianMs": 0.010195,
+      "meanMs": 0.010058,
+      "stdDevMs": 0.000843,
+      "minMs": 0.009156,
+      "maxMs": 0.010824
+    },
+    {
+      "name": "c1-provide-with-20-plugins",
+      "unit": "ms/op",
+      "notes": "iter=2000",
+      "samplesMs": [
+        0.01859335,
+        0.018298349999999998,
+        0.018333449999999998
+      ],
+      "medianMs": 0.018333,
+      "meanMs": 0.018408,
+      "stdDevMs": 0.000161,
+      "minMs": 0.018298,
+      "maxMs": 0.018593
+    },
+    {
+      "name": "c1-provide-with-50-plugins",
+      "unit": "ms/op",
+      "notes": "iter=2000",
+      "samplesMs": [
+        0.04392265,
+        0.051101999999999995,
+        0.0504744
+      ],
+      "medianMs": 0.050474,
+      "meanMs": 0.0485,
+      "stdDevMs": 0.003976,
+      "minMs": 0.043923,
+      "maxMs": 0.051102
+    },
+    {
+      "name": "c1-provide-no-inject-match-20plugins",
+      "unit": "ms/op",
+      "notes": "iter=2000",
+      "samplesMs": [
+        0.0197292,
+        0.01956225,
+        0.0215508
+      ],
+      "medianMs": 0.019729,
+      "meanMs": 0.020281,
+      "stdDevMs": 0.001103,
+      "minMs": 0.019562,
+      "maxMs": 0.021551
+    },
+    {
+      "name": "c1-provide-all-inject-match-20plugins",
+      "unit": "ms/op",
+      "notes": "iter=500",
+      "samplesMs": [
+        0.0314012,
+        0.0301174,
+        0.0302106
+      ],
+      "medianMs": 0.030211,
+      "meanMs": 0.030576,
+      "stdDevMs": 0.000716,
+      "minMs": 0.030117,
+      "maxMs": 0.031401
+    },
+    {
+      "name": "c1-provide-same-instance-skip-notify",
+      "unit": "ms/op",
+      "notes": "iter=5000",
+      "samplesMs": [
+        0.02030108,
+        0.02313782,
+        0.022797579999999998
+      ],
+      "medianMs": 0.022798,
+      "meanMs": 0.022079,
+      "stdDevMs": 0.001549,
+      "minMs": 0.020301,
+      "maxMs": 0.023138
+    },
+    {
+      "name": "c1-bootstrap-sequence-notify-total",
+      "unit": "ms/op",
+      "notes": "iter=100",
+      "samplesMs": [
+        0.046354,
+        0.02505,
+        0.028065000000000003
+      ],
+      "medianMs": 0.028065,
+      "meanMs": 0.033156,
+      "stdDevMs": 0.011529,
+      "minMs": 0.02505,
+      "maxMs": 0.046354
+    },
+    {
+      "name": "c2-emit-allocation-0-handlers",
+      "unit": "bytes/op",
+      "notes": "iter=1000",
+      "samplesMs": [
+        240,
+        240,
+        240
+      ],
+      "medianMs": 240,
+      "meanMs": 240,
+      "stdDevMs": 0,
+      "minMs": 240,
+      "maxMs": 240
+    },
+    {
+      "name": "c2-emit-allocation-1-handlers",
+      "unit": "bytes/op",
+      "notes": "iter=1000",
+      "samplesMs": [
+        432,
+        432,
+        432
+      ],
+      "medianMs": 432,
+      "meanMs": 432,
+      "stdDevMs": 0,
+      "minMs": 432,
+      "maxMs": 432
+    },
+    {
+      "name": "c2-emit-allocation-10-handlers",
+      "unit": "bytes/op",
+      "notes": "iter=1000",
+      "samplesMs": [
+        960,
+        960,
+        960
+      ],
+      "medianMs": 960,
+      "meanMs": 960,
+      "stdDevMs": 0,
+      "minMs": 960,
+      "maxMs": 960
+    },
+    {
+      "name": "c2-emit-allocation-50-handlers",
+      "unit": "bytes/op",
+      "notes": "iter=1000",
+      "samplesMs": [
+        3056,
+        3056,
+        3056
+      ],
+      "medianMs": 3056,
+      "meanMs": 3056,
+      "stdDevMs": 0,
+      "minMs": 3056,
+      "maxMs": 3056
+    },
+    {
+      "name": "c2-emit-gc-count-10k-10handlers",
+      "unit": "gc-count",
+      "notes": "single-shot",
+      "samplesMs": [
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "medianMs": 0,
+      "meanMs": 0,
+      "stdDevMs": 0,
+      "minMs": 0,
+      "maxMs": 0
+    },
+    {
+      "name": "c3-parallel-single-call-distribution",
+      "unit": "ms/op",
+      "notes": "iter=1000",
+      "samplesMs": [
+        0.0066841
+      ],
+      "medianMs": 0.006684,
+      "meanMs": 0.006684,
+      "stdDevMs": 0,
+      "minMs": 0.006684,
+      "maxMs": 0.006684
+    },
+    {
+      "name": "c3-parallel-sync-handlers-10",
+      "unit": "ms/op",
+      "notes": "iter=2000",
+      "samplesMs": [
+        0.1064419,
+        0.0464083,
+        0.05114815
+      ],
+      "medianMs": 0.051148,
+      "meanMs": 0.067999,
+      "stdDevMs": 0.033376,
+      "minMs": 0.046408,
+      "maxMs": 0.106442
+    },
+    {
+      "name": "c3-serial-10-handlers-control",
+      "unit": "ms/op",
+      "notes": "iter=2000",
+      "samplesMs": [
+        0.04262385,
+        0.040061,
+        0.037484699999999996
+      ],
+      "medianMs": 0.040061,
+      "meanMs": 0.040057,
+      "stdDevMs": 0.00257,
+      "minMs": 0.037485,
+      "maxMs": 0.042624
+    },
+    {
+      "name": "c8-20plugins-50ms-delay-each",
+      "unit": "ms-total",
+      "notes": "single-shot",
+      "samplesMs": [
+        55.9806,
+        59.3989,
+        60.4434,
+        62.9366,
+        63.3699
+      ],
+      "medianMs": 60.4434,
+      "meanMs": 60.42588,
+      "stdDevMs": 2.99109,
+      "minMs": 55.9806,
+      "maxMs": 63.3699
+    },
+    {
+      "name": "c8-20plugins-sequential-await",
+      "unit": "ms-total",
+      "notes": "single-shot",
+      "samplesMs": [
+        1244.3582,
+        1247.8572,
+        1245.9345,
+        1244.945,
+        1246.0426
+      ],
+      "medianMs": 1245.9345,
+      "meanMs": 1245.8275,
+      "stdDevMs": 1.333702,
+      "minMs": 1244.3582,
+      "maxMs": 1247.8572
+    },
+    {
+      "name": "c8-dependency-chain-5-levels",
+      "unit": "ms/op",
+      "notes": "iter=50",
+      "samplesMs": [
+        15.589812,
+        15.47965,
+        15.547937999999998
+      ],
+      "medianMs": 15.547938,
+      "meanMs": 15.539133,
+      "stdDevMs": 0.055606,
+      "minMs": 15.47965,
+      "maxMs": 15.589812
+    },
+    {
+      "name": "c8-20plugins-sync-load",
+      "unit": "ms/op",
+      "notes": "iter=500",
+      "samplesMs": [
+        0.010505200000000001,
+        0.0066304,
+        0.0071384
+      ],
+      "medianMs": 0.007138,
+      "meanMs": 0.008091,
+      "stdDevMs": 0.002106,
+      "minMs": 0.00663,
+      "maxMs": 0.010505
+    }
+  ]
+}
