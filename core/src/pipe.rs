@@ -894,7 +894,7 @@ fn status_response(components: &[Component], settings: &Settings) -> Response {
 
     for c in components {
         let gate_open = match c.gate.as_deref() {
-            Some(key) => settings.get_bool(key, true),
+            Some(key) => settings.get_bool(key, components::GATE_DEFAULT),
             None => true,
         };
         let should_run = components::auto_start(c, gate_open);

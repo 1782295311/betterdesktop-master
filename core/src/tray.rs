@@ -172,34 +172,45 @@ pub struct ToggleSpec {
 }
 
 /// 11 项功能开关（顺序与 C# 托盘一致）。
+///
+/// 【`default` 的口径，2026-09-20】凡**组件 gate 键**（自绘桌面 / 菜单栏 / Dock / 任务栏外观 /
+/// 索引 / 截图 / 剪贴板历史 / 灵动岛 / 热键侧板 —— 共 9 项），`default` 一律取
+/// [`crate::components::GATE_DEFAULT`]（= 关）。
+///
+/// 理由：同一个键的值被**两处**消费 —— 菜单勾选态与 gate 求值。两处不一致的后果是
+/// "菜单显示已开、组件却没跑"（或反之），也就是本仓钉过的"**同一问题给出两个答案**"。
+/// 故这里引用常量而不是写字面量：将来口径再变，只需改那一处。
+///
+/// **非 gate 的行为开关**（`desktop.iconsHidden` / `desktop.doubleClickHideIcons`）
+/// 各按自己的语义，不受此约束。
 const TOGGLES: &[ToggleSpec] = &[
-    ToggleSpec { label: "自绘桌面", key: "components.desktop", default: true },
+    ToggleSpec { label: "自绘桌面", key: "components.desktop", default: crate::components::GATE_DEFAULT },
     ToggleSpec { label: "隐藏桌面图标", key: "desktop.iconsHidden", default: false },
-    ToggleSpec { label: "顶部菜单栏", key: "components.menubar", default: true },
-    ToggleSpec { label: "底部 Dock", key: "components.dock", default: true },
-    ToggleSpec { label: "任务栏外观", key: "components.wintaskbar", default: true },
+    ToggleSpec { label: "顶部菜单栏", key: "components.menubar", default: crate::components::GATE_DEFAULT },
+    ToggleSpec { label: "底部 Dock", key: "components.dock", default: crate::components::GATE_DEFAULT },
+    ToggleSpec { label: "任务栏外观", key: "components.wintaskbar", default: crate::components::GATE_DEFAULT },
     ToggleSpec {
         label: "索引引擎（停止后续按需拉起）",
         key: "extensions.index.enabled",
-        default: true,
+        default: crate::components::GATE_DEFAULT,
     },
     ToggleSpec {
         label: "截图工具（需常驻服务在运行）",
         key: "extensions.screenshot.enabled",
-        default: true,
+        default: crate::components::GATE_DEFAULT,
     },
     ToggleSpec {
         label: "剪贴板历史",
         key: "extensions.clipboard-history.enabled",
-        default: true,
+        default: crate::components::GATE_DEFAULT,
     },
-    ToggleSpec { label: "灵动岛", key: "island.enabled", default: true },
+    ToggleSpec { label: "灵动岛", key: "island.enabled", default: crate::components::GATE_DEFAULT },
     ToggleSpec {
         label: "双击隐藏桌面图标",
         key: "desktop.doubleClickHideIcons",
         default: true,
     },
-    ToggleSpec { label: "热键侧板", key: "hotkeys-panel.enabled", default: true },
+    ToggleSpec { label: "热键侧板", key: "hotkeys-panel.enabled", default: crate::components::GATE_DEFAULT },
 ];
 
 /// 菜单命令 id 基址：`CMD_TOGGLE_BASE + index` = 翻转功能开关表第 index 项。
@@ -394,7 +405,7 @@ pub fn component_entries(
         let gate_open = c
             .gate
             .as_deref()
-            .map(|k| settings.get_bool(k, true))
+            .map(|k| settings.get_bool(k, crate::components::GATE_DEFAULT))
             .unwrap_or(true);
 
         // 父项：**原生勾选表达"在跑"，文本标记只表达"用户需要知道的异常"**

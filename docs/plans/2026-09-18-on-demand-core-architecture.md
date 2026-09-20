@@ -1091,14 +1091,56 @@ BetterDesktop.Clipboard.Engine   私有工作集    4.76 MB
 3. 代价（首次需显式开启）是**一次性**的，且已有"首次偏好"这个落点。
 4. C 更精细，但它**卡在 S6**；B 是"现在能定、S6 后依然成立"的那个。
 
-**拍板时必须一并定的一件事（容易漏）**：
+#### ✅ 定案：采纳 B（2026-09-20，用户拍板）
 
-**改 B 需要迁移旧 `settings.json`。** 老用户当前是"键缺失 ⇒ 开启"，改成"键缺失 ⇒ 关闭"之后，
-他们的剪贴板历史会**静默关掉** —— 用户不会知道为什么，而这正是本仓反复钉过的那类静默故障。
-⇒ 若采纳 B，必须**同时**给现有用户写显式 `true`（安装器、或 core 首次启动时做一次性迁移）。
+**拍板时把"迁移"这条直接消掉了**：**本项目没有老用户** ⇒ "改成键缺失 = 关闭会让老用户的
+剪贴板历史静默关掉"这个顾虑**不存在** ⇒ 不需要任何迁移代码。
+⇒ **这也是"没有老用户"这个事实唯一一次直接简化了实现**（它通常只影响发布策略）。
 
-**未决**：这个迁移属于 S6 还是 S7？**建议 S7** —— 那时 core 已经是 `settings.json` 的默认写者
-（§13.19 的单写者定案），迁移才有一个明确、唯一的执行者。
+**实施**（同一个常量，5 个求值点共用）：
+
+| 落点 | 改动 |
+|---|---|
+| `core/src/components.rs` | 新增 `pub const GATE_DEFAULT: bool = false` —— **单一来源**，注释写明为什么与"为什么必须是一个常量" |
+| `core/src/supervisor.rs` | `gate_open()` 引用它（**监护器**，最关键的一处） |
+| `core/src/main.rs` | 启动日志的 gate 求值 |
+| `core/src/pipe.rs` | `status` 的 gate 求值 |
+| `core/src/tray.rs` | 菜单勾选态 + `TOGGLES` 的 9 个 gate 项 `default`（**用常量而非字面量**，将来再变只改一处） |
+
+**单测：两条 gate 用例升级为"三种配置都测"**（缺失 / 显式 `false` / 显式 `true`）——
+它们原先的注释写着"必须真的写 `false`，用缺失键测会得到**假绿色**"，
+而现在默认值反过来了：**缺失键本身成了正面用例**。三种都覆盖，"默认值语义"才真正被钉住。
+**191/191 通过、clippy 0。**
+
+#### ✅ 验收：D1 达成（2026-09-20 真机）
+
+单拷部署后（§13.24 流程），core 启动日志：
+
+```text
+- desktop          gate=components.desktop=false                => ensure=false stop=true
+- clipboard-engine gate=extensions.clipboard-history.enabled=false => ensure=false stop=true
+- clipboard-panel  gate=extensions.clipboard-history.enabled=false => ensure=false stop=true
+- index-engine     gate=extensions.index.enabled=false           => ensure=false stop=true
+
+stopped BetterDesktop.DesktopControl.exe (pid 62160)
+stopped BetterDesktop.DesktopControl.exe (pid 4720)
+stopped BetterDesktop.Clipboard.Engine.exe (pid 3576)
+stopped BetterDesktop.Clipboard.Panel.exe (pid 37832)
+supervisor(startup): stopped desktop (pid kills=2), clipboard-engine (pid kills=1), clipboard-panel (pid kills=1)
+```
+
+| 指标 | 结果 |
+|---|---|
+| **D1 空闲常驻进程数** | **1**（只有 `betterdesktop-core`）—— 此前实测 5 |
+| **D2 口径内存**（私有工作集） | **2.10 MB**（要求 < 8MB）|
+
+⇒ **"按需化"的核心承诺首次在真机上成立**：空闲时机器上只剩 core 一个进程。
+用户点开对应开关后，组件才被拉起（gate 开 ⇒ `ensure=true`）。
+
+> **一处笔记**：本节前文把内存指标写成 "D4"，实为 **D2**（D4 是"每个进程有唯一生命周期所有者"）。
+> 原文保留不改，在此更正 —— 免得后人对着一张错的编号去找指标。
+
+**未决（现在真的没了）**：原先预留的"迁移归 S6 还是 S7"随"没有老用户"一起消解。
 
 ### 13.10 S3.5 实测记录（2026-09-19，已完成）：电源事件
 

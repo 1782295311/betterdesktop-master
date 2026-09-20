@@ -138,7 +138,7 @@ fn main() -> ExitCode {
     let settings = settings::Settings::load();
     for c in &table {
         let gate_open = match &c.gate {
-            Some(key) => settings.get_bool(key, true),
+            Some(key) => settings.get_bool(key, components::GATE_DEFAULT),
             None => true,
         };
         let gate_desc = match &c.gate {

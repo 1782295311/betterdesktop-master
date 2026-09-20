@@ -230,6 +230,31 @@ impl Default for PowerPolicy {
     }
 }
 
+/// gate 键**缺失**时的默认值 —— **关**（2026-09-20 定案，Open Question 5）。
+///
+/// # 为什么是「关」不是「开」
+///
+/// `desired: running` + 「键缺失 = 开」会让 core **每次启动都把 gate 组件拉起来** ——
+/// 实测空闲常驻 **2 进程**，与 **D1（空闲常驻 = 1）** 直接冲突，
+/// 而 D1 正是"按需化"这套架构**对外的核心承诺**。
+///
+/// 「键缺失 = 开」的方向与架构目标相反：它把"按需"变成了"默认常驻"。
+/// 改成「缺失 = 关」之后语义反而更自洽：
+///
+/// - `desired = running` + gate 开 ⇒ **常驻**（用户开了，就一直跑）；
+/// - `desired = on-demand`         ⇒ **按需**（用完即退）。
+///
+/// 也就是说 gate 从"默认开、可关"变成了"**用户选择加入**"。
+///
+/// # 为什么必须是**一个**常量
+///
+/// 这个语义有 **5 个求值点**：[`crate::supervisor::gate_open`]、`main` 的启动日志、
+/// `pipe` 的 `status`、`tray` 的菜单勾选、`tray::TOGGLES` 的默认值。
+/// 只要有一处仍按"缺失 = 开"，`status` 就会与监护器对同一个组件给出**不同答案**
+///（本仓钉过这条：`snapshot` 与 `reconcile` 必须用同一判据）。
+/// 故各处一律引用本常量，不各写各的字面量。
+pub const GATE_DEFAULT: bool = false;
+
 /// 一条组件定义（校验通过后的形态）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Component {

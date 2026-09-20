@@ -1099,10 +1099,13 @@ fn try_spawn(c: &Component) -> Result<std::path::PathBuf, String> {
     }
 }
 
-/// gate 是否开启（键缺失 = 开启；语义见 `pipe::gate_closed`）。
+/// gate 是否开启。
+///
+/// **键缺失时的默认值**见 [`components::GATE_DEFAULT`]（2026-09-20 定案为 `false`）——
+/// 那一条注释解释了为什么、以及为什么必须五个求值点共用同一个常量。
 fn gate_open(c: &Component, settings: &Settings) -> bool {
     match c.gate.as_deref() {
-        Some(key) => settings.get_bool(key, true),
+        Some(key) => settings.get_bool(key, components::GATE_DEFAULT),
         None => true,
     }
 }
@@ -1478,42 +1481,70 @@ mod tests {
         assert!(matches!(sup.stop("nope"), Outcome::Failed(_)));
     }
 
-    /// D8：gate **显式为 false** 时显式 `start` 必须被拒 —— 用户关掉的东西不许被复活。
+    /// D8：gate 关闭时显式 `start` 必须被拒 —— 用户关掉的东西不许被复活。
     ///
-    /// 必须真的在配置里写 `false`：键缺失是"默认开启"，用缺失键测这条分支会得到假绿色
-    /// （这是本仓库踩过的坑，两处注释都记着）。
+    /// 【2026-09-20 语义反转后，本条覆盖**三种**配置】旧注释写着"必须真的写 `false`，
+    /// 因为键缺失默认开启，用缺失键测会得到**假绿色**"。现在默认值反过来了
+    ///（[`components::GATE_DEFAULT`] = `false`），所以三种都要测：
+    ///   · **缺失**   = 关 → 必须被拒（新默认的正面用例）；
+    ///   · **显式 false** = 关 → 必须被拒（原有用例，保留）；
+    ///   · **显式 true**  = 开 → 才走到"未部署"分支。
+    /// 三者缺一，"默认值语义"就没被真正钉住 —— 而它正是 D1 成立的前提。
     #[test]
     fn explicit_start_refuses_when_gate_is_closed() {
         let mut c = comp("gated", Desired::Running, Tier::Surface);
         c.gate = Some("components.gated".into());
         let sup = Supervisor::new(vec![c]);
 
+        // ① 显式 false → 拒。
         let shut = Settings::from_str(r#"{"components":{"gated":false}}"#);
         assert_eq!(sup.start_with("gated", &shut), Outcome::GateClosed);
 
-        // 同一个组件、gate 开着（键缺失 = 开启）→ 不再被拒，而是走到"未部署"分支
-        let open = Settings::empty();
+        // ② **键缺失** → 也拒（2026-09-20 的新默认；旧语义下这条会走到"未部署"）。
+        let missing = Settings::empty();
+        assert_eq!(
+            sup.start_with("gated", &missing),
+            Outcome::GateClosed,
+            "键缺失 = 关（GATE_DEFAULT）—— 这是 D1（空闲只剩 core）成立的前提"
+        );
+
+        // ③ 显式 true → 不再被拒，走到"未部署"分支。
+        let open = Settings::from_str(r#"{"components":{"gated":true}}"#);
         assert!(matches!(sup.start_with("gated", &open), Outcome::Failed(_)));
     }
 
     /// 自动监护也必须尊重 gate：关掉之后**既不停手别人、也不复活它**。
     /// （`decide` 已单测，这里验证 `reconcile` 这条真实路径与它一致。）
+    ///
+    /// 与上一条同样覆盖三种配置 —— 而且**这条更关键**：`reconcile` 才是真会去拉进程的路径，
+    /// "默认值"在这里的影响是实打实的（D1 就是靠它成立的）。
     #[test]
     fn reconcile_stops_and_never_revives_a_gate_closed_component() {
         let mut c = comp("ghost", Desired::Running, Tier::Surface);
         c.gate = Some("components.ghost".into());
         let sup = Supervisor::new(vec![c]);
 
-        // 关闭的组件 + 未部署 → 既不该被拉起（否则会去撞不存在的 exe），也不该被报失败
-        let shut = Settings::from_str(r#"{"components":{"ghost":false}}"#);
-        let report = sup.reconcile_with("test", &shut);
-        assert!(
-            report.spawned.is_empty() && report.failed.is_empty(),
-            "gate 关闭的组件不该被监护器碰：{report:?}"
-        );
+        let expect_untouched = |settings: &Settings, what: &str| {
+            let report = sup.reconcile_with("test", settings);
+            assert!(
+                report.spawned.is_empty() && report.failed.is_empty(),
+                "{what}：gate 关闭的组件不该被监护器碰：{report:?}"
+            );
+        };
 
-        // 同一个组件、gate 开着（键缺失 = 开启）→ 才会进入拉起尝试
-        let report = sup.reconcile_with("test", &Settings::empty());
+        // ① 显式 false → 不碰。
+        expect_untouched(
+            &Settings::from_str(r#"{"components":{"ghost":false}}"#),
+            "显式 false",
+        );
+        // ② **键缺失** → 也不碰（2026-09-20 的新默认）。
+        expect_untouched(&Settings::empty(), "键缺失（GATE_DEFAULT = false）");
+
+        // ③ 显式 true → 才进入拉起尝试（此处因未部署而失败）。
+        let report = sup.reconcile_with(
+            "test",
+            &Settings::from_str(r#"{"components":{"ghost":true}}"#),
+        );
         assert_eq!(
             report.failed,
             vec!["ghost".to_string()],

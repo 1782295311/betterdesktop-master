@@ -25,23 +25,42 @@
 
 ---
 
-## 2. 谁在跑 / 谁没跑 / 为什么（2026-09-20）
+## 2. 谁在跑 / 谁没跑 / 为什么（2026-09-20，**当日已变过一次**）
 
-**在跑（5 个）**
+**当前：在跑 1 个 —— `betterdesktop-core`**
 
-| 进程 | 来源 | 说明 |
-|---|---|---|
-| `betterdesktop-core.exe` | `app\2026.09.17.1610\` | **09-20 12:49 起（单拷部署后的新二进制）**。日志健康：托盘已建、热键 `Shift+Win+B` 已注册、控制管道 4 实例 + 0 号确权、`shellmenu` 已注册、计划任务 up to date |
-| `BetterDesktop.Clipboard.Engine.exe` | 安装根 | gate `extensions.clipboard-history.enabled` = true |
-| `BetterDesktop.Clipboard.Panel.exe` | 安装根 | `on-demand`，被唤起过 |
-| `BetterDesktop.DesktopControl.exe`（×2） | `app\...\` | **两个进程是正常的**：另一个带 `--icon-restore-sentinel <pid>`，是"宿主退出后恢复桌面图标"的哨兵（`shell-desktop` 侧设计，`DesktopPlugin.cs`）。**不要当成重复启动去杀它** |
+2026-09-20 下午，gate 的默认值语义反转为「**键缺失 = 关闭**」（选择加入），
+core 启动时把 gate 关闭的组件**主动停掉** ⇒ **D1（空闲常驻 = 1）达成**。验收日志：
+
+```text
+- desktop          gate=components.desktop=false                => ensure=false stop=true
+- clipboard-engine gate=extensions.clipboard-history.enabled=false => ensure=false stop=true
+- clipboard-panel  gate=extensions.clipboard-history.enabled=false => ensure=false stop=true
+- index-engine     gate=extensions.index.enabled=false           => ensure=false stop=true
+
+supervisor(startup): stopped desktop (pid kills=2), clipboard-engine (pid kills=1), clipboard-panel (pid kills=1)
+```
+
+**核销**：进程数 **5 → 1**；core 私有工作集 **2.10 MB**（D2 要求 < 8MB）。
+
+**变更前（当日上午，留作对照）**
+
+| 进程 | 说明 |
+|---|---|
+| `betterdesktop-core` | 09-20 12:49 起 |
+| `BetterDesktop.Clipboard.Engine` | 当时 gate 键缺失 = **开** ⇒ 被拉起 |
+| `BetterDesktop.Clipboard.Panel` | 同上 |
+| `BetterDesktop.DesktopControl`（×2） | 其中一个带 `--icon-restore-sentinel <pid>`，是"宿主退出后恢复桌面图标"的**哨兵**（`shell-desktop` 侧设计）—— **那是正常设计，不是重复启动** |
+
+> 一旦用户把某个开关打开（如「剪贴板历史」），对应组件会立刻被拉起（gate 开 ⇒ `ensure=true`）。
+> **所以"在跑几个进程"取决于用户开了哪些开关** —— 这是"D1 只在空闲时成立"的含义。
 
 **没在跑（都是预期的）**
 
 | 组件 | 为什么没跑 |
 |---|---|
-| `Host`（壳） | `host-stopped.flag`（09-19 21:13 写入）。core 的 `shell` 条目带 `stopFlag: host-stopped.flag` ⇒ **core 不会把它拉回来**（正确行为） |
-| `Tray` / `Watchdog` / `Agent` | **源码已删**（S4-4）。安装根里那三个 exe 是 **09-18 的旧尸体** ⇒ **别去双击它们**（见 STATUS §6） |
+| `Host`（壳） | `host-stopped.flag`（09-19 21:13 写入）。core 的 `shell` 条目带 `stopFlag: host-stopped.flag` ⇒ **core 不会把它拉回来**（正确行为；注意它的 `gate=no-gate` ⇒ `ensure=true`，是那个 flag 在起作用） |
+| `Tray` / `Watchdog` / `Agent` | **源码已删**（S4-4）。安装根里那三个 exe 是 **09-18 的旧尸体** ⇒ **别去双击它们**（见 §8） |
 
 ---
 
