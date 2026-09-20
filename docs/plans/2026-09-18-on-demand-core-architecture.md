@@ -2504,6 +2504,99 @@ core 判据 = **任一存在即暂停**；日志区分来源（`paused by: updat
 但已经**换了层**：从"事实上从没在本地跑完过（24 个工程 + 输出被吞）"变成"**能待在'提交前全量'层**"，
 不再需要被当成 CI-only 的欠账。这个判断写进了 `run-gates.ps1` 注册表该条目的注释里。
 
+#### 13.22.6 保护性提交 + B1 侦察（2026-09-20）
+
+**提交 `2c18409`**：`wip: 冻结 S1-S5 Rust core 工作 + S4-4 源码侧清理`，**116 个文件**。
+提交前逐项分类（口径："说不出类别的就不提交"），暂存区核验：`packages/` **0 项**、`README.md` **0 项**。
+
+| 纳入 | 内容 |
+|---|---|
+| **`core/`（19 个文件）** | S1-S5 的 Rust 常驻进程全部工作 —— 此前**只存在于工作区**，一次磁盘故障或 `git clean -fd` 即归零。**这是本次提交的唯一主要理由**（它是风险敞口，不是待办） |
+| `launcher/` `tray/` `shared/` `protocols/` `launcher-tests/` | 自己的产物 / 自己的区域 |
+| `BetterDesktop.Cli/` + `.Tests/` | 自己的产物（含本轮 diagnostics / path-resolver） |
+| `watchdog/`（删除） | S4-4：监护职责迁入 core |
+| `scripts/`（38 项） | 门禁工具链 + 本轮全部改进 |
+| `.gitignore` `AGENTS.md` `BetterDesktop.slnx` | 三者均已取证：Rust `target/`·`dist/`·`engines/` 忽略、core 电源红线、S4-4 项目增删 |
+| `docs/`（4 份） | 计划本文档 + `engineering-conventions` + `defensive-patterns` + `threat-model` |
+
+**未纳入**（归属属并行工作流、或未经验证）：`packages/`（380）、`host/`（15）、`tools/`（7）、
+`docs/` 其余 62、`.agents/`（9）、`recovery/`（3）、`updater/`、`engine/` `engine-index/` `native/` `installer/`、
+`README.md`、`Directory.Build.props`、`LICENSE`、`THIRD-PARTY-NOTICES.md` 及 5 份被删的中文审查报告。
+
+**B1 侦察（提交后，回答三个问题）**
+
+**Q1 — publish 需要什么产物？** 8 个组件项目（`$components`）+ 14 个必检产物（`$required`）。
+
+**Q2 — 它们在 git 里的状态？**
+
+| 组件 | 路径 | git 已跟踪 |
+|---|---|---|
+| Launcher / Host / Cli / Tray / Recovery | `launcher/` `host/` `BetterDesktop.Cli/` `tray/` `recovery/` | ✓ **5 个** |
+| DesktopControl / Settings | `packages/shell/shell-desktop-control/`、`shell-settings-host/` | ✗（并行工作流） |
+| Updater | `updater/` | ✗（未提交） |
+
+**Q3 — 只 publish 已跟踪的部分，能跑通吗？**
+
+`publish.ps1` 是**整体式**的（任一组件项目缺失即 `Fail` —— "a half release must never ship"）⇒
+从干净检出**必然失败**。但缺口现在**可枚举**：`packages/` 的 2 个 + `updater/`。
+
+⇒ **B1 从"整体堵死"变成"部分可解"**：从"不知道缺什么"变成"**只差 3 个组件，其中 2 个属于并行工作流**"。
+
+**另外两个侦察发现**
+
+1. **`host/` 是混合归属**：15 项未提交改动里既有本工作流的（S4-4 删 `MenuService`、改 `HostWatchdog`），
+   也有并行工作流的（`Bootstrap.cs` 里的 `PublishPasteSession` 剪贴板面板上报）。
+   ⇒ 它**不能整目录提交**，必须按改动切分才能进 git —— 这是 B1 的一个具体障碍，不是理论问题。
+2. **`$required` 里仍有 `agent.yml`** —— agent 已随 S4-4 删除，这一条是遗留项（与 publish 自己的半成品纪律冲突）。
+
+#### 13.22.7 A / B 的结论（2026-09-20）
+
+**步骤 0 — `$required` 里的 `agent.yml` 遗留（已修）**
+
+不止 1 处，实际 **3 处**：`scripts/publish.ps1:70`、`scripts/install-betterdesktop.ps1:75`、
+`scripts/publish-modules.ps1:47`。三处同性质（S4-4 删了 agent，清单没同步），一并删除；
+`system-integration` 仍 PASS（说明 install ↔ publish 的一致性没被破坏）。
+**这是"自己的遗留"**：改 publish 那 4 行时就该顺手改掉，漏了。
+
+**A — `updater/` 归属：成立**
+
+三条客观判据一致：
+
+| 判据 | 结果 |
+|---|---|
+| git 历史 | `git log --all -- updater/` → **无任何提交**（全新目录） |
+| git 状态 | `?? updater/` |
+| 内容 | `ResidentGate.cs`（更新期间写 `watchdog-pause.flag` 的那个组件）、`Applier.cs`（S4-4 清了它的 Agent 重启逻辑）、`Program.cs` —— 全部与 S4-4 同源 |
+
+⇒ 提交 `updater/`（8 个源文件；`bin/` `obj/` 被 .gitignore 挡住，已核验 `BIN_OBJ_STAGED=0`）。
+**A 的价值是"缺口可枚举、可收敛"，不是"缺口变小"**：publish 的 8 个组件里，未跟踪的现在只剩 **2 个**，
+且都能指名道姓说清属于谁。
+
+**B — `host/` 的切分：判给并行工作流（结论：本轮不切）**
+
+证据（不是感觉）：
+
+- `host/` 有 **13 个文件**有改动（阈值是 3）：`App.xaml`(-581) `Bootstrap.cs`(+271/-21) `FileLogSink.cs`
+  `HostWatchdog.cs` `IconRestoreSentinel.cs` `MenuCommandPipe.cs` `ToggleKeyCommand.cs` `App.xaml.cs`
+  `DesktopToggleCommand.cs` `cordis.yml` `packages.lock.json` `BetterDesktop.Host.csproj` `MenuService.cs`(删)
+- 且这些文件的**新增行里直接含并行工作流的内容**：`shell-island` 的 `ProjectReference`、
+  `PublishPasteSession`（剪贴板面板上报）、`["island"]` 插件注册、`components.dock` 的任务栏留痕联动。
+
+⇒ 逐块切分等于"逐行判断哪行属于谁"，而那需要**最了解并行工作流的人**来判断。
+**决定**：本轮不硬切。`host/` 的 S4-4 改动（删 `MenuService`、改 `HostWatchdog`）
+**随并行工作流的 `PublishPasteSession` 一起提交**。
+
+**因此 B1 的"完整发布"暂不可执行 —— 已知并接受**
+
+| 项 | 状态 |
+|---|---|
+| publish 的 8 个组件 | **6 个已跟踪**（Launcher / Host / Cli / Tray / Recovery / Updater） |
+| 缺的 2 个 | `shell-desktop-control`、`shell-settings-host` —— 都在 `packages/`，属并行工作流 |
+| `host/` | 已跟踪，**但 git 里是改动前的版本**（工作区的 S4-4 + 并行改动都未提交） |
+
+⇒ **B1 从"整体堵死"变成"已知边界"**：不是"不知道能不能发布"，而是"**差 2 个并行组件 +
+1 个待切分的组件目录**"。这三项都不在本工作流的单方面控制内 —— 这是当前的真实边界，不是借口。
+
 ### 13.15 S4-2 第 2 步：core 的注册**触发** + `RepairGate`（2026-09-19）
 
 `cargo test --release` **145/145**（+4），0 warning。core 侧从"只读巡检"变为"巡检 + 一次性自动修复"。

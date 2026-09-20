@@ -44,7 +44,6 @@ $required = @(
     'BetterDesktop.Recovery.exe',
     'convert-engine.exe',
     'cordis.yml',
-    'agent.yml',
     'native\BetterDesktopShellMenu.dll'
 )
 

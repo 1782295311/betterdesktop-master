@@ -67,7 +67,6 @@ $required = @(
     # 缺了它就是"右键菜单注册成功但没有菜单"——半成品，必须在发布门禁拦住。
     'native\BetterDesktopShellMenu.dll',
     'cordis.yml',
-    'agent.yml',
     # 2026-09-17 安装器级：安装/卸载脚本随包分发。
     # 卸载必须能在"托盘自己也在被删目录里"的情况下完成，所以卸载器必须是本进程之外的脚本；
     # 托盘「卸载 BetterDesktop…」按组件目录找它（tray/AppPaths.UninstallScript）。
