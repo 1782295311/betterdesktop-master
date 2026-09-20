@@ -622,27 +622,30 @@ PBT_APMRESUMEAUTOMATIC / PBT_APMRESUMESUSPEND（唤醒后）
 | | |
 |---|---|
 | **需要什么** | 该目录整体提交；或明确回一句"暂不提交，因为 X" |
+| **现状（2026-09-20 实测）** | 目录存在；**10 个源文件 + 1 个 csproj**；`git ls-files` = **0**；**最后修改 09-19 18:45** —— 已一天多没动 ⇒ **很可能已经写完，只差一次提交**（这条信息让"还需要多久"从"不知道"变成"可核对"） |
 | **为什么被阻塞** | 它是 publish 的 8 组件之一，且 `host` 的 25 个 `ProjectReference` 里有它 ⇒ 干净检出里 `host` 建不出来 |
 | **影响** | 桌面服务相关的一切真机验证（S4-3 的 gate 语义、桌面控制菜单）都做不了 |
-| **无解时的备选** | 用**旧版** `DesktopControl` 临时验 gate 语义（能验"关掉不被拉回"，验不了与 core 的时序） |
+| **无解时的备选** | 用**旧版** `DesktopControl` 临时验 gate 语义（能验"关掉不被拉回"，验不了与 core 的时序）|
 
 #### 依赖 2：`packages/shell/shell-settings-host/` 的提交
 
 | | |
 |---|---|
 | **需要什么** | 同上 |
+| **现状（2026-09-20 实测）** | 目录存在；**7 个源文件 + 1 个 csproj**；`git ls-files` = **0**；最后修改 **09-18 19:31**（比依赖 1 更早停下）|
 | **为什么被阻塞** | publish 组件之一；设置中心的独立进程 |
 | **影响** | 『S7 配置单写者』的前置验证做不了（"core 已是唯一写者"这个假设无法在真机上核） |
 | **无解时的备选** | 暂跳，S7 时一并验 |
 
-#### 依赖 3：`host/Bootstrap.cs` 里 `PublishPasteSession` 的归属决定
+#### 依赖 3：`host/` 的 14 项改动如何提交
 
 | | |
 |---|---|
-| **需要什么** | 一句判断：这段（剪贴板面板上报）是"本工作流的 / 你的 / 各让一步怎么切" |
-| **为什么被阻塞** | `host/` 有 **13 个文件**混合改动：本工作流的（S4-4 删 `MenuService`、改 `HostWatchdog`）+ 并行工作流的（`shell-island` 引用、`PublishPasteSession`、`components.dock` 留痕）。逐块切分等于**替别人判断归属**，所以没做（判据与证据见 §13.22.7） |
+| **需要什么** | 一句判断：`Bootstrap.cs` 里的 `PublishPasteSession` 那部分归属谁；或约定"整体提交、由并行工作流负责切" |
+| **为什么被阻塞（实测数据）** | `host/` 的改动构成：**13 个文件是 MIXED**（增删混在一起）+ **1 个 PURE-DELETE**（`MenuService.cs`，本工作流的）。最混的是 `Bootstrap.cs`（**+271/-21**）。**逐块切分等于逐行判断哪行属于谁** —— 那需要最了解并行工作流的人来判断（判据与证据见 §13.22.7）|
+| **为什么"只提交那个纯删除"也不行** | 试过这条路：`MenuService.cs` 确实是纯删除、看起来可单独提交，**但同批的 13 个文件仍是旧版本** ⇒ 单独提交会造出"**git 里缺了 `MenuService`、其余文件却还是引用它的旧版**"的不一致状态。这正是"混合归属不能部分提交"的具体形态 |
 | **影响** | **三条里最大的一条**：`host` 是 publish 组件之一 ⇒ 不切分，B1 无法完整跑通（最多 7/8） |
-| **无解时的备选** | 两边各自提交自己的部分；或约定一个时间点整体提交（谁先动谁负责切） |
+| **无解时的备选** | 两边各自提交自己的部分；或约定一个时间点整体提交（谁先动谁负责切）|
 
 #### 这三条解开之后
 
@@ -882,19 +885,19 @@ B1 从 **3/8** 变 **8/8**。
 | D3 | 关系图无环：core → 各按需进程，无进程回头拉 core | S0 清单 + 代码 review |
 | D4 | 每个进程有且仅有一个生命周期所有者，并落表存档 | 写入 `docs/MECHANISMS.md` 或本计划附录 |
 | D5 | 所有入口只调管道 / bdctl | 检索 `Process.Start`，仅存在于 core 与 Launcher |
-| D6 | core 挂了不影响系统右键与 CLI 的降级可用性 | kill core → 右键仍出项；`bdctl status` 自动拉回 core |
+| D6 | core 挂了不影响系统右键与 CLI 的降级可用性 —— ✅ **右键侧 2026-09-20 核实**；⬜ CLI 侧待 B1 | 右键**不依赖 core**：注册走 `shellex\ContextMenuHandlers`（COM 处理器，explorer 加载 DLL 动态出项），四个 scene key（`*` / `Directory` / `Directory\Background` / `DesktopBackground`）**全部注册**，CLSID 与 DLL 均存在 ⇒ "core 挂了右键仍出项"的**充分条件齐备**（真按右键需人工，见 D12） |
 | D7 | 右键菜单弹出无延迟（explorer 内零 IPC） | 真机计时 + `probe-shellmenu.ps1` |
 | D8 | kill 任意按需进程不触发守护复活 | 真机逐个 kill，观察 60s |
 | D9 | 关闭开关后进程不被拉回 —— ✅ **2026-09-20 双向实测** | 真机：写 `extensions.clipboard-history.enabled=true` → 3s 内 `supervisor(tick): started 'clipboard-engine'`；改回 `false` → 3s 内 `stopped clipboard-engine (pid kills=1)`。**开关是承重的，两个方向都动** |
 | D10 | core 崩溃自愈：kill core 后被**兜底计划任务**拉回 ✅ **2026-09-20 实测** | 真机：kill core → 触发任务（等价于下一次触发）→ core 以新 PID 回来。**判据修正**：本行原写"≤1 分钟"，而任务实际间隔是 **5 分钟**（XML `<Interval>PT5M</Interval>`，真机 `Repeat: Every 0h5m`）。⇒ 判据按**实现**改为"**≤5 分钟**"。若"1 分钟"才是产品要求，那是**另一个改动**（把间隔改成 1 分钟），属体验选择而非缺陷 —— 不要把它当成"自愈失效" |
 | D11 | core 重启 reconcile：core 崩溃期间某组件仍在跑 → 恢复后**不重复拉起** ✅ **2026-09-20 实测** | 真机证据是 **PID**：杀 core 前 `clipboard-engine` = 43332；core 以新 PID 回来后，engine **仍是 43332**（没被重启、没被拉出第二个） |
-| D12 | **端到端 A（系统右键全链）**：关主程序 → 桌面右键 .zip → 菜单出现「解压到 ▸」带图标 → 点击 → 解压成功 | 真机实走 |
-| D13 | **端到端 B（按需壳）**：空闲（仅 core）→ 托盘点「启动主程序」→ 菜单栏 + Dock 出现 → 关壳 → 回落到 1 进程 | 真机实走 |
-| D14 | **端到端 C（热键→一次性进程）**：按截图热键 → `Capture.exe` 起来 → 截完退出 | 真机实走 |
+| D12 | **端到端 A（系统右键全链）**：关主程序 → 桌面右键 .zip → 菜单出现「解压到 ▸」带图标 → 点击 → 解压成功 | 真机实走 —— **需人工**（GUI 交互不可脚本化）。D6 已证明其**静态条件齐备** |
+| D13 | **端到端 B（按需壳）**：空闲（仅 core）→ 托盘点「启动主程序」→ 菜单栏 + Dock 出现 → 关壳 → 回落到 1 进程 | 真机实走 —— ⛔ **卡 `host/`**：启动壳 = 启动 Host，而安装根里那份是 **09-18 旧网状版**（带三条 Ensure）⇒ 起来会与 core 的 gate 打架（runtime-facts §8 第 1 条）。**必须在 B1 部署新 Host 之后才能验** |
+| D14 | **端到端 C（热键→一次性进程）**：按截图热键 → `Capture.exe` 起来 → 截完退出 —— ✅ **2026-09-20 实测**（走完整生产路径） | 用 `keybd_event` 模拟**真实按键** `Win+Shift+B`（不是手工投递消息 —— 让系统自己产生 `WM_HOTKEY`）⇒ core 日志 `[INFO] explicit start: 'capture' -> ...\BetterDesktop.Capture.exe`；7 秒后 `Capture` 实例数回 **0** ⇒ **起来 → 截完自己退出**，与判据一致 |
 | D15 | 老装机 Upgrade 后 Run 键无死值；计划任务仅一条 —— ✅ **2026-09-20**，且**超出判据**：从"查无死值"变成"**core 每次启动主动清死值**" | 见下方 §13.26 |
 | D16 | 核心单测：supervisor 退避/degraded/reconcile、组件表校验、控制协议兼容、热键 spec | `cd core; cargo test` |
-| D17 | 回归绿：`Shell.ContextMenu.Tests` 113 / `Shell.Core.Tests` 138 / `Cli.Tests` 52 | `dotnet test` |
-| D18 | 全仓构建 0 警告 0 错误 + 门禁全绿 | `dotnet build` + `run-gates.ps1` |
+| D17 | 回归绿 —— ✅ **本工作流部分实测**；⬜ `Shell.*` 待 packages | `BetterDesktop.Cli.Tests` **90/90**、`launcher-tests` **9/9**（`host/` 无测试工程）。**判据数字已过时**：本行原写 `Cli.Tests` **52**，实测 **90** —— 与 D10 同类（"判据里的数字"≠实况） |
+| D18 | 全仓构建 0 警告 0 错误 + 门禁全绿 —— ✅ **本工作流部分实测**；⬛ 全仓待 packages | `core`：`cargo build --release` + `cargo clippy --all-targets` **0 警告**；门禁：`-Fast` 仅剩 `md-wrap`（并行工作流 2 处）、Pester **90/90**。全仓 `dotnet build` 需 `packages/` |
 | D19 | 托盘 27 项菜单逐项对照审计文档，无遗漏可点 | 对照 `2026-09-17` 审计 |
 | D20 | 文档回写：`resident-architecture` 标注反转、plans 索引登记、core 禁止清单入 `docs/MECHANISMS.md` | 文件检查 |
 
