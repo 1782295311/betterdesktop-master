@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "note": "关键文档字数预算（计数口径：CJK 字符 + 拉丁词序列）。放宽上限必须先经决策记录说明理由。历史调整：AGENTS.md 900→1100（记录 2026-08-19-handoff-hardening）；MECHANISMS.md 700→900→1400（记录 2026-08-20-design-health-rules 与 2026-08-20-project-health-complete）；TERMINOLOGY.md 900→1100（记录 2026-08-20-pluginization-behavior）；coding-standards.md 850→1100（记录 2026-08-20-gaps-round2）；MECHANISMS.md 1400→1550、extension-rules.md 850→1050、build-release.md 550→600（记录 2026-09-14-doc-budget-and-mechanism-sync）；MECHANISMS.md 1550→2000（记录 2026-09-15-mechanism-registration-budget，登记 M19-M22）；新增 docs/coding-standards-core-rust.md=1477 与 docs/architecture/六层模型与未来扩展点.md=2714，上限按**实测值**设定（棘轮式：此后每增一词都需说明理由），依据计划 2026-09-18-on-demand-core-architecture.md §7 S0.5。docs/defensive-patterns.md 1700→1870（记录 2026-09-18-on-demand-core-architecture.md §13.22.5：第八节加「优化前先测量」的性能侧镜像变体——手写剪枝实测比原实现慢 3.5 倍、真凶是「文件数 × 正则数」350 万次匹配；上限按实测 1867 棘轮设定，先试过放进 engineering-conventions.md 但那份 1000 词预算装不下）。docs/testing.md 750→870（记录 2026-09-18-on-demand-core-architecture.md §7.4：新增第六节「假测试的四种形态」——新增一类知识而非展开篇幅；并修正「机检状态」表的过时行，此前写着「测试存在性：暂无机检」而 verify-test-coverage.ps1 早已存在；上限按实测 868 棘轮设定）。",
+  "note": "关键文档字数预算（计数口径：CJK 字符 + 拉丁词序列）。放宽上限必须先经决策记录说明理由。历史调整：AGENTS.md 900→1100（记录 2026-08-19-handoff-hardening）；MECHANISMS.md 700→900→1400（记录 2026-08-20-design-health-rules 与 2026-08-20-project-health-complete）；TERMINOLOGY.md 900→1100（记录 2026-08-20-pluginization-behavior）；coding-standards.md 850→1100（记录 2026-08-20-gaps-round2）；MECHANISMS.md 1400→1550、extension-rules.md 850→1050、build-release.md 550→600（记录 2026-09-14-doc-budget-and-mechanism-sync）；MECHANISMS.md 1550→2000（记录 2026-09-15-mechanism-registration-budget，登记 M19-M22）；新增 docs/coding-standards-core-rust.md=1477 与 docs/architecture/六层模型与未来扩展点.md=2714，上限按**实测值**设定（棘轮式：此后每增一词都需说明理由），依据计划 2026-09-18-on-demand-core-architecture.md §7 S0.5。docs/defensive-patterns.md 1700→1870（记录 2026-09-18-on-demand-core-architecture.md §13.22.5：第八节加「优化前先测量」的性能侧镜像变体——手写剪枝实测比原实现慢 3.5 倍、真凶是「文件数 × 正则数」350 万次匹配；上限按实测 1867 棘轮设定，先试过放进 engineering-conventions.md 但那份 1000 词预算装不下）。docs/testing.md 750→870（记录 2026-09-18-on-demand-core-architecture.md §7.4：新增第六节「假测试的四种形态」——新增一类知识而非展开篇幅；并修正「机检状态」表的过时行，此前写着「测试存在性：暂无机检」而 verify-test-coverage.ps1 早已存在；上限按实测 868 棘轮设定）。docs/architecture/STATUS.md 500→980（记录 2026-09-20：该文件原同时承担「入口」与「实测快照」两个角色，涨到 2009 词后被门禁拦住；按「入口必须短、细节必须长」拆出 docs/architecture/2026-09-20-runtime-facts.md 承接实测细节、完成度四级定义与操作禁忌，STATUS.md 只剩「现在什么状态 + 去哪读」，实测 971 词。上限按实测值棘轮设定 —— 500 是它还是「纯交接指针、不含状态摘要」时的额度，而入口的最小四部分（30 秒版 / 下一步 / 指针 / 交接）装不下）。",
   "doc-budgets": {
     "AGENTS.md": 1100,
     "docs/architecture.md": 550,
@@ -12,7 +12,7 @@
     "docs/engineering-conventions.md": 1000,
     "docs/defensive-patterns.md": 1870,
     "docs/doc-standards.md": 1250,
-    "docs/architecture/STATUS.md": 500,
+    "docs/architecture/STATUS.md": 980,
     "docs/cookbook/会话交接.md": 450,
     "docs/ui-foundation.md": 900,
     "docs/reuse-rules.md": 850,
