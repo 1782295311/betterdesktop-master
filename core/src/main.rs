@@ -33,6 +33,7 @@ mod shellmenu;
 mod supervisor;
 mod task;
 mod tray;
+mod uninstall;
 
 use std::process::ExitCode;
 
@@ -513,6 +514,14 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
                         Some(tray::MenuAction::OpenLogs) => open_logs(hwnd),
                         Some(tray::MenuAction::ToggleAutoStart) => toggle_autostart(hwnd),
                         Some(tray::MenuAction::About) => show_about(),
+                        // S5-5：卸载是**唯一会终结 core 自己**的动作。它成功返回 `true` 意味着
+                        // "脚本已上路、监护已暂停"，此时 core 必须立刻退 —— 它占着安装目录里的
+                        // 文件名，而脚本第一步要停的正是它（详见 `uninstall` 模块头）。
+                        Some(tray::MenuAction::Uninstall) => {
+                            if uninstall::run(hwnd) {
+                                tray::request_quit(hwnd);
+                            }
+                        }
                         None => {}
                     }
                 }

@@ -235,6 +235,10 @@ pub const CMD_TOGGLE_AUTOSTART: usize = 3303;
 /// 关于。
 pub const CMD_ABOUT: usize = 3304;
 
+/// 卸载 BetterDesktop（**唯一会终结 core 自己**的动作，见 `uninstall` 模块头）。
+/// 放在最末、紧邻「退出」：它是这条菜单上唯一的不可逆动作。
+pub const CMD_UNINSTALL: usize = 3305;
+
 /// 托盘菜单的选中结果。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MenuAction {
@@ -262,6 +266,8 @@ pub enum MenuAction {
     ToggleAutoStart,
     /// 关于。
     About,
+    /// 卸载（**不可逆**；会先停监护、再拉起脚本、最后退出 core）。
+    Uninstall,
     /// 退出 core。
     Quit,
 }
@@ -623,6 +629,11 @@ pub fn show_menu(
         let about = to_wide("关于 BetterDesktop Core");
         let _ = AppendMenuW(menu, MF_STRING, CMD_ABOUT, PCWSTR(about.as_ptr()));
 
+        // ⑧ 卸载（S5-5）：**不可逆**，所以单独一段、紧邻「退出」。
+        // 文案不带「…」以外的语气词：它自己要弹确认框，菜单项只负责说清"是什么"。
+        let uninstall = to_wide("卸载 BetterDesktop…");
+        let _ = AppendMenuW(menu, MF_STRING, CMD_UNINSTALL, PCWSTR(uninstall.as_ptr()));
+
         let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
         let quit = to_wide("退出 BetterDesktop Core");
         let _ = AppendMenuW(menu, MF_STRING, CMD_QUIT, PCWSTR(quit.as_ptr()));
@@ -769,6 +780,9 @@ fn action_for_id(id: usize, component_count: usize) -> Option<MenuAction> {
     }
     if id == CMD_ABOUT {
         return Some(MenuAction::About);
+    }
+    if id == CMD_UNINSTALL {
+        return Some(MenuAction::Uninstall);
     }
 
     crate::log::warn(format!("tray menu returned unknown command id {id}"));
