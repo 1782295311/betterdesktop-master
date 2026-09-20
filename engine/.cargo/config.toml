@@ -1,0 +1,15 @@
+# BetterDesktop 剪贴板引擎 —— 静态链接 MSVC CRT（方案 D · 2026-09-18）
+#
+# 【为什么】Rust 在 x86_64-pc-windows-msvc 上**默认动态链接** CRT（产物导入 VCRUNTIME140.dll）。
+# 于是它在**没装「VC++ 2015-2022 可再发行组件」的干净机器上直接加载失败**，而我们的发布包也不带
+# 这些 DLL（实测包内无 vcruntime140.dll / msvcp140.dll）—— 这正是"换台电脑就做不到百分百"的一项根因。
+# 开启 +crt-static 后 CRT 被编进 exe，目标机器不再需要任何 VC 运行时。
+#
+# 【验收】改完必须重编，并把产物当二进制扫描 "vcruntime140"（**忽略大小写**，导入表里是大写）
+# 与 "msvcp140"：两者都应无命中。参见 docs/audits/2026-09-18-dwm-blur-and-regression-fixes.md §十六。
+#
+# 【为什么放在 engine/ 而不是仓库根】cargo 从**当前目录向上**逐级找 .cargo/config.toml；
+# 三个引擎各自独立成 crate（engine / engine-index / native/convert-engine），故各自持一份，
+# 避免污染仓库内其它 cargo 工程。
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]

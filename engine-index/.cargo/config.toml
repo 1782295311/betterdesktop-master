@@ -1,0 +1,7 @@
+# BetterDesktop 搜索索引引擎 —— 静态链接 MSVC CRT（方案 D · 2026-09-18）
+#
+# 与 engine/.cargo/config.toml 同款同因：默认动态链接 CRT 会让产物依赖 VCRUNTIME140.dll，
+# 而发布包不带该 DLL → 干净机器上引擎加载失败。改用静态 CRT 后自包含。
+# 验收：重编后扫描产物应无 "vcruntime140" / "msvcp140"（忽略大小写）命中。
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]

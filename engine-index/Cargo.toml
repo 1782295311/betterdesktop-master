@@ -1,0 +1,40 @@
+[package]
+name = "betterdesktop-index-engine"
+version = "0.1.0"
+edition = "2024"
+description = "BetterDesktop 文件/应用/图标合并索引独立引擎（Rust）：常驻索引 + NamedPipe IPC，宿主/搜索/应用源经客户端接入"
+
+[dependencies]
+windows = { version = "0.58", features = [
+    "Win32_Foundation",
+    "Win32_System_Threading",
+    "Win32_System_Pipes",
+    "Win32_System_IO",
+    "Win32_System_LibraryLoader",
+    "Win32_System_ProcessStatus",
+    "Win32_Storage_FileSystem",
+    "Win32_Security",
+    # RegisterClassW / WNDCLASSW 在 0.58 里挂在 Gdi 特性下（同名先例 engine/ 亦含此特性）
+    "Win32_Graphics_Gdi",
+    "Win32_UI_WindowsAndMessaging",
+    # M4 图标：ExtractIconExW 的降级路径（私有导出 SHExtractIconsW 走 GetProcAddress，无需特性）。
+    "Win32_UI_Shell",
+] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# 【M4 图标】PNG 编码只用 png 特性（与 engine/ 的 image 依赖同版本、同 idiom，
+# 见 engine/src/thumb.rs：DynamicImage::write_to(.., ImageFormat::Png)）。
+# 不用默认特性集：本引擎不解码任何用户图片，只把图标 RGBA 编成 PNG。
+image = { version = "0.25", default-features = false, features = ["png"] }
+
+# base64 只用于「二进制进 JSON 行」的搬运（图标 PNG 字节）。
+# 先例：剪贴板引擎 `model.rs::NamedFormat.data_base64` / `html.rs` data URI —— 同仓同法。
+base64 = "0.22"
+
+# 与 engine/（剪贴板引擎）保持一致的发布档：体积优先、无调试符号。
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true

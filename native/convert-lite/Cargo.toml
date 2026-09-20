@@ -1,0 +1,55 @@
+[package]
+name = "convert-lite"
+version = "0.1.0"
+edition = "2021"
+description = "BetterDesktop 格式转换 自研轻量化核心：零外部二进制，流式/原子输出，诚实进度。"
+# 2026-09-20 vendored in from the experiment tree (convert-lite-lab) as a FORMAL feature:
+# the pure-Rust replacement for the pandoc / LibreOffice / calibre / poppler external engines.
+# Used as a LIBRARY by ../convert-engine (the shipped binary), which keeps the existing
+# capabilities|run|probe + stdin-JSON + NDJSON contract so the .NET side (shell-convert) does not change.
+# The bin (src/main.rs) is a dev/regression harness for the conversion matrix; it is NOT shipped -
+# scripts/publish.ps1 collects only convert-engine.exe.
+# Deliberately NOT copied: the lab's samples/, tools/ (144 python files) and third_party/ (213 MB of
+# FFmpeg shared DLLs) - see docs/plans/2026-09-20-convert-lite-migration.md for the ffmpeg decision.
+
+# 轻量化原则：不打包 calibre/libreoffice/pandoc/ffmpeg 等外部 exe，
+# 全部用纯 Rust 库在进程内完成。依赖清单刻意收敛。
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yaml = "0.9"
+csv = "1"
+pulldown-cmark = "0.12"
+# 文档域：docx 本质是 zip 包 + OOXML XML
+zip = { version = "2", default-features = false, features = ["deflate"] }
+quick-xml = "0.37"
+# image：关掉默认 features，只开本实验真正用的编解码器，缩小编译体积
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "bmp", "webp", "gif"] }
+# PDF 字体嵌入：解析 TTF 拿 cmap/字形信息
+ttf-parser = "0.25"
+# PDF 字体子集化：只保留文档用到的字形
+font-subset = "0.1"
+# 音视频 FFI：运行时加载 FFmpeg dll，手写最小绑定
+libloading = "0.8"
+# HTML 解析（html->md）：容错解析 HTML DOM
+scraper = "0.20"
+# 旧版 Office 二进制：GBK 解码 ANSI 文本（.doc 非 Unicode 路径）
+encoding_rs = "0.8"
+# PDF 文本层提取：FlateDecode 流解压（zip 的 deflate 依赖 flate2）
+flate2 = "1"
+# 压缩/解压：tar 归档（配合 flate2 做 tar.gz）
+tar = "0.4"
+# 加密/解密：AES-256-GCM 认证加密 + PBKDF2 口令派生
+aes-gcm = "0.10"
+sha2 = "0.10"
+pbkdf2 = "0.12"
+rand = "0.8"
+
+[profile.release]
+opt-level = 3
+lto = true
+strip = true
+panic = "abort"
+
+[profile.dev]
+opt-level = 1

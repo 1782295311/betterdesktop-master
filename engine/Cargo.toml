@@ -1,0 +1,43 @@
+[package]
+name = "betterdesktop-clipboard-engine"
+version = "0.1.0"
+edition = "2024"
+description = "BetterDesktop 剪贴板历史独立引擎（Rust）：监听/捕获/存储/IPC，宿主与面板经 NamedPipe 接入"
+
+[dependencies]
+windows = { version = "0.58", features = [
+    "Win32_Foundation",
+    "Win32_System_Threading",
+    "Win32_System_Pipes",
+    "Win32_System_IO",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Memory",
+    "Win32_System_DataExchange",
+    "Win32_System_SystemInformation",
+    "Win32_Storage_FileSystem",
+    "Win32_Security",
+    "Win32_Security_Cryptography",
+    "Win32_Graphics_Gdi",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_UI_Input_KeyboardAndMouse",
+] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# 热键规范串解析：**唯一真相源**（与 core 共用）。原先是本 crate 内的 parse_spec，
+# 抽取原因见 shared/hotkey-spec/src/lib.rs 头部（同一语义被多处消费时，各写一份必然漂移）。
+betterdesktop-hotkey-spec = { path = "../shared/hotkey-spec" }
+sha2 = "0.10"
+# 【P1-5 按应用清洗规则 / P2-2 敏感信息识别】用户自设正则替换 + 内置敏感信息正则。
+# 纯内存匹配、无网络面；编译失败按"跳过该条规则"处理（见 rules.rs / privacy.rs），不 panic。
+regex = "1"
+# gif/webp 仅**解码**（表情包首帧缩略图 + 粘贴时的 CF_DIB 静帧降级）；原文件字节始终原样珍藏，
+# 动画不依赖本解码器 —— 见 docs/plans/2026-09-12-clipboard-sticker-mode.md §3 D1/D2。
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
+base64 = "0.22"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true

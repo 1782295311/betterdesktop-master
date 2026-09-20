@@ -1,0 +1,34 @@
+[package]
+name = "convert-engine"
+version = "0.1.0"
+edition = "2021"
+description = "BetterDesktop 格式转换引擎（Rust 单文件：矩阵 + 探测 + 子进程编排 + 托管转换）"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# S6 托管转换（计划 §14 依赖清单）：md→html / yaml / csv / xml / 图片互转
+pulldown-cmark = "0.13"
+serde_yaml = "0.9"
+csv = "1"
+quick-xml = "0.37"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "bmp", "gif", "tiff", "webp", "ico"] }
+lopdf = "0.34"
+# S7 PDF 加密（PDF 1.4 Standard Security，RC4-128 手写；lopdf 0.34 无 encrypt 写入 API，O1 spike 实证）
+md-5 = "0.10"
+# S9.5 PdfText 引擎（pdftotext 提取 → 托管 OOXML/EPUB/ODT 生成；计划 §14 依赖清单 zip 2）
+zip = "2"
+# S9.5 Heic 引擎（WIC 解码 HEIC/HEIF/AVIF；与 C# WPF WIC 同解码链，系统 HEIF/AV1 扩展决定可用性）
+windows = { version = "0.62", features = ["Win32_Graphics_Imaging", "Win32_System_Com", "Win32_Foundation"] }
+# 2026-09-20 进程内轻量引擎（src/lite.rs）：替代 pandoc / LibreOffice / calibre / poppler
+# 等外部 exe（零外部二进制、进程内调用）；源 crate 是 native/convert-lite（实验项目转正）。
+convert-lite = { path = "../convert-lite" }
+
+[profile.release]
+opt-level = 3
+lto = true
+strip = true
+panic = "abort"
+
+[profile.dev]
+opt-level = 1
