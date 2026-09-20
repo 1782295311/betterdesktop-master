@@ -34,7 +34,11 @@ $components = [ordered]@{
     # 2026-09-18 启动器：出货名 BetterDesktop.exe（用户双击的那个入口）。
     # 放最前：它只额外带来 BetterDesktop.exe/.dll/.deps.json/.runtimeconfig.json 与图标，
     # 共享程序集随后被 Host 的那份覆盖（同一版本，覆盖顺序只影响"哪一份更权威"）。
-    'Launcher' = 'launcher\BetterDesktop.Launcher.csproj'
+    # 2026-09-20 入口层迁移：launcher / host / cli / tray / updater / recovery 一并搬进 packages\entry\，
+    # 旧根目录已删。**这四处是本脚本的陈旧路径，是 publish 最后一道失败点**：
+    # 报错是 "component project missing: ...\launcher\BetterDesktop.Launcher.csproj" ——
+    # 指向一个已经不存在的目录，而旧目录在 HEAD 里确实还有（未提交删除时）⇒ 极易被读成项目没建好。
+    'Launcher' = 'packages\entry\launcher\BetterDesktop.Launcher.csproj'
     'Host'     = 'packages\entry\host\BetterDesktop.Host.csproj'
     'Cli'      = 'packages\entry\cli\BetterDesktop.Cli.csproj'
     # 2026-09-17 桌面控制独立化：主程序没跑时「桌面控制」菜单靠它（原生扩展 → Cli --menu-batch → 本 exe）。
@@ -42,9 +46,9 @@ $components = [ordered]@{
     'DesktopControl' = 'packages\shell\shell-desktop-control\BetterDesktop.DesktopControl.csproj'
     # 2026-09-17 托盘=中转站：设置中心独立进程（不依赖 Host 打开，关窗即退省内存）。
     'Settings' = 'packages\shell\shell-settings-host\BetterDesktop.Settings.csproj'
-    'Tray'     = 'tray\BetterDesktop.Tray.csproj'
-    'Updater'  = 'updater\BetterDesktop.Updater.csproj'
-    'Recovery' = 'recovery\BetterDesktop.Recovery.csproj'
+    'Tray'     = 'packages\entry\tray\BetterDesktop.Tray.csproj'
+    'Updater'  = 'packages\entry\updater\BetterDesktop.Updater.csproj'
+    'Recovery' = 'packages\entry\recovery\BetterDesktop.Recovery.csproj'
 }
 
 # Files that MUST exist in the final folder, otherwise the release is broken.
