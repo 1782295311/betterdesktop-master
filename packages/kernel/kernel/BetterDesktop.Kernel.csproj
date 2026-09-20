@@ -1,13 +1,18 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <TargetFramework>net8.0-windows10.0.19041.0</TargetFramework>
-    <Nullable>enable</Nullable>
-    <ImplicitUsings>enable</ImplicitUsings>
-    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
-    <Platforms>x64</Platforms>
     <RootNamespace>BetterDesktop.Kernel</RootNamespace>
     <AssemblyName>BetterDesktop.Kernel</AssemblyName>
   </PropertyGroup>
+
+  <ItemGroup>
+    <!--
+      跨进程统一诊断日志（异步 / 有界 / 自治理 / 崩溃刷盘）。
+      源文件放在仓库 shared/logging/ 下，由各进程按 <Compile Include Link> 各编译一份：
+      tray / updater / watchdog / recovery 有"零包引用"硬约束，不能反向依赖本工程，
+      而日志格式与轮转策略又必须全进程一致，故用共享源而非包引用。
+    -->
+    <Compile Include="..\..\..\shared\logging\*.cs" LinkBase="Logging" />
+  </ItemGroup>
 
 </Project>

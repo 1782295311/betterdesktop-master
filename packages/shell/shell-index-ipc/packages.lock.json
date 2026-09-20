@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "dependencies": {
+    "net8.0-windows10.0.19041": {
+      "betterdesktop.kernel": {
+        "type": "Project"
+      }
+    }
+  }
+}

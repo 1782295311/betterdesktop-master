@@ -31,6 +31,10 @@ $gates = @(
     [pscustomobject]@{ Id = 'doc-budgets';       Script = 'verify-doc-budgets.ps1';       Needs = @(); Fast = $true },
     [pscustomobject]@{ Id = 'gate-registry';     Script = 'verify-gate-registry.ps1';     Needs = @(); Fast = $true },
     [pscustomobject]@{ Id = 'architecture-guard'; Script = 'verify-architecture-guard.ps1'; Needs = @(); Fast = $false },
+    # 2026-09-20 边界与红线：依赖拓扑（无环 / 单向）+ 电源（不得持有唤醒请求）+ 术语禁词。
+    # 它是**面**上的规则（不显形于任何单个文件，只显形于全仓形态），与 architecture-guard 的**点**规则互补。
+    # 实测 ~6s，进 Fast 通道（便宜到可以每次编辑都跑）。
+    [pscustomobject]@{ Id = 'boundaries';           Script = 'verify-boundaries.ps1';           Needs = @(); Fast = $true },
     [pscustomobject]@{ Id = 'host-log-sink';     Script = 'verify-host-log-sink.ps1';     Needs = @(); Fast = $false },
     [pscustomobject]@{ Id = 'cross-asm-event';   Script = 'verify-no-cross-assembly-event.ps1'; Needs = @(); Fast = $false },
     [pscustomobject]@{ Id = 'native-convergence'; Script = 'verify-native-convergence.ps1';     Needs = @(); Fast = $false },
@@ -44,7 +48,10 @@ $gates = @(
     # 2026-09-17 安装器级：安装/卸载脚本的纯 ASCII、跨进程字面量与必检清单一致性
     [pscustomobject]@{ Id = 'system-integration'; Script = 'verify-system-integration.ps1'; Needs = @(); Fast = $false },
     # 2026-09-19 BDMC1 跨语言协议契约：结构 + 三方常量一致 + 两侧跑同一批共享向量（用户补充的 CI 契约测试）
-    [pscustomobject]@{ Id = 'protocol-contract'; Script = 'verify-protocol-contract.ps1'; Needs = @(); Fast = $false }
+    [pscustomobject]@{ Id = 'protocol-contract'; Script = 'verify-protocol-contract.ps1'; Needs = @(); Fast = $false },
+    # 2026-09-20 C1 五层防线机检：管道有界读 / 参数不拼接 / 反序列化限深 / 原生加载路径 / 明文密钥 /
+    # 空 catch / 原生编译加固。实测 ~2s（只扫源码目录），故进 Fast 通道 —— 它便宜到可以每次编辑都跑。
+    [pscustomobject]@{ Id = 'security'; Script = 'verify-security.ps1'; Needs = @(); Fast = $true }
 )
 
 if ($List) {

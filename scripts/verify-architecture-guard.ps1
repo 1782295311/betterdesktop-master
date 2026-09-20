@@ -1,7 +1,7 @@
 # 门禁 architecture-guard（架构守卫）
 #
 # 现有一条规则（ADR-003 D2）:
-#   R0 · 宿主不得携带业务 UI：host/ 下除 App.xaml 外的 .xaml 视为违规
+#   R0 · 宿主不得携带业务 UI：packages/entry/host/ 下除 App.xaml 外的 .xaml 视为违规
 #
 # 本批新增三条**边界棘轮**规则（计划 docs/plans/2026-09-18-on-demand-core-architecture.md §5 C21/C22）:
 #   R1 · lifecycle-owner  —— 拉起「我们自己的 exe」（BetterDesktop.*.exe）只能由生命周期所有者发起
@@ -147,7 +147,15 @@ $script:BoundaryRules = @{
         # 门禁却报"条目已失效"，因为规则根本没匹配到）。这不是清单的问题，是规则的盲区。
         NeedAll   = @(
             'Process\.Start|ProcessStartInfo|CreateProcessW|StartDetached|ShellExecuteW|spawn_detached|run_and_wait',
-            'BetterDesktop\.[A-Za-z][A-Za-z0-9]*\.exe'
+            # 【2026-09-20 修】exe 名必须**允许多段**：旧口径 `BetterDesktop\.[A-Za-z][A-Za-z0-9]*\.exe`
+            # 只匹配"两段名"（`BetterDesktop.Host.exe`、`BetterDesktop.DesktopControl.exe`），
+            # 于是**三段名全部对本规则隐形**：`BetterDesktop.Index.Engine.exe`、
+            # `BetterDesktop.Clipboard.Engine.exe`、`BetterDesktop.Clipboard.Panel.exe`。
+            # 实测后果：`packages/shell/shell-index-ipc/IndexEngineLauncher.cs`（`EnsureEngine` +
+            # `StartDetached`，被 shell-search / shell-app-source 直接调用）从未命中本规则 ——
+            # 真机探针反而抓到了它拉起的、**父进程不是 core** 的 `BetterDesktop.Index.Engine.exe`。
+            # 规则写窄一点是"误报更少"，但规则**该管的人不管**时，误报为零也不值得。
+            'BetterDesktop(?:\.[A-Za-z][A-Za-z0-9]*)+\.exe'
         )
     }
     'hotkey-registrar' = @{
@@ -269,21 +277,30 @@ if ($MyInvocation.InvocationName -ne '.') {
     $allFails = @()
 
     # R0：宿主不得携带业务 UI
-    $hostDir = Join-Path $root 'host'
+    $hostDir = Join-Path $root 'packages\entry\host'
     # 豁免清单（ADR-003 D2）：SplashWindow 为宿主启动画面（插件加载前须由宿主展示），只减不增
-    $allowedXaml = @('host\Views\SplashWindow.xaml')
+    $allowedXaml = @('packages\entry\host\Views\SplashWindow.xaml')
     $businessXaml = @(Get-BusinessXamlPaths $hostDir | Where-Object { (Get-RelPath $_) -notin $allowedXaml })
     if ($businessXaml.Count -gt 0) {
         $allFails += @($businessXaml | ForEach-Object { "$(Get-RelPath $_) — 宿主不得携带业务 UI，该窗口应由 shell 插件提供" })
     }
-    Write-GateStage 'R0 完成（host/*.xaml）'
+    Write-GateStage 'R0 完成（packages/entry/host/*.xaml）'
 
     # R1/R2/R3：边界棘轮
     $manifestPath = Join-Path $root 'scripts\manifests\architecture-allowlist.json'
     if (-not (Test-Path $manifestPath -PathType Leaf)) {
         Write-GateFail 'architecture-guard' @("$manifestPath — 边界棘轮清单缺失（R1/R2/R3 无法判定）")
     }
-    $manifest = Get-Content $manifestPath -Raw | ConvertFrom-Json
+    # 【2026-09-20 加固】清单解析失败必须**精确报"清单坏了"**，不能让它退化成"所有条目都不存在"。
+    # 实测代价：一次手改把直引号写进 JSON 字符串（合法 XML/PS 习惯，非法 JSON），
+    # 门禁于是报出 **29 条**"未登记"（每条都是假的）—— 真正的原因一行都没说。
+    # 规则本身没错（它确实什么都读不到），错的是**报错指向了错误的方向**。
+    try {
+        $manifest = Get-Content $manifestPath -Raw | ConvertFrom-Json
+    }
+    catch {
+        Write-GateFail 'architecture-guard' @("$manifestPath — 清单无法解析（JSON 语法错误）：$($_.Exception.Message)。**本次判定无效**，请先修清单；不要把下面的『未登记』当真。")
+    }
 
     foreach ($ruleId in @('lifecycle-owner', 'hotkey-registrar', 'settings-writer')) {
         $matched = @(Get-RuleMatchedFiles $root $ruleId)

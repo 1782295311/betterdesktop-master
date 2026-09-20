@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>BetterDesktop.Shell.Clipboard.Ipc</RootNamespace>
+    <AssemblyName>BetterDesktop.Shell.Clipboard.Ipc</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="BetterDesktop.Shell.Clipboard.Ipc.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\api\BetterDesktop.Api.csproj" />
+    <!--
+      2026-09-20：新增。引擎/面板/截图的启停不再由本包自己 Process.Start + Kill，
+      而是请 core 做（CoreComponents → BetterDesktop.MenuCmd 控制管道）。
+      kernel 是零依赖契约层 → surface → kernel 合法，且不产生环。
+    -->
+    <ProjectReference Include="..\..\kernel\kernel\BetterDesktop.Kernel.csproj" />
+  </ItemGroup>
+
+</Project>

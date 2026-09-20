@@ -122,6 +122,21 @@ const string name = "BetterDesktop.Host.exe";
         Remove-Item -Recurse -Force $tmp
     }
 
+    It '【回归钉子】三段 exe 名同样命中（旧口径只认两段，三段名对规则全隐形）' {
+        $tmp = New-TempTree
+        # 2026-09-20：`BetterDesktop\.[A-Za-z][A-Za-z0-9]*\.exe` 匹配不了 BetterDesktop.Index.Engine.exe，
+        # 于是 shell-index-ipc/IndexEngineLauncher.cs 这个**真实的第二生命周期所有者**从未被本规则看到
+        #（真机探针先抓到：该引擎实例的父进程不是 core）。这条用例把"必须允许多段"钉住。
+        Add-File $tmp 'multi.cs' 'IndexEngineLauncher.StartDetached(@"C:\x\BetterDesktop.Index.Engine.exe", log);'
+        Add-File $tmp 'multi2.cs' 'var p = Process.Start("BetterDesktop.Clipboard.Panel.exe");'
+        Add-File $tmp 'two.cs' 'var p = Process.Start("BetterDesktop.Host.exe");'
+
+        $hit = @(Get-RuleMatchedFiles $tmp 'lifecycle-owner')
+        $hit.Count | Should Be 3
+
+        Remove-Item -Recurse -Force $tmp
+    }
+
     It '只扫 .cs 与 .rs，不扫其它扩展名' {
         $tmp = New-TempTree
         Add-File $tmp 'x.md' 'Process.Start("BetterDesktop.Host.exe");'
@@ -139,20 +154,20 @@ const string name = "BetterDesktop.Host.exe";
 
 Describe 'Test-AllowEntryMatch（清单条目匹配）' {
     It '以 / 或 \ 结尾 = 目录前缀匹配' {
-        (Test-AllowEntryMatch 'launcher/Services/CliRunner.cs' 'launcher/Services/') | Should Be $true
-        (Test-AllowEntryMatch 'launcher\Services\CliRunner.cs' 'launcher/Services/') | Should Be $true
+        (Test-AllowEntryMatch 'packages/entry/launcher/Services/CliRunner.cs' 'packages/entry/launcher/Services/') | Should Be $true
+        (Test-AllowEntryMatch 'packages/entry/launcher\Services\CliRunner.cs' 'packages/entry/launcher/Services/') | Should Be $true
         (Test-AllowEntryMatch 'launcher\Services\CliRunner.cs' 'launcher\Services\') | Should Be $true
-        (Test-AllowEntryMatch 'launcher/Other.cs' 'launcher/Services/') | Should Be $false
+        (Test-AllowEntryMatch 'packages/entry/launcher/Other.cs' 'packages/entry/launcher/Services/') | Should Be $false
     }
 
     It '其余 = 精确匹配文件路径，且分隔符不敏感' {
-        (Test-AllowEntryMatch 'host\Bootstrap.cs' 'host\Bootstrap.cs') | Should Be $true
-        (Test-AllowEntryMatch 'host\Bootstrap.cs' 'host/Bootstrap.cs') | Should Be $true
-        (Test-AllowEntryMatch 'host\Bootstrap.cs' 'host\BootstrapX.cs') | Should Be $false
+        (Test-AllowEntryMatch 'packages\entry\host\Bootstrap.cs' 'packages\entry\host\Bootstrap.cs') | Should Be $true
+        (Test-AllowEntryMatch 'packages\entry\host\Bootstrap.cs' 'packages/entry/host/Bootstrap.cs') | Should Be $true
+        (Test-AllowEntryMatch 'packages\entry\host\Bootstrap.cs' 'packages\entry\host\BootstrapX.cs') | Should Be $false
     }
 
     It '前缀不误伤同名前缀目录（launcher/Services/ 不匹配 launcher/ServicesExtra/）' {
-        (Test-AllowEntryMatch 'launcher/ServicesExtra/x.cs' 'launcher/Services/') | Should Be $false
+        (Test-AllowEntryMatch 'packages/entry/launcher/ServicesExtra/x.cs' 'packages/entry/launcher/Services/') | Should Be $false
     }
 }
 
@@ -203,8 +218,8 @@ Describe 'Get-BoundaryViolations（棘轮：违规 + 失效条目）' {
             rules = [pscustomobject]@{
                 'lifecycle-owner' = [pscustomobject]@{
                     allowed = @(
-                        [pscustomobject]@{ path = 'launcher/Services/'; why = 'x'; removeBy = 'n/a' },
-                        [pscustomobject]@{ path = 'host\Bootstrap.cs'; why = 'x'; removeBy = 'S6' }
+                        [pscustomobject]@{ path = 'packages/entry/launcher/Services/'; why = 'x'; removeBy = 'n/a' },
+                        [pscustomobject]@{ path = 'packages\entry\host\Bootstrap.cs'; why = 'x'; removeBy = 'S6' }
                     )
                 }
             }
@@ -213,22 +228,22 @@ Describe 'Get-BoundaryViolations（棘轮：违规 + 失效条目）' {
 
     It '未登记的命中文件 → 违规；同时未被覆盖的条目 → 失效' {
         $tmp = New-TempTree
-        # launcher/Services/ 被覆盖 → 不算失效；host\Bootstrap.cs 未被命中 → 失效；tray/… 未登记 → 违规
+        # packages/entry/launcher/Services/ 被覆盖 → 不算失效；host\Bootstrap.cs 未被命中 → 失效；tray/… 未登记 → 违规
         $matched = @(
-            (Join-Path $tmp 'launcher\Services\CliRunner.cs'),
+            (Join-Path $tmp 'packages\entry\launcher\Services\CliRunner.cs'),
             (Join-Path $tmp 'tray\ProcessBridge.cs')
         )
         $res = Get-BoundaryViolations -Root $tmp -Manifest $script:Manifest -RuleId 'lifecycle-owner' -MatchedFiles $matched
         $res.Violations.Count | Should Be 1
         $res.Violations[0] | Should Be 'tray\ProcessBridge.cs'
         $res.Stale.Count | Should Be 1
-        $res.Stale[0] | Should Be 'host\Bootstrap.cs'
+        $res.Stale[0] | Should Be 'packages\entry\host\Bootstrap.cs'
         Remove-Item -Recurse -Force $tmp
     }
 
     It '已登记的命中文件 → 无违规' {
         $tmp = New-TempTree
-        $matched = @((Join-Path $tmp 'launcher\Services\CliRunner.cs'), (Join-Path $tmp 'host\Bootstrap.cs'))
+        $matched = @((Join-Path $tmp 'packages\entry\launcher\Services\CliRunner.cs'), (Join-Path $tmp 'packages\entry\host\Bootstrap.cs'))
         $res = Get-BoundaryViolations -Root $tmp -Manifest $script:Manifest -RuleId 'lifecycle-owner' -MatchedFiles $matched
         $res.Violations.Count | Should Be 0
         $res.Stale.Count | Should Be 0
@@ -237,11 +252,11 @@ Describe 'Get-BoundaryViolations（棘轮：违规 + 失效条目）' {
 
     It '已登记但现实中不再命中 → 失效条目（强制收缩清单）' {
         $tmp = New-TempTree
-        $matched = @((Join-Path $tmp 'launcher\Services\CliRunner.cs'))
+        $matched = @((Join-Path $tmp 'packages\entry\launcher\Services\CliRunner.cs'))
         $res = Get-BoundaryViolations -Root $tmp -Manifest $script:Manifest -RuleId 'lifecycle-owner' -MatchedFiles $matched
         $res.Violations.Count | Should Be 0
         $res.Stale.Count | Should Be 1
-        $res.Stale[0] | Should Be 'host\Bootstrap.cs'
+        $res.Stale[0] | Should Be 'packages\entry\host\Bootstrap.cs'
         Remove-Item -Recurse -Force $tmp
     }
 

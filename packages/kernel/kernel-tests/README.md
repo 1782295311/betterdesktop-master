@@ -1,6 +1,6 @@
 # BetterDesktop.Kernel.Tests
 
-内核三机制契约测试包（服务图 / 依赖驱动重载 / effect 逆序清理）+ 事件服务契约测试（ADR-002 P1 验收判据）。
+内核三机制契约测试包（服务图 / 依赖驱动重载 / effect 逆序清理）+ 事件服务契约测试 + 电源管理（PowerManagementTests）与资源治理（ResourceGovernorTests）契约测试（ADR-002 P1 验收判据）。
 
 ## 依赖
 

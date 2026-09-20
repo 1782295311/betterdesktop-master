@@ -51,6 +51,12 @@ public sealed class ArchitectureGuardTests
             {
                 continue;
             }
+            // packages/entry 是入口可执行层（CLI/恢复/更新器等 exe），Console 输出是其对外行为（带 Quiet 门控），
+            // 与业务库"应走日志框架"的禁令不同 —— 入口程序写控制台是职责，不适用本禁令（2026-09-20 目录重组说明）。
+            if (file.Contains("\\entry\\"))
+            {
+                continue;
+            }
             var text = File.ReadAllText(file);
             var match = pattern.Match(text);
             Assert.False(match.Success, $"{file} 命中日志禁令：{match.Value}");

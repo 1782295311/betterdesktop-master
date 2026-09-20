@@ -32,7 +32,12 @@ public sealed class PowerManagement : IPowerManagement, IPlugin
         // 启动时立即执行：降低优先级 + 允许系统休眠
         LowerProcessPriority();
         AllowSystemSleep();
-        _logger.Info("电源管理已启动：进程优先级 BelowNormal，系统休眠已放行");
+
+        // 开始监听挂起/恢复：产品此前没有任何电源事件处理，导致现代待机（S0ix）下
+        // 高频轮询/渲染继续烧 CPU（笔记本风扇长转），恢复瞬间又以原频率猛撞未就绪的设备与 COM。
+        SystemPowerMonitor.Current.Start();
+
+        _logger.Info("电源管理已启动：进程优先级 BelowNormal，系统休眠已放行，挂起/恢复监听已挂载");
 
         return Task.CompletedTask;
     }
@@ -42,6 +47,10 @@ public sealed class PowerManagement : IPowerManagement, IPlugin
     {
         // 恢复系统休眠抑制（如果之前被其他程序抑制过）
         AllowSystemSleep();
+
+        // 卸载时停止电源监听（幂等）
+        SystemPowerMonitor.Current.Dispose();
+
         return Task.CompletedTask;
     }
 

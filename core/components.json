@@ -80,18 +80,56 @@
     },
     {
       "name": "clipboard-panel",
-      "label": "剪贴板历史面板",
+      "label": "剪贴板历史面板（装配入口）",
       "exe": "BetterDesktop.Clipboard.Panel.exe",
       "desired": "on-demand",
       "tier": "extension",
       "type": "panel",
-      "args": "--open",
       "gate": "extensions.clipboard-history.enabled",
       "_gateNote": [
         "S4-3 补上：原先本表**没有** gate，而 Watchdog 一直按 extensions.clipboard-history.enabled 门控它。",
         "缺这条 ⇒ 用户关掉剪贴板历史后，任一入口（托盘 / 热键 / 宿主菜单）仍能把它拉起来，",
         "违反『设置是唯一真相源』；有了它，核心的 must_stop 还会在开关关闭时把已在跑的面板停掉",
         "（对齐 Watchdog 原先的 StopWhenDisabled 语义）。"
+      ],
+      "_argsNote": [
+        "【2026-09-20 去掉 args】此前这里是 args = --open —— 于是『确保入口存在』与『打开面板』",
+        "变成同一件事，宿主启动时调用它就会把完整面板弹出来。面板 exe 是单实例（带 --open 的第二次",
+        "启动会把『打开』转交给已在跑的实例），所以这个差别是**用户可见**的，必须在表里分开表达：",
+        "本条目 = 装配常驻入口（不带参数）；『打开面板』= 下面的 clipboard-panel-open。"
+      ]
+    },
+    {
+      "name": "clipboard-panel-open",
+      "label": "剪贴板历史面板（打开）",
+      "exe": "BetterDesktop.Clipboard.Panel.exe",
+      "desired": "on-demand",
+      "tier": "extension",
+      "type": "tool",
+      "args": "--open",
+      "gate": "extensions.clipboard-history.enabled",
+      "_note": [
+        "『把面板打开给用户看』这个**动作**（与上面的『装配入口』是两个不同的动作，见其 _argsNote）。",
+        "type=tool：一次性请求，跑完即退、不进监护名单 —— 面板是否常驻由上面那条决定。",
+        "与 capture（同样『固定参数的短命动作』）是同一种建模方式。"
+      ]
+    },
+    {
+      "name": "desktop-controls",
+      "label": "桌面控制菜单",
+      "exe": "BetterDesktop.DesktopControl.exe",
+      "desired": "on-demand",
+      "tier": "extension",
+      "type": "tool",
+      "args": "--desktop-controls",
+      "_note": [
+        "【2026-09-20 新增，可达性补缺】桌面控制菜单此前**不在表里** —— 它只能由 CLI 自己",
+        "定位 exe + Process.Start 拉起（BetterDesktop.Cli/HeadlessExecutor.LaunchDesktopControls）。",
+        "于是『从 core 出发能到达什么』这张图里缺了它：core 既看不见也管不着这条路径。",
+        "参数写进表里还顺手消掉一个真机坑：DesktopControl **无参会退化成拉起常驻桌面服务**，",
+        "『漏传 --desktop-controls』的症状是『点了桌面控制什么都不出来，还起了个后台常驻服务』——",
+        "参数由组件表管之后，这个坑在结构上不可能再犯（调用方没有机会把参数拼错）。",
+        "【无 gate】桌面控制菜单是『把自绘桌面开关回来』的入口，桌面被关掉时它必须仍能打开。"
       ]
     },
     {

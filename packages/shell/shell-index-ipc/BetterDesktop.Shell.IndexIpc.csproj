@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!-- TFM/平台必须与既有 shell 包一致（slnx 构建纪律；计划 §14 禁区 ⑦） -->    <RootNamespace>BetterDesktop.Shell.IndexIpc</RootNamespace>
+    <AssemblyName>BetterDesktop.Shell.IndexIpc</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="BetterDesktop.Shell.IndexIpc.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!--
+      2026-09-20：新增。引擎的启停不再由本包自己 Process.Start，而是请 core 做
+      （CoreComponents.Send → BetterDesktop.MenuCmd 控制管道）。
+      kernel 是零依赖契约层，本包是壳层 → 依赖方向 surface → kernel 合法，且不产生环。
+    -->
+    <ProjectReference Include="..\..\kernel\kernel\BetterDesktop.Kernel.csproj" />
+  </ItemGroup>
+
+</Project>
