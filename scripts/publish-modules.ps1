@@ -34,13 +34,11 @@ $root = Split-Path -Parent $PSScriptRoot
 
 $required = @(
     'BetterDesktop.Host.exe',
-    'BetterDesktop.Agent.exe',
     'BetterDesktop.Cli.exe',
     'BetterDesktop.DesktopControl.exe',
     'BetterDesktop.Settings.exe',
     'BetterDesktop.Tray.exe',
     'BetterDesktop.Updater.exe',
-    'BetterDesktop.Watchdog.exe',
     'BetterDesktop.Recovery.exe',
     'convert-engine.exe',
     'cordis.yml',

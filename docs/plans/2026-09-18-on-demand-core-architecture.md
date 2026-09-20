@@ -2863,6 +2863,41 @@ B2 记着那已经搞坏过一次面板（多副本偏斜 + 跨版本替换）�
    不在本轮范围内，但 §7.3 第 5 步做真机验证时应当顺手确认一句
    —— "同一种组件不该有两个实例"是 S5-3 的 `state` 五态本该暴露的东西。
 
+#### 13.25 S4-5 全仓检索（2026-09-20）
+
+**范围**：1150 个文件（排除 `packages/` `bin/` `obj/` `target/` `docs/`）。
+**命中 456 处 `BetterDesktop.Agent` / `BetterDesktop.Watchdog`** —— 但检索的价值不在"找到多少"，
+而在**把"看起来是残留"的逐类定性**：
+
+| 类 | 位置 | 定性 |
+|---|---|---|
+| **构建产物** | `dist/**`（占绝大多数） | **非问题**：`.gitignore` 已含 `dist/` |
+| **测试夹具字符串** | `core/src/process.rs`、`security.rs`（拿 `BetterDesktop.Agent.exe` 当样例路径） | **非问题且有据**：`architecture-allowlist.json` 已登记 `core/src/process.rs`，理由写明"**登记而非改夹具** —— 靠改名让门禁转绿，会让将来真正新增的拉起点失去这层扫描" |
+| **历史清理名单** | `recovery/Program.cs`、`scripts/install-betterdesktop.ps1`（`$componentNames` / `$agentExe`）、`uninstall-betterdesktop.ps1`（`$startupValueNames` / `$agentExe`） | **保留**：它们是"**从旧版升级时**要停的进程 / 要清的 Run 值"。删掉 = 老用户机器上的残留不再被清（`known-exceptions.md` #5） |
+| **死代码** | `updater/ResidentGate.cs` 的 `StartFromTarget(…, "BetterDesktop.Watchdog.exe", …)` | **不改**：有 `if (stopped.Watchdog)` 守卫，而 Watchdog 已不存在 ⇒ 恒 `false` ⇒ 不构成用户可见故障（与 `Applier.cs` 同形态，`known-exceptions.md` #6） |
+| **必检清单遗漏** ✗ | `scripts/publish-modules.ps1` 的 `$required` 仍有 `Agent.exe` / `Watchdog.exe` | **已删（真问题）** —— 而且**这是上一轮的遗漏**：上轮只 grep 了 `agent.yml`，没 grep `Agent.exe` |
+| 历史文档 | `.agents/notes/**`、`README.md` | 非问题（README 属并行工作流区域，未提交） |
+
+**三份必检清单现已一致**：`publish.ps1` / `publish-modules.ps1` / `install-betterdesktop.ps1`
+都是同一组 7 个 exe（Cli / DesktopControl / Host / Recovery / Settings / Tray / Updater），
+`system-integration` 门禁 PASS 复核。
+
+**教训（值得单列）**：同一个语义有**多种书写形态**（`agent.yml` / `BetterDesktop.Agent.exe` /
+`BetterDesktop.Agent`）。上一轮按**一种形态** grep 就以为"清干净了" ——
+这类遗漏只能靠"**先枚举形态、再逐个 grep**"来避免。这与 §13.22.5 的"形态 A/C 扫干净 ≠ B 不存在"
+是同一教训的不同侧写。
+
+**同时完成的一项 S4 验证**："core 是唯一 `MenuCmd` 服务端"（**只完成一半**）
+
+计划里写着"判据不能靠删了 Host 进程推断 —— 服务端是**代码**不是进程，须显式核对"。
+
+- **运行时已核对** ✓：`\\.\pipe\` 下只有 `Clipboard.Engine` / `DesktopCmd` / `MenuCmd` 三条，
+  且 Host **没有在运行**（进程表只有 core + Clipboard.Engine/Panel + DesktopControl×2）⇒ `MenuCmd` 归 core。
+- **代码侧仍未做** ✗：`host/MenuCommandPipe.cs` 的服务端还在，那是 S4 的"新增独立一步"，
+  需要改 `host/` ⇒ 卡在归属（§7.2 依赖 3）。
+
+⇒ **本条必须这样记成半成品** —— 否则下一轮会以为"验证过了"。
+
 ### 13.15 S4-2 第 2 步：core 的注册**触发** + `RepairGate`（2026-09-19）
 
 `cargo test --release` **145/145**（+4），0 warning。core 侧从"只读巡检"变为"巡检 + 一次性自动修复"。
