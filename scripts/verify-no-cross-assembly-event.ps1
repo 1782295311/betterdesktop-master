@@ -12,6 +12,12 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+
+# 进度反馈（与 lib/common.ps1 同一契约）。本脚本**不 dot-source** 它：它自带 `$RepoRoot` 参数，
+# 而 dot-source 会写 `$script:RepoRoot`、把调用方传进来的值覆盖掉（同类坑见 verify-system-integration.ps1 的注释）。
+# 所以这里内联三行 —— 契约一致比复用一行代码更要紧。
+$gateStart = [System.Diagnostics.Stopwatch]::StartNew()
+Write-Host "[GATE] no-cross-assembly-event 开始 $((Get-Date).ToString('HH:mm:ss'))"
 $violations = New-Object System.Collections.Generic.List[string]
 
 # ---- 1. 枚举所有 .csproj，建立「项目目录 → 项目名」映射 ----
@@ -161,9 +167,11 @@ if ($newViolations.Count -gt 0) {
     Write-Host ""
     Write-Host "修复指引：将 interface event 替换为 IEventBus.EmitAsync/On，见 ADR-002 D4。"
     Write-Host "若属计划内已知违规，请加入脚本 `$knownViolations 基线表。"
+    Write-Host "[GATE] no-cross-assembly-event 失败 总耗时 $([int]$gateStart.Elapsed.TotalSeconds)s" -ForegroundColor Red
     exit 1
 } else {
     Write-Host ""
     Write-Host "PASS: 未发现新增跨程序集 event 订阅。" -ForegroundColor Green
+    Write-Host "[GATE] no-cross-assembly-event 完成 总耗时 $([int]$gateStart.Elapsed.TotalSeconds)s"
     exit 0
 }

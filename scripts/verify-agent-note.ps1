@@ -40,6 +40,7 @@ function Get-AgentNoteContentViolations([string[]]$Lines, [string]$Lifecycle) {
 
 # 门禁主体（dot-source 时跳过）
 if ($MyInvocation.InvocationName -ne '.') {
+    Write-GateStart 'agent-note'
     $root = Get-RepoRoot
     $notes = Join-Path $root '.agents\notes'
     $classes = @('architecture', 'feature', 'bug-fix', 'process', 'testing', 'simplification')

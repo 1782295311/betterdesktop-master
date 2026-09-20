@@ -15,6 +15,7 @@ function Test-SealMatches([string]$ActualHash, [string]$RecordedHash) {
 
 # 门禁主体（dot-source 时跳过）
 if ($MyInvocation.InvocationName -ne '.') {
+    Write-GateStart 'archived-notes'
     $root = Get-RepoRoot
     $arch = Join-Path $root '.agents\notes\archived'
     $manifestPath = Join-Path $arch 'manifest.json'

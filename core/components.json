@@ -1,0 +1,125 @@
+{
+  "_comment": [
+    "core 的组件表 —— Rust Core 的唯一业务数据（计划 §6.1-A）。",
+    "纪律：新增能力只加表项，不改 core 代码结构（未来 bd-infer / bd-world / GPU 仲裁 / 安全扫描 走同一张表）。",
+    "",
+    "desired（期望状态）：running = core 保证它在跑（缺则拉起，受 gate 约束）；on-demand = core 从不主动拉起，只在收到 start 请求时拉；stopped = core 停掉且不再拉。",
+    "tier（层级归属，决定监护规则）：",
+    "  foundation       = 地基，永不缺席、永不停（core 自身级别）",
+    "  infrastructure   = 无 UI、被多方消费的能力（引擎/推理网关），按需拉起 + 空闲自退",
+    "  surface          = 构成用户感知到的「桌面这张脸」的组件 —— 判据：关掉它，用户会问『我的桌面怎么变了』",
+    "  extension        = 其余按需件（含带头 UI 的独立弹窗：设置中心 / 剪贴板面板 / 通知面板）",
+    "  system-extension = 按需，且可请 core 代为拉起其它层（AI 管家属此层，自己不 Process.Start）",
+    "type（形态）：process = 常驻/按需进程；tool = 一次性工具（跑完即退，不守护）；panel = UI 面板。",
+    "power（电源策略）：",
+    "  onSuspend = freeze|stop|notify（默认 freeze）",
+    "  onResume  = reconcile|probe-and-reinit|restart|reinit|notify（默认 reconcile）",
+    "              reconcile        只判「进程在不在」，适合 extension 层",
+    "              probe-and-reinit 先探测健康、不健康才重建，适合 surface 层（进程活着≠还能用：",
+    "                               DWM 重建→WPF 花屏/Z-order 错；D3D12 设备丢失→渲染不出来；",
+    "                               explorer 重启→ShellDLL 钩子失效）",
+    "              reinit           无脑重建外部资源（GPU 上下文等），适合 infrastructure 层",
+    "  keepAwake = false|user-triggered —— 填 'always' 会被 schema 拒绝（core 不得无条件阻止系统睡眠）",
+    "gate = settings.json 里的扁平键；键为 false → 停掉且不拉回。为 null/缺省 = 无开关。",
+    "exe 相对 core 自身目录解析（同目录优先，其次 %LOCALAPPDATA%\\BetterDesktop）。",
+    "",
+    "【surface 的 onResume 纪律】声明 tier=surface 的条目，onResume 必须显式写 probe-and-reinit；",
+    "  留空（=默认 reconcile）会导致唤醒后窗口花屏却无人重建。",
+    "",
+    "未来条目的形态（现在不实现，schema 已留位）：",
+    "  { \"name\": \"infer\",     \"tier\": \"infrastructure\", \"type\": \"process\", \"desired\": \"on-demand\", \"power\": { \"onResume\": \"reinit\" } }",
+    "  { \"name\": \"world\",     \"tier\": \"surface\",        \"type\": \"process\", \"desired\": \"on-demand\", \"power\": { \"onResume\": \"probe-and-reinit\" } }",
+    "  { \"name\": \"scan-file\", \"tier\": \"infrastructure\", \"type\": \"tool\",    \"desired\": \"on-demand\" }"
+  ],
+  "components": [
+    {
+      "name": "shell",
+      "label": "主程序（菜单栏 / Dock）",
+      "exe": "BetterDesktop.Host.exe",
+      "desired": "running",
+      "_removeAt": "S4-5",
+      "_note": [
+        "临时监护（S4-3 → S4-5）：Host 是**用户可关的壳**，终态应为 on-demand（用户关掉就该彻底消失）。",
+        "此间由 core 接管原先 Watchdog 的守护，是为了过渡期不出现『壳崩了没人拉』的窗口。",
+        "S4-5 删 host 时把 desired 改回 on-demand 并删掉本行 —— core 启动时会打印这条临时状态，",
+        "所以它不会静默留在表里。"
+      ],
+      "stopFlag": "host-stopped.flag",
+      "tier": "surface",
+      "type": "process",
+      "power": { "onSuspend": "freeze", "onResume": "probe-and-reinit", "keepAwake": false }
+    },
+    {
+      "name": "desktop",
+      "label": "自绘桌面",
+      "exe": "BetterDesktop.DesktopControl.exe",
+      "desired": "running",
+      "tier": "surface",
+      "type": "process",
+      "gate": "components.desktop",
+      "stopFlag": "desktop-stopped.flag",
+      "liveness": "pipe",
+      "livenessPipe": "BetterDesktop.DesktopCmd",
+      "_livenessNote": [
+        "**必须按管道判活，不能按进程名**（审计 #9 的真机事故）：",
+        "『桌面控制菜单』是短命进程、与常驻服务**同名**（都是 BetterDesktop.DesktopControl.exe）。",
+        "按进程名判活会把『正在弹菜单』读成『服务在运行』→ 真服务死了不被拉起（自绘桌面消失且不自愈）。",
+        "判据与 watchdog/Program.cs 的 Desktop 目标、shell-core/DesktopControl/DesktopControlPipe.cs 同源。"
+      ],
+      "power": { "onSuspend": "freeze", "onResume": "probe-and-reinit", "keepAwake": false }
+    },
+    {
+      "name": "clipboard-engine",
+      "label": "剪贴板历史引擎",
+      "exe": "BetterDesktop.Clipboard.Engine.exe",
+      "desired": "running",
+      "tier": "infrastructure",
+      "type": "process",
+      "gate": "extensions.clipboard-history.enabled",
+      "power": { "onSuspend": "freeze", "onResume": "reinit", "keepAwake": false }
+    },
+    {
+      "name": "clipboard-panel",
+      "label": "剪贴板历史面板",
+      "exe": "BetterDesktop.Clipboard.Panel.exe",
+      "desired": "on-demand",
+      "tier": "extension",
+      "type": "panel",
+      "args": "--open",
+      "gate": "extensions.clipboard-history.enabled",
+      "_gateNote": [
+        "S4-3 补上：原先本表**没有** gate，而 Watchdog 一直按 extensions.clipboard-history.enabled 门控它。",
+        "缺这条 ⇒ 用户关掉剪贴板历史后，任一入口（托盘 / 热键 / 宿主菜单）仍能把它拉起来，",
+        "违反『设置是唯一真相源』；有了它，核心的 must_stop 还会在开关关闭时把已在跑的面板停掉",
+        "（对齐 Watchdog 原先的 StopWhenDisabled 语义）。"
+      ]
+    },
+    {
+      "name": "index-engine",
+      "label": "索引引擎",
+      "exe": "BetterDesktop.Index.Engine.exe",
+      "desired": "on-demand",
+      "tier": "infrastructure",
+      "type": "process",
+      "gate": "extensions.index.enabled",
+      "power": { "onSuspend": "freeze", "onResume": "reinit", "keepAwake": false }
+    },
+    {
+      "name": "settings",
+      "label": "设置中心",
+      "exe": "BetterDesktop.Settings.exe",
+      "desired": "on-demand",
+      "tier": "extension",
+      "type": "panel"
+    },
+    {
+      "name": "capture",
+      "label": "截图",
+      "exe": "BetterDesktop.Capture.exe",
+      "desired": "on-demand",
+      "tier": "extension",
+      "type": "tool",
+      "args": "--capture-now"
+    }
+  ]
+}

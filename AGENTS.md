@@ -47,6 +47,7 @@ host/           薄宿主 exe（P2 起）
 2. 非平凡设计决策必须伴随决策记录；没有决策记录的变更可以被打回。
 3. 提交信息用中文，前缀标明范围（如 `gates:` / `docs:` / `kernel:`）。
 4. 分支与合并：main 受保护——禁止直接 push、禁止 force push；合入须经 `docs/code-review.md` 评审；主干破坏优先回滚再前修（ADR-001 R2 同口径）。
+5. core（Rust 地基）的层边界、禁止清单、组件表 schema 与**电源红线**见 `docs/architecture/六层模型与未来扩展点.md`；机器校验由 `verify-architecture-guard` 门禁执行。core 不得阻止系统睡眠。
 
 ## 命名
 

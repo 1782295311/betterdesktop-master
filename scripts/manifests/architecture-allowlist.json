@@ -1,0 +1,48 @@
+{
+  "schema": 1,
+  "note": "架构边界棘轮清单（verify-architecture-guard 的 R1/R2/R3）。**只许收缩**：① 未登记的新命中 → 门禁报红；② 已登记但现实中不再命中的条目 → 同样报红（强制同步删条目，防清单腐烂成历史垃圾场）。新增条目必须注明 why 与 removeBy（对应计划 docs/plans/2026-09-18-on-demand-core-architecture.md 的哪一步删除）。",
+  "precision-note": "R2/R3 是**标识符普查**而非调用点校验（含 P/Invoke 声明、只读引用、写自建配置等），精度有限。其价值是『新增即登记 + 清单不许腐烂』，不是『证明唯一性』。**门禁在匹配前剥掉行注释**（否则『注释里解释为什么不该这么写』会被判成违规，那是反证）。这带来一个已知盲区：**通过路径助手（如 AppPaths.SettingsFile）写 settings 的文件在代码里不出现 'settings.json' 字面量 → 不会命中**（`host/SettingsFileWriter.cs` 即因此从清单移除）。该盲区由计划 §6.7『唯一写入口』人工核对 + S7 收口兜底。",
+  "rules": {
+    "lifecycle-owner": {
+      "intent": "拉起我们自己的 exe（BetterDesktop.*.exe）只能由生命周期所有者发起。终态 = 只有 core（Rust）+ launcher（一次性入口）。",
+      "allowed": [
+        { "path": "core\\src\\cli.rs", "why": "core 的**唯一** CLI 派发处：右键扩展修复 / 系统集成写入 / 更新 / 应急恢复 / 诊断包一律经 CLI 窄命令落地（core 只发命令、CLI 处理细节）。字面量集中在此，使『core 能拉起哪些 exe』一眼可审 —— 这正是本棘轮的登记粒度", "removeBy": "保留（终态所有者：core 触发 / CLI 执行）" },
+        { "path": "core\\src\\process.rs", "why": "**拉起原语本体**（`spawn_detached` / `CreateProcessW` 的实现处，也是 C19 的 `is_bare_name` + `exe_search_dirs` 所在）。它不是调用者，而是**被允许的调用者共用的那一层** —— 生命周期所有权判的是『谁发起』，而原语实现处必然同时含『拉起原语』与『我们的 exe 名』两个标记（后者这次由单测夹具 `is_bare_name(\"BetterDesktop.Agent.exe\")` 触发）。**登记而非改夹具**：若靠改名让门禁转绿，本文件将来新增真正的拉起点就会失去这层扫描", "removeBy": "保留（原语实现处；实际发起点在 supervisor::try_spawn，由该模块承担所有权判定）" },
+        { "path": "launcher/Services/", "why": "一次性入口：ensure core 后发 ApplyDesired 即退", "removeBy": "保留（终态所有者之一）" },
+        { "path": "updater/", "why": "更新期间必须停/起组件，是更新的固有职责", "removeBy": "保留（独立职责）" },
+        { "path": "packages/shell/shell-clipboard-ipc/", "why": "剪贴板引擎/面板启动器；S2 起改走 core 控制管道", "removeBy": "S6" },
+        { "path": "host\\Bootstrap.cs", "why": "宿主的三条 Ensure（待删）", "removeBy": "S6" },
+        { "path": "host\\App.xaml.cs", "why": "--menu-cmd 无宿主时转交 CLI", "removeBy": "S7" },
+        { "path": "BetterDesktop.Cli\\", "why": "入口层：① ensure core 一次（计划 §6.6，CoreEnsurer）② headless 降级拉起 DesktopControl / Host（HeadlessExecutor）", "removeBy": "S7" },
+        { "path": "tray\\ProcessBridge.cs", "why": "旧托盘：将被 Rust core 取代", "removeBy": "S5" },
+        { "path": "tray\\TrayApplicationContext.cs", "why": "旧托盘菜单：将被 Rust core 取代", "removeBy": "S5" },
+        { "path": "packages\\shell\\shell-settings\\Sections\\SystemSection.cs", "why": "设置中心的应急恢复入口（一次性拉起 Recovery）", "removeBy": "保留" },
+        { "path": "packages\\shell\\shell-settings\\Services\\SystemManagement.cs", "why": "设置中心重启/恢复相关的一次性拉起", "removeBy": "保留" }
+      ]
+    },
+    "hotkey-registrar": {
+      "intent": "RegisterHotKey 的注册点必须逐一声明生命周期所有者。终态 = core 独占『必须活过壳退出』的键；壳只注册『随壳生灭』的临时键。",
+      "allowed": [
+        { "path": "core\\src\\hotkeys.rs", "why": "core 接管『必须活过壳退出**且消费者本身不常驻**』的键（当前 = 截图 Win+Shift+B）。归属判据与逐键清点表见该文件模块头；**这是 core 里唯一的热键注册点**", "removeBy": "保留（终态所有者）" },
+        { "path": "engine\\src\\hotkey.rs", "why": "剪贴板引擎自有热键（数据面职责）", "removeBy": "保留（引擎自治）" },
+        { "path": "packages\\shell\\shell-core\\Hotkeys\\HotkeyCenterWindow.cs", "why": "壳内热键中心（随壳生灭的临时键）", "removeBy": "保留（终态所有者之一）" },
+        { "path": "packages\\shell\\shell-core\\Native\\NativeMethods.cs", "why": "P/Invoke 声明，非调用点", "removeBy": "保留（声明）" },
+        { "path": "packages\\shell\\shell-capture\\HotKeyManager.cs", "why": "截图进程自注册（存活期即注册期）", "removeBy": "保留" },
+        { "path": "packages\\shell\\shell-clipboard-panel\\PanelMainWindow.cs", "why": "剪贴板面板自有键", "removeBy": "保留" },
+        { "path": "packages\\shell\\shell-hotkey-panel\\", "why": "热键侧板：枚举/展示第三方与应用热键（只读普查，非注册）", "removeBy": "保留" }
+      ]
+    },
+    "settings-writer": {
+      "intent": "settings.json 的唯一合法写入口是 C# 侧 SettingsService。终态 = 其余进程一律经 core 控制管道 set/get。",
+      "allowed": [
+        { "path": "packages\\shell\\shell-settings\\Services\\SettingsService.cs", "why": "唯一合法写入口（跨进程互斥 + 原子替换）", "removeBy": "保留（终态所有者）" },
+        { "path": "packages\\shell\\shell-settings\\Services\\SystemManagement.cs", "why": "重置/导出配置（删除与复制，语义上属设置管理）", "removeBy": "保留" },
+        { "path": "BetterDesktop.Cli\\HeadlessExecutor.cs", "why": "CLI headless 整文件直写（待删；`--core` 已改指管道，此处仅剩旧动作）", "removeBy": "S7" },
+        { "path": "packages\\shell\\shell-settings-tests\\", "why": "设置包单测构造/校验该文件", "removeBy": "保留（测试）" },
+        { "path": "packages\\shell\\shell-capture\\Core\\CaptureSettings.cs", "why": "写的是**自建** capture\\settings.json（非共享配置）", "removeBy": "保留" },
+        { "path": "packages\\shell\\shell-hotkey-panel\\HotkeyDeclarations.cs", "why": "只读共享配置", "removeBy": "保留" },
+        { "path": "tools\\BlurProbe\\Program.cs", "why": "诊断工具读设置", "removeBy": "保留（工具）" }
+      ]
+    }
+  }
+}

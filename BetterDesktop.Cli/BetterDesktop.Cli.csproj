@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <UseWPF>true</UseWPF>
+    <UseWindowsForms>true</UseWindowsForms>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>BetterDesktop.Cli</RootNamespace>
+    <AssemblyName>BetterDesktop.Cli</AssemblyName>
+    <WindowsApplication>true</WindowsApplication>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- 单测需要访问 internal 测试缝（SuppressUserFeedback：抑制通知气泡/弹框，避免测试挂起）。 -->
+    <InternalsVisibleTo Include="BetterDesktop.Cli.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\packages\kernel\kernel\BetterDesktop.Kernel.csproj" />
+    <ProjectReference Include="..\packages\shell\shell-convert\BetterDesktop.Shell.Convert.csproj" />
+    <!-- 「桌面控制」开关目录 + 免宿主原生层原语（2026-09-17 独立化：键名单点 + 无宿主要真的生效）。 -->
+    <ProjectReference Include="..\packages\shell\shell-core\BetterDesktop.Shell.Core.csproj" />
+    <ProjectReference Include="..\packages\api\BetterDesktop.Api.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- 受管引擎（calibre/libreoffice/pandoc/poppler/tesseract/ffmpeg）唯一源：仓库根 engines\（独立于编译输出，不随 clean 清除）；
+         构建 PreserveNewest 增量复制到输出 bin\engines。 -->
+    <Content Include="..\engines\**\*" Link="engines\%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+</Project>

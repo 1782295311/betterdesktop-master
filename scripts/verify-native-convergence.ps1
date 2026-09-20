@@ -19,6 +19,8 @@ $ErrorActionPreference = 'Stop'
 
 . (Join-Path $PSScriptRoot 'lib\common.ps1')
 
+Write-GateStart 'native-convergence'
+
 # ---- 已收口到 shell-core/Native 的函数名（出现即视为重复声明复活）----
 $convergedFunctions = @(
     'SetWinEventHook', 'UnhookWinEvent',

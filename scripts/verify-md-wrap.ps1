@@ -46,6 +46,7 @@ function Get-HardWrappedParagraphCount([string]$Content) {
 
 # 门禁主体（dot-source 时跳过）
 if ($MyInvocation.InvocationName -ne '.') {
+    Write-GateStart 'md-wrap'
     $root = Get-RepoRoot
     $fails = @()
     $mdFiles = @()

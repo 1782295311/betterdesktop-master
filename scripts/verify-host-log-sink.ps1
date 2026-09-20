@@ -13,6 +13,7 @@ function Test-ContentHasLogSink([string]$Content) {
 
 # 门禁主体（dot-source 时跳过，供单测仅加载函数）
 if ($MyInvocation.InvocationName -ne '.') {
+    Write-GateStart 'host-log-sink'
     $bootstrap = Join-Path (Get-RepoRoot) 'host\Bootstrap.cs'
     if (-not (Test-Path $bootstrap)) {
         Write-GateFail 'host-log-sink' @('host/Bootstrap.cs — 引导文件不存在')

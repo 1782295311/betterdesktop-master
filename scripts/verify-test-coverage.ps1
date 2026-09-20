@@ -11,13 +11,47 @@ function Test-CoverageRate([double]$ActualRate, [double]$MinRate) {
 
 # 门禁主体（dot-source 时跳过）
 if ($MyInvocation.InvocationName -ne '.') {
+    Write-GateStart 'test-coverage'
     $root = Get-RepoRoot
     $sln = Join-Path $root 'BetterDesktop.slnx'
     $baselinePath = Join-Path $root 'scripts\manifests\coverage-ratchet.baseline.json'
     $baseline = Get-Content $baselinePath -Raw | ConvertFrom-Json
 
-    $null = & dotnet test $sln --no-build --collect:"Code Coverage;Format=cobertura" -v minimal 2>&1
-    $testExit = $LASTEXITCODE
+    # 【为什么不再跑整个解决方案（2026-09-20 实测）】覆盖棘轮只关心 **3 个程序集**
+    # （见 coverage-ratchet.baseline.json），而旧实现跑的是 `dotnet test <sln>` ——
+    # **24 个测试工程**全跑一遍、逐个收集覆盖率。其中 21 个与基线毫无关系，纯属白跑；
+    # 代价是"这道门禁在本机跑不完"（连续 4 次被切到后台）—— 它事实上**已经不在本地生效了**。
+    #
+    # 这里显式维护"程序集 → 覆盖它的测试工程"映射。两个刻意的约束：
+    #   · 映射缺一个 → 下面立刻**报红**（不会静默漏检）；
+    #   · 基线将来新增程序集时，也必须在这里补映射。
+    # 漏补的后果是"门禁红并告诉你补哪一条"，而不是"悄悄少测一个程序集"。
+    $assemblyTestProjects = [ordered]@{
+        'BetterDesktop.Kernel'        = 'packages\kernel\kernel-tests\BetterDesktop.Kernel.Tests.csproj'
+        'BetterDesktop.Kernel.Loader' = 'packages\kernel\kernel-loader-tests\BetterDesktop.Kernel.Loader.Tests.csproj'
+        'BetterDesktop.Kernel.Timer'  = 'packages\kernel\kernel-timer-tests\BetterDesktop.Kernel.Timer.Tests.csproj'
+    }
+
+    $targets = @()
+    foreach ($entry in @($baseline.baselines.PSObject.Properties)) {
+        if (-not $assemblyTestProjects.Contains($entry.Name)) {
+            Write-GateFail 'test-coverage' @(
+                "$($entry.Name) — 覆盖棘轮要求它，但脚本里没有对应的测试工程映射（请在 assemblyTestProjects 里补一条）"
+            )
+        }
+        $targets += (Join-Path $root $assemblyTestProjects[$entry.Name])
+    }
+
+    Write-GateStage "跑 $($targets.Count) 个测试工程（基线只要求 $($targets.Count) 个程序集，而非全部 24 个）"
+    $testExit = 0
+    foreach ($proj in $targets) {
+        & dotnet test $proj --no-build --collect:"Code Coverage;Format=cobertura" -v minimal
+        if ($LASTEXITCODE -ne 0) {
+            $testExit = $LASTEXITCODE
+            break
+        }
+    }
+
     if ($testExit -ne 0) {
         Write-GateFail 'test-coverage' @("dotnet test --collect 失败（退出码 $testExit），覆盖率不可信")
     }

@@ -1,0 +1,42 @@
+[package]
+name = "betterdesktop-core"
+version = "0.1.0"
+edition = "2024"
+description = "BetterDesktop Core（Rust）——唯一常驻进程：托盘 + 全局热键 + 控制管道 + 监护 + ShellMenu 快照触发"
+
+[dependencies]
+# 与 engine/ 保持同一 windows crate 版本面（不引入第二个 Win32 绑定来源）。
+windows = { version = "0.58", features = [
+    "Win32_Foundation",
+    "Win32_System_Threading",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Registry",
+    "Win32_Storage_FileSystem",
+    "Win32_Security",
+    "Win32_Security_Authorization",
+    "Win32_System_Pipes",
+    "Win32_System_IO",
+    "Win32_System_Memory",
+    "Win32_System_SystemServices",
+    "Win32_System_Diagnostics_ToolHelp",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_UI_Shell",
+    "Win32_UI_HiDpi",
+    # RegisterHotKey / UnregisterHotKey / MOD_*（S4：core 接管"必须活过壳退出"的热键）
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_Graphics_Gdi",
+] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# settings 写入**单独**用 IndexMap 保序（不启用 serde_json 的全局 preserve_order：
+# 那会连 `@ctl` 协议 JSON 的键序一起改掉，属协议可见的连带变更 —— 见计划 §13.20 的选型说明）。
+indexmap = { version = "2", features = ["serde"] }
+# 热键规范串解析：**唯一真相源**（与 engine 共用）。不在本 crate 内另写一份。
+betterdesktop-hotkey-spec = { path = "../shared/hotkey-spec" }
+
+# 体积是硬目标（空闲 < 8MB 常驻内存由进程规模决定，但二进制同样受 strip/lto 影响）。
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true

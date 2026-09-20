@@ -1,0 +1,455 @@
+{
+  "version": 1,
+  "_purpose": "原生右键扩展 DLL（BetterDesktopShellMenu.dll）**注册表要写哪个路径**的解析规则唯一权威。core（Rust）与 CLI（C#）两侧实现都必须读这份向量并通过它。",
+  "_why_shared": [
+    "路径解析原先分散在两处、没有任何共享契约，直接导致了本仓库已实测到的一次事故：",
+    "  · C# 的 ResolveNativeDllPath() 只看自己的 AppContext.BaseDirectory；",
+    "  · core 的 find_native_dll() 看 本进程目录 → 安装根 → LOCALAPPDATA；",
+    "  两边各自自洽、都判「漂移了」、谁也不报错 —— 一旦接上自愈就是「core 触发修复 → CLI 写下它自己那套路径 → core 再判漂移 → 再触发」的无限写注册表。",
+    "  同类互斗已被实测到过一次：docs/audits/2026-09-18-dwm-blur-and-regression-fixes.md 的 D6 记录",
+    "  「测试套件反复把注册改成测试 bin 路径，Agent 每分钟自动修回（×3）」；那次能收敛只是因为 Agent 恰好",
+    "  部署在安装根、于是它的期望路径碰巧等于正确答案 —— 是部署布局的巧合，不是规则。",
+    "  本向量把「巧合」换成「规则」，并把两侧钉在一起。"
+  ],
+
+  "_two_rules_are_different_on_purpose": {
+    "warning": "不要「统一」下面两条规则。它们顺序相反是有意的；统一它们会把这个 bug 放回来。",
+    "runtime_locating": {
+      "rule": "本进程目录 → 安装根 → %LOCALAPPDATA%\\BetterDesktop",
+      "used_by": "DesktopControlLocator、ComponentPaths、CoreEnsurer 等「拉起一个进程」的场景",
+      "why": "调用方自己那份永远优先 —— 开发态 bin 直接跑不受影响（见 DesktopControlLocator.cs 第 34-36 行注释）。"
+    },
+    "registry_path": {
+      "rule": "见 _rule；核心是「安装根优先」，且安装根无效时**拒绝回退到开发目录**",
+      "used_by": "ComShellExtensionRegistrar.ResolveNativeDllPath（CLI/安装器写注册表）、core 的 resolve_dll_path（只读检查）",
+      "why": [
+        "注册表项不是一次瞬时定位，而是一个**持久的系统级引用** —— explorer 每次右键都要按它加载 DLL。",
+        "让它由「执行进程碰巧在哪」决定，就等于把 dev bin 路径写进注册表，而 dev bin 一次 clean 菜单就废",
+        "（同文档 §13 记的就是这个：安装时 -SkipCopy 导致注册指向「源文件夹」，源文件夹一挪菜单即失效）。",
+        "故持久引用必须指向**最持久**的位置：安装根。"
+      ]
+    }
+  },
+
+  "_what_changed": {
+    "why_this_section_exists": [
+      "这段不是文档，是**防线**。改动后 CLI 侧 ResolveNativeDllPath() 与自愈行为都「从严」了：",
+      "原来任何位置（含开发态 bin）都可能被写进注册表，现在开发态 bin 会被拒绝。",
+      "未来读代码的人只看到「变严了」，若不知道理由，很可能「顺手放宽」回去 —— 那就把 D6 形态放回来了。",
+      "故把「改了什么、为什么」写在契约文件里，与规则同源、同处维护。"
+    ],
+    "before": [
+      "· 解析规则只有「本进程目录 → native\\ 或扁平」——**没有任何位置约束**；",
+      "· 于是从开发态 bin 运行的一方，会把自己 bin 目录里的 DLL 路径写进注册表；",
+      "· 与另一侧（期望安装根）不一致 → 双方互判「漂移」→ 自愈与写入者互斗（D6 实测）；",
+      "· 且注册表指向 dev bin 后，dev bin 一次 clean/重建 → explorer 加载不到 DLL → 菜单静默失效。"
+    ],
+    "after": [
+      "· 注册表路径改为「安装根优先」；",
+      "· 安装根有效却缺 DLL → 拒绝（不回退），不把「部署不全」掩盖成「注册成功」；",
+      "· 安装根无效时，进程目录**只在它是生产态位置（%LOCALAPPDATA%\\BetterDesktop\\ 之下）时才被接受**；",
+      "· 开发态 bin（不在该目录下）→ **拒绝注册**，DllMissing，只记日志；",
+      "· 开发态要测右键菜单需显式 opt-in `--dev`，并写下 BetterDesktopDev=1 标记供 core 识别、停止自愈。"
+    ],
+    "affected_consumers": [
+      "【解析规则的消费者（受本契约直接约束）】",
+      "· ComShellExtensionRegistrar.ResolveNativeDllPath() —— C# 侧权威解析；",
+      "· SystemIntegrationRegistrar.GetStatus():112 的 ComDllPath —— 直接调用上一行；",
+      "· agent/Program.cs:402 的右键注册自愈（S4-2 后迁至 core）；",
+      "· core/src/shellmenu.rs 的 resolve_dll_path —— Rust 侧解析；",
+      "",
+      "【漂移判定的消费者（本契约改变「什么算漂移」）】",
+      "· SystemIntegrationRegistrar.GetStatus():116-118 —— 判定本身；",
+      "· launcher/Services/ComponentBootstrapper.cs:193,205 —— **经由解析 CLI 的文本输出**（comPathDrifted=True/False）",
+      "  决定是否触发 --system-integration register/repair。**推论：status 的文本格式也是事实契约**，",
+      "  改语义时必须同时检查它的 ParseStatus；",
+      "· core/src/shellmenu.rs 的 classify；",
+      "· launcher-tests/ComponentBootstrapperTests.cs、shell-context-menu-tests/* —— 固定上述行为。",
+      "",
+      "【同键位的写入/清理者（不做路径解析，但动同一个注册表键）】",
+      "· ComShellExtensionRegistrar.Register / Unregister；",
+      "· scripts/uninstall-betterdesktop.ps1:227 —— 按 CLSID 整树删除，**不做路径比较**，故不受本契约影响；",
+      "· scripts/install-betterdesktop.ps1:437 —— **委派**给 Cli --system-integration register，自己不写注册表（已核）。",
+      "",
+      "【已排除（本次全仓检索确认不涉及）】",
+      "· updater/** —— 不碰注册表；",
+      "· scripts/probe-shellmenu.ps1 —— 从仓库路径直接 LoadLibrary 探测 COM 工厂，不读注册表路径；",
+      "· scripts/{pack-shellmenu-msix,publish,publish-modules,build-shellmenu}.ps1 —— 打包/构建，不判定路径。"
+    ],
+    "revert_requires": [
+      "若要把本契约改回去，必须**同时**动这些地方，否则会留下半套规则（比现在更糟）：",
+      "① ComShellExtensionRegistrar.ResolveNativeDllPath() 恢复「只看本进程目录」；",
+      "② SystemIntegrationRegistrar.GetStatus() 的漂移判定恢复为纯 OrdinalIgnoreCase 字符串比较；",
+      "③ core/src/shellmenu.rs 删除 resolve_dll_path 的安装根优先分支与 path_eq，改回旧 same_path；",
+      "④ 本文件的 cases / _path_equivalence.cases 与两侧读向量的测试一并删除或改写。",
+      "回退后 **D6 形态会重新出现**（dev bin 路径可进注册表 → clean 后菜单静默失效；两侧各自「漂移」互斗），",
+      "除非另有一套措施替代它 —— 本文件就是那套措施的载体，删掉它等于删掉措施。"
+    ]
+  },
+
+  "_rule": [
+    "⓪ **绝对路径前置条件**：本规则输出的路径必须是绝对路径（以 `<drive>:\\` 或 `\\\\` 开头）。",
+    "     相对路径的候选**直接不采信**（不是「采信后再比较」）—— 相对路径进注册表毫无意义：",
+    "     explorer 在任意工作目录下加载它，行为未定义。故相对候选一律跳过。",
+    "     若因此最终无候选可用 → 返回 null（DllMissing），**拒绝注册**。见 _path_equivalence._non_goals。",
+    "① 安装根有效（指针可读 + 目录存在）→ **只认安装根**：",
+    "     ①a 安装根下有 DLL → 用它（即使本进程目录下也有一份，也仍然用它）；",
+    "     ①b 安装根下没有 DLL → **拒绝**（DllMissing）。不回退到任何别处 ——",
+    "         那说明部署本身不完整，回退会把「部署不全」掩盖成「注册成功」。",
+    "② 安装根无效（指针不可读 / 目录不存在）→ 按**以下顺序**逐个候选目录查找，找到即用：",
+    "     ②a **本进程目录** —— 仅当满足任一条件才纳入候选：",
+    "           · devMode=true（显式 opt-in），或",
+    "           · 本进程目录位于 %LOCALAPPDATA%\\BetterDesktop\\ 之下（= 生产态位置）。",
+    "         若两者都不满足（典型：开发态 bin）→ **不纳入候选**，而不是「纳入后拒绝」。",
+    "     ②b **%LOCALAPPDATA%\\BetterDesktop** —— 生产态兜底位。此候选**永远合法**：",
+    "         它与「执行进程碰巧在哪」无关，因此不受 ②a 的位置约束。",
+    "     ②c 两个候选都没找到 DLL → **拒绝**（DllMissing）。",
+    "③ devMode 的作用域：**只放宽 ②a 的位置约束**，不是「强制使用本进程目录」。",
+    "     安装根有效时仍走 ①（dev 模式也不例外）。",
+    "④ 单个目录内的候选顺序：先 native\\ 子目录（仓库部署形态），其次同目录扁平位。",
+    "⑤ 「本进程目录是否位于 %LOCALAPPDATA%\\BetterDesktop\\ 之下」必须按**路径段**判定，",
+    "     不得用字符串前缀 —— 否则 ...\\BetterDesktopTrap\\bin 会被误判在生产目录之下，",
+    "     等于从侧面把 ②a 的位置约束重新打开。",
+    "",
+    "状态语义（不可混）：",
+    "  · 本规则返回 null ⇒ 调用方得 DllMissing ⇒ **不注册、不触发自愈**，只记日志；",
+    "  · 「注册表里已有一个值，但它不等于本规则算出的值」⇒ 另一回事，属「漂移」，可触发修复。"
+  ],
+
+  "_path_equivalence": {
+    "why": [
+      "「漂移判定」与「幂等判定」都要回答「这两个路径是不是同一个」，而这套等价规则也必须只有一处权威：",
+      "  · C# 侧 ComPathDrifted 用的是 string.Equals(..., OrdinalIgnoreCase) —— **只忽略大小写**；",
+      "  · Rust 侧 same_path 额外归一分隔符、去尾分隔符。",
+      "两侧对「等价」的判断不同 ⇒ 会出现「一侧说漂移、另一侧说没有」这类分歧（与本文件要解决的是同一类病）。",
+      "故把等价规则也写进本文件，两侧共用。"
+    ],
+    "rule": [
+      "两条路径等价 ⟺ 归一后逐字符相等。归一化 = ① 分隔符统一为 \\ ；② 去掉结尾分隔符；③ 忽略大小写。",
+      "**不做**以下归一（刻意保持保守，避免「看起来一样」掩盖真实差异）：",
+      "  · 不解析 . / .. 相对段；· 不展开 8.3 短名（PROGRA~1）；· 不查文件系统真实大小写；· 不解析符号链接。",
+      "为什么保守：等价判定若过宽，会让「路径确实变了」被跳过，自愈就不再发生；",
+      "过窄只是多触发一次幂等修复（有 RepairGate 兜底）。宁可多修，不可漏修。"
+    ],
+
+    "_non_goals": {
+      "note": [
+        "以下路径语义**不在本契约的等价规则内**。理由：这些形式不应出现在注册表里，出现即为异常，",
+        "按「不等价」处理并告警 —— 而不是尽力去理解它。",
+        "写下这一段是为了防**下一个实现者按直觉实现**：看到 C:\\foo\\..\\bar 会问「这算不算等价」，",
+        "然后各自拍一个答案，两侧又漂移（本文件存在的全部理由就是消灭这类漂移）。"
+      ],
+      "items": [
+        "`.` 与 `..` 段**不展开** —— C:\\foo\\..\\bar 与 C:\\bar 判为不等价；",
+        "8.3 短名与长名**不视为等价** —— C:\\PROGRA~1\\X 与 C:\\Program Files\\X 判为不等价；",
+        "**非绝对路径一律拒绝**：解析结果必须以 `<drive>:\\` 或 `\\\\` 开头，否则视为 DllMissing（拒绝注册），",
+        "  不得当作一个「路径」继续参与比较 —— 见 _rule 的 ⓪ 与 cases 里的绝对路径用例；",
+        "UNC 路径（`\\\\server\\share\\…`）**不特殊处理**：它满足绝对路径要求，故按普通字符串规则比较，",
+        "  不解析服务器/共享名、不做规范化。"
+      ]
+    },
+    "idempotency_note": [
+      "「要不要再写一次注册表」不应只靠路径字符串比较 —— 真正的判据是「注册表里的值是否已经等价于本规则算出的值」。",
+      "两者等价 ⇒ 无需写入（幂等）；不等价 ⇒ 需要修复。",
+      "不要引入「文件系统真实路径比较」作为幂等判据：那会把判定耦合到磁盘状态，",
+      "而注册表的正确性不依赖文件当下是否存在（DLL 可能尚未部署完，但注册值本身是对的）。"
+    ],
+    "cases": [
+      {
+        "name": "仅大小写不同 → 等价",
+        "a": "C:\\X\\native\\BetterDesktopShellMenu.dll",
+        "b": "c:\\x\\NATIVE\\betterdesktopshellmenu.DLL",
+        "equivalent": true
+      },
+      {
+        "name": "分隔符不同（/ 与 \\）→ 等价",
+        "a": "C:\\X\\native\\BetterDesktopShellMenu.dll",
+        "b": "C:/X/native/BetterDesktopShellMenu.dll",
+        "equivalent": true
+      },
+      {
+        "name": "结尾分隔符多余 → 等价",
+        "a": "C:\\X\\native\\",
+        "b": "C:\\X\\native",
+        "equivalent": true
+      },
+      {
+        "name": "路径确实不同 → 不等价",
+        "a": "C:\\X\\native\\BetterDesktopShellMenu.dll",
+        "b": "C:\\Y\\native\\BetterDesktopShellMenu.dll",
+        "equivalent": false
+      },
+      {
+        "name": "文件同名但目录不同 → 不等价",
+        "a": "C:\\X\\BetterDesktopShellMenu.dll",
+        "b": "C:\\X\\native\\BetterDesktopShellMenu.dll",
+        "equivalent": false
+      },
+      {
+        "name": "空串与任意非空 → 不等价（空值不得被当成匹配）",
+        "a": "",
+        "b": "C:\\X\\native\\BetterDesktopShellMenu.dll",
+        "equivalent": false
+      },
+      {
+        "name": "两侧都空 → 等价（都表示「没有值」）",
+        "a": "",
+        "b": "",
+        "equivalent": true
+      },
+      {
+        "name": "【非目标】`..` 段不展开 → 不等价",
+        "a": "C:\\foo\\..\\bar\\BetterDesktopShellMenu.dll",
+        "b": "C:\\bar\\BetterDesktopShellMenu.dll",
+        "equivalent": false,
+        "why": "按 . / .. 展开会「看起来一样」，把一条确实变了的路径判成没变。_non_goals 第 1 条。"
+      },
+      {
+        "name": "【非目标】8.3 短名与长名 → 不等价",
+        "a": "C:\\PROGRA~1\\X\\BetterDesktopShellMenu.dll",
+        "b": "C:\\Program Files\\X\\BetterDesktopShellMenu.dll",
+        "equivalent": false,
+        "why": "短名解析要查磁盘、且短名分配可随系统变化。_non_goals 第 2 条。"
+      },
+      {
+        "name": "【非目标】UNC 路径按普通字符串比较（不解析服务器/共享名）",
+        "a": "\\\\server\\share\\native\\BetterDesktopShellMenu.dll",
+        "b": "\\\\SERVER\\SHARE\\NATIVE\\betterdesktopshellmenu.dll",
+        "equivalent": true,
+        "why": "UNC 满足绝对路径要求，故按普通规则（大小写不敏感 + 分隔符归一）比较。_non_goals 第 4 条。"
+      }
+    ]
+  },
+
+  "_input_semantics": {
+    "processDir": "发起解析的进程所在目录",
+    "installRoot": "deployment.json 记录的安装根；null = 指针不可读",
+    "localAppData": "%LOCALAPPDATA%",
+    "devMode": "是否显式开启开发者模式",
+    "existingFiles": "模拟文件系统中**真实存在**的文件全路径清单（大小写与分隔符按原样给出，由实现负责归一）",
+    "expected": "解析结果；null = 拒绝解析（= DllMissing，调用方不得注册）"
+  },
+
+  "cases": [
+    {
+      "name": "安装根有效且其中有 DLL → 用安装根",
+      "input": {
+        "processDir": "C:\\Users\\X\\AppData\\Local\\BetterDesktop\\app\\2026.09.17.1610",
+        "installRoot": "C:\\Users\\X\\AppData\\Local\\BetterDesktop\\app\\2026.09.17.1610",
+        "localAppData": "C:\\Users\\X\\AppData\\Local",
+        "devMode": false,
+        "existingFiles": [
+          "C:\\Users\\X\\AppData\\Local\\BetterDesktop\\app\\2026.09.17.1610\\native\\BetterDesktopShellMenu.dll"
+        ]
+      },
+      "expected": "C:\\Users\\X\\AppData\\Local\\BetterDesktop\\app\\2026.09.17.1610\\native\\BetterDesktopShellMenu.dll"
+    },
+    {
+      "name": "【分水岭】安装根有效、进程在开发 bin、两边都有 DLL → 必须选安装根（这正是与运行时定位相反之处）",
+      "input": {
+        "processDir": "C:\\dev\\better-desktop\\BetterDesktop.Cli\\bin\\Release\\net8.0-windows10.0.19041.0",
+        "installRoot": "C:\\Users\\X\\AppData\\Local\\BetterDesktop\\app\\2026.09.17.1610",
+        "localAppData": "C:\\Users\\X\\AppData\\Local",
+        "devMode": false,
+        "existingFiles": [
+          "C:\\dev\\better-desktop\\BetterDesktop.Cli\\bin\\Release\\net8.0-windows10.0.19041.0\\native\\BetterDesktopShellMenu.dll",
+          "C:\\Users\\X\\AppData\\Local\\BetterDesktop\\app\\2026.09.17.1610\\native\\BetterDesktopShellMenu.dll"
+        ]
+      },
+      "expected": "C:\\Users\\X\\AppData\\Local\\BetterDesktop\\app\\2026.09.17.1610\\native\\BetterDesktopShellMenu.dll",
+      "why": "若这里选了开发 bin，dev bin 一旦 clean/重建，explorer 就加载不到 DLL —— 菜单静默失效。"
+    },
+    {
+      "name": "安装根有效但其中没有 DLL → 拒绝（不回退到任何别处，避免注册出残缺指向）",
+      "input": {
+        "processDir": "C:\\dev\\better-desktop\\BetterDesktop.Cli\\bin\\Release\\net8.0-windows10.0.19041.0",
+        "installRoot": "C:\\Users\\X\\AppData\\Local\\BetterDesktop\\app\\2026.09.17.1610",
+        "localAppData": "C:\\Users\\X\\AppData\\Local",
+        "devMode": false,
+        "existingFiles": [
+          "C:\\dev\\better-desktop\\BetterDesktop.Cli\\bin\\Release\\net8.0-windows10.0.19041.0\\native\\BetterDesktopShellMenu.dll"
+        ]
+      },
+      "expected": null,
+      "why": "安装根有效却缺 DLL ⇒ 部署本身不完整。此时回退去注册别处的 DLL 会把「部署不全」掩盖成「注册成功」。"
+    },
+    {
+      "name": "安装根无效 + 进程在 %LOCALAPPDATA%\\BetterDesktop 之下 → 用进程目录（生产态合法回退）",
+      "input": {
+        "processDir": "C:\\Users\\X\\AppData\\Local\\BetterDesktop\\Standalone",
+        "installRoot": null,
+        "localAppData": "C:\\Users\\X\\AppData\\Local",
+        "devMode": false,
+        "existingFiles": [
+          "C:\\Users\\X\\AppData\\Local\\BetterDesktop\\Standalone\\native\\BetterDesktopShellMenu.dll"
+        ]
+      },
+      "expected": "C:\\Users\\X\\AppData\\Local\\BetterDesktop\\Standalone\\native\\BetterDesktopShellMenu.dll"
+    },
+    {
+      "name": "【D6 事故形态】安装根无效 + 进程在开发 bin → 拒绝，绝不回退到 dev bin",
+      "input": {
+        "processDir": "C:\\dev\\better-desktop\\BetterDesktop.Cli\\bin\\Release\\net8.0-windows10.0.19041.0",
+        "installRoot": null,
+        "localAppData": "C:\\Users\\X\\AppData\\Local",
+        "devMode": false,
+        "existingFiles": [
+          "C:\\dev\\better-desktop\\BetterDesktop.Cli\\bin\\Release\\net8.0-windows10.0.19041.0\\native\\BetterDesktopShellMenu.dll"
+        ]
+      },
+      "expected": null,
+      "why": "这正是 D6 记录的互斗形态：dev bin 路径进注册表 → clean 后菜单废。拒绝比「注册成功但很快失效」诚实。"
+    },
+    {
+      "name": "devMode=true + 安装根无效 + 进程在开发 bin → 允许进程目录（显式 opt-in）",
+      "input": {
+        "processDir": "C:\\dev\\better-desktop\\BetterDesktop.Cli\\bin\\Release\\net8.0-windows10.0.19041.0",
+        "installRoot": null,
+        "localAppData": "C:\\Users\\X\\AppData\\Local",
+        "devMode": true,
+        "existingFiles": [
+          "C:\\dev\\better-desktop\\BetterDesktop.Cli\\bin\\Release\\net8.0-windows10.0.19041.0\\native\\BetterDesktopShellMenu.dll"
+        ]
+      },
+      "expected": "C:\\dev\\better-desktop\\BetterDesktop.Cli\\bin\\Release\\net8.0-windows10.0.19041.0\\native\\BetterDesktopShellMenu.dll",
+      "why": "开发态要测右键菜单必须显式 opt-in；实现方必须同时写下「这是 dev 注册」的标记，供 core 识别并停止自愈。"
+    },
+    {
+      "name": "devMode=true 但安装根有效 → 仍然优先安装根（dev 开关不是「强制用进程目录」）",
+      "input": {
+        "processDir": "C:\\dev\\better-desktop\\BetterDesktop.Cli\\bin\\Release\\net8.0-windows10.0.19041.0",
+        "installRoot": "C:\\Users\\X\\AppData\\Local\\BetterDesktop\\app\\2026.09.17.1610",
+        "localAppData": "C:\\Users\\X\\AppData\\Local",
+        "devMode": true,
+        "existingFiles": [
+          "C:\\dev\\better-desktop\\BetterDesktop.Cli\\bin\\Release\\net8.0-windows10.0.19041.0\\native\\BetterDesktopShellMenu.dll",
+          "C:\\Users\\X\\AppData\\Local\\BetterDesktop\\app\\2026.09.17.1610\\native\\BetterDesktopShellMenu.dll"
+        ]
+      },
+      "expected": "C:\\Users\\X\\AppData\\Local\\BetterDesktop\\app\\2026.09.17.1610\\native\\BetterDesktopShellMenu.dll",
+      "why": "dev 开关放宽的是「进程目录是否被接受」，不是「要不要用安装根」。有安装根就还是用安装根。"
+    },
+    {
+      "name": "native\\ 子目录优先于扁平同目录",
+      "input": {
+        "processDir": "C:\\Users\\X\\AppData\\Local\\BetterDesktop\\Flat",
+        "installRoot": null,
+        "localAppData": "C:\\Users\\X\\AppData\\Local",
+        "devMode": false,
+        "existingFiles": [
+          "C:\\Users\\X\\AppData\\Local\\BetterDesktop\\Flat\\BetterDesktopShellMenu.dll",
+          "C:\\Users\\X\\AppData\\Local\\BetterDesktop\\Flat\\native\\BetterDesktopShellMenu.dll"
+        ]
+      },
+      "expected": "C:\\Users\\X\\AppData\\Local\\BetterDesktop\\Flat\\native\\BetterDesktopShellMenu.dll"
+    },
+    {
+      "name": "扁平同目录（无 native 子目录）也可接受",
+      "input": {
+        "processDir": "C:\\Users\\X\\AppData\\Local\\BetterDesktop\\Flat",
+        "installRoot": null,
+        "localAppData": "C:\\Users\\X\\AppData\\Local",
+        "devMode": false,
+        "existingFiles": [
+          "C:\\Users\\X\\AppData\\Local\\BetterDesktop\\Flat\\BetterDesktopShellMenu.dll"
+        ]
+      },
+      "expected": "C:\\Users\\X\\AppData\\Local\\BetterDesktop\\Flat\\BetterDesktopShellMenu.dll"
+    },
+    {
+      "name": "路径大小写不同仍应匹配（Windows 语义）",
+      "input": {
+        "processDir": "C:\\dev\\better-desktop\\BetterDesktop.Cli\\bin\\Release",
+        "installRoot": "c:\\users\\x\\appdata\\local\\betterdesktop\\app\\2026.09.17.1610",
+        "localAppData": "C:\\Users\\X\\AppData\\Local",
+        "devMode": false,
+        "existingFiles": [
+          "C:\\Users\\X\\AppData\\Local\\BetterDesktop\\app\\2026.09.17.1610\\NATIVE\\betterdesktopshellmenu.DLL"
+        ]
+      },
+      "expected": "c:\\users\\x\\appdata\\local\\betterdesktop\\app\\2026.09.17.1610\\native\\BetterDesktopShellMenu.dll",
+      "why": "期望值保留输入的大小写（实现按输入拼路径），但匹配必须大小写不敏感。"
+    },
+    {
+      "name": "安装根尾部带分隔符与不带分隔符等价",
+      "input": {
+        "processDir": "C:\\dev\\better-desktop\\BetterDesktop.Cli\\bin\\Release",
+        "installRoot": "C:\\Users\\X\\AppData\\Local\\BetterDesktop\\app\\2026.09.17.1610\\",
+        "localAppData": "C:\\Users\\X\\AppData\\Local",
+        "devMode": false,
+        "existingFiles": [
+          "C:\\Users\\X\\AppData\\Local\\BetterDesktop\\app\\2026.09.17.1610\\native\\BetterDesktopShellMenu.dll"
+        ]
+      },
+      "expected": "C:\\Users\\X\\AppData\\Local\\BetterDesktop\\app\\2026.09.17.1610\\native\\BetterDesktopShellMenu.dll",
+      "why": "尾部多一个分隔符不得拼出 `…1610\\\\native\\\\…` 这种双分隔符路径。"
+    },
+    {
+      "name": "安装根无效 + 进程在开发 bin + DLL 在 %LOCALAPPDATA%\\BetterDesktop 扁平位 → 用后者（生产态兜底位置永远合法）",
+      "input": {
+        "processDir": "C:\\dev\\better-desktop\\core\\target\\release",
+        "installRoot": null,
+        "localAppData": "C:\\Users\\X\\AppData\\Local",
+        "devMode": false,
+        "existingFiles": [
+          "C:\\Users\\X\\AppData\\Local\\BetterDesktop\\native\\BetterDesktopShellMenu.dll"
+        ]
+      },
+      "expected": "C:\\Users\\X\\AppData\\Local\\BetterDesktop\\native\\BetterDesktopShellMenu.dll",
+      "why": "开发 bin 自身被拒，但 %LOCALAPPDATA%\\BetterDesktop 是生产态部署位，与「进程碰巧在哪」无关，可以兜底。"
+    },
+    {
+      "name": "安装根是相对路径 → 拒绝（相对路径不得进注册表）",
+      "input": {
+        "processDir": "C:\\dev\\better-desktop\\core\\target\\release",
+        "installRoot": "app\\2026.09.17.1610",
+        "localAppData": "C:\\Users\\X\\AppData\\Local",
+        "devMode": false,
+        "existingFiles": [
+          "app\\2026.09.17.1610\\native\\BetterDesktopShellMenu.dll"
+        ]
+      },
+      "expected": null,
+      "why": "注册表里的相对路径，explorer 会在任意工作目录下加载它 —— 行为未定义。宁可拒绝。"
+    },
+    {
+      "name": "dev opt-in 也不能让**相对**路径进注册表",
+      "input": {
+        "processDir": "core\\target\\release",
+        "installRoot": null,
+        "localAppData": "C:\\Users\\X\\AppData\\Local",
+        "devMode": true,
+        "existingFiles": [
+          "core\\target\\release\\native\\BetterDesktopShellMenu.dll"
+        ]
+      },
+      "expected": null,
+      "why": "devMode 放宽的是「允许开发目录」，不是「允许相对路径」——两者是不同的约束。"
+    },
+    {
+      "name": "三处都没有 DLL → 拒绝",
+      "input": {
+        "processDir": "C:\\Users\\X\\AppData\\Local\\BetterDesktop",
+        "installRoot": "C:\\Users\\X\\AppData\\Local\\BetterDesktop\\app\\2026.09.17.1610",
+        "localAppData": "C:\\Users\\X\\AppData\\Local",
+        "devMode": true,
+        "existingFiles": []
+      },
+      "expected": null
+    },
+    {
+      "name": "进程在 LOCALAPPDATA 之下的判定必须是「路径段前缀」而非「字符串前缀」（防 BetterDesktopFoo 被误判）",
+      "input": {
+        "processDir": "C:\\Users\\X\\AppData\\Local\\BetterDesktopTrap\\bin",
+        "installRoot": null,
+        "localAppData": "C:\\Users\\X\\AppData\\Local",
+        "devMode": false,
+        "existingFiles": [
+          "C:\\Users\\X\\AppData\\Local\\BetterDesktopTrap\\bin\\native\\BetterDesktopShellMenu.dll"
+        ]
+      },
+      "expected": null,
+      "why": "BetterDesktopTrap 不是 BetterDesktop 的子目录；用字符串前缀判会把开发路径误当成生产路径放行。"
+    }
+  ]
+}

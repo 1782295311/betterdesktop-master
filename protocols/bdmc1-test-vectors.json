@@ -1,0 +1,94 @@
+{
+  "schema": 1,
+  "protocol": "BDMC1",
+  "note": "BDMC1 控制管道的**唯一契约**。Rust（core/src/protocol.rs）与 C#（packages/kernel/kernel/MenuCommandPipeCodec.cs）两侧的解析器都必须读本文件跑同一批用例 —— 目的是消灭『两侧各自猜边界、各自单测都绿、真机对不上』这一失败模式。**改协议必须先改本文件**，两侧实现随后跟上（否则两侧单测会同时红）。",
+  "maxMessageBytes": 1048576,
+  "framing": "一行一条消息；行终止符 CRLF 或 LF 均接受，写出统一用 LF。行终止符以外的字节一律保留（不做 trim）。",
+  "shapes": {
+    "legacy": "BDMC1|<action>|<arg...>  —— 写后即忘，服务端不回包（保持既有 cli/系统右键扩展的兼容性）",
+    "control": "BDMC1|@ctl|<verb>|<arg...>  —— 请求/应答，客户端读一行 JSON 响应",
+    "splitRule": "首个 '|' 之后按 '|' 切分；head 取第 0 段，**arg = 其余段用 '|' 重新拼接**（因此 arg 内可安全包含 '|'）"
+  },
+  "_routing": {
+    "note": [
+      "两种形态由**两个不同的服务端**处理（2026-09-19 修，见计划 §13.17）。此前它们**同名**",
+      "（都是 BetterDesktop.MenuCmd），而两侧动词集不相交 → 客户端连上谁不确定 → 行为是掷硬币；",
+      "更糟的是 legacy 落到 core 时 TrySend 仍返回 true → 调用方以为已处理，**连回退都被短路**。"
+    ],
+    "rule": "按 head 段判断：head == '@ctl' → core（\\\\.\\pipe\\BetterDesktop.MenuCmd）；其余 → Host（\\\\.\\pipe\\BetterDesktop.HostCmd）。",
+    "constraints": [
+      "legacy 动词集**不得**含 '@' 开头的动词 —— 否则会按 head 判据被误路由到 core。",
+      "core 的 @ctl 动词集**不得**与 legacy 动词集重名 —— 重名会让『谁该处理』不可判。"
+    ],
+    "trySendSemantics": [
+      "TrySend 返回 true 的**唯一含义**是『**目标**服务端收下了这条消息』，**不是**『有任意一个服务端活着』。",
+      "legacy → Host 不在 ⇒ false（调用方据此走回退：本地 headless / 原生提示）；Host 在 ⇒ true。",
+      "@ctl → core 不在 ⇒ false；core 在 ⇒ true。",
+      "**不得**实现成『任一管道可写就成立』—— 那只是把短路换个方向（Host 活着就假装处理了 @ctl）。"
+    ],
+    "misRoute": [
+      "路由正确也要保证『**路由错了不静默**』：",
+      "· legacy 落到 core → core **不回包**（legacy 契约就是写后即忘；给它回包等于伪造一种不存在的语义），",
+      "  但必须记 **WARN** 日志点名这是**路由错误**（core/src/pipe.rs 的 handle_legacy）。",
+      "· @ctl 落到 Host → 它认不出 → 走既有『未知命令』告警路径（不得静默）。"
+    ]
+  },
+  "_ctl_set": {
+    "note": [
+      "`@ctl|set|<key> <json-literal>`（2026-09-19 定，S5-2a）。值的形式**必须**与 settings.json 里既有值的类型一致，",
+      "故值是 **JSON 字面量**（`false` / `true` / `123` / `\"text\"`）—— 不是字符串，也没有第三种显式类型语法。"
+    ],
+    "parseRule": "arg 在**第一个空格**处切分为 key 与 value；value 必须能解析为**合法 JSON 字面量**，否则返回错误且**不写盘**。",
+    "examples": [
+      "BDMC1|@ctl|set|components.desktop false → 写 bool false（与现有类型一致）",
+      "BDMC1|@ctl|set|some.key \"hello\" → 写 string hello",
+      "BDMC1|@ctl|set|bad.key notjson → 错误，不写盘"
+    ],
+    "responsibility": "**值域校验（这个键该是 bool 还是字符串）由调用方负责** —— core 只判\"是不是合法 JSON 字面量\"。理由：键表属于 UI 侧（托盘/设置中心知道 components.desktop 是 bool），core 复制一份键类型表就等于长出第二份真相。"
+  },
+  "invalidReasons": [
+    "empty —— 去掉行终止符后为空",
+    "too-large —— 字节数超过 maxMessageBytes",
+    "invalid-utf8 —— 不是合法 UTF-8",
+    "bad-magic —— 不以 'BDMC1|' 开头（大小写敏感）",
+    "empty-head —— action 或 verb 为空"
+  ],
+  "response": {
+    "note": "仅控制形态有响应；单行紧凑 JSON（不得含换行）。",
+    "ok": "{\"ok\":true,\"verb\":\"<verb>\",\"data\":{...}}",
+    "err": "{\"ok\":false,\"verb\":\"<verb>\",\"error\":\"<code>\",\"message\":\"<人类可读>\"}",
+    "codes": ["unknown-verb", "unknown-component", "forbidden", "internal", "too-large"]
+  },
+  "cases": [
+    { "name": "legacy-simple", "input": "BDMC1|convert|C:\\Users\\a.pdf", "expect": { "kind": "legacy", "head": "convert", "arg": "C:\\Users\\a.pdf" } },
+    { "name": "legacy-empty-arg", "input": "BDMC1|clipboard-history|", "expect": { "kind": "legacy", "head": "clipboard-history", "arg": "" } },
+    { "name": "legacy-no-arg-field", "input": "BDMC1|open-settings", "expect": { "kind": "legacy", "head": "open-settings", "arg": "" } },
+    { "name": "legacy-space-in-arg", "input": "BDMC1|open-settings|C:\\Program Files\\x y", "expect": { "kind": "legacy", "head": "open-settings", "arg": "C:\\Program Files\\x y" } },
+    { "name": "legacy-cjk-arg", "input": "BDMC1|convert|D:\\文档\\年度报告.pdf", "expect": { "kind": "legacy", "head": "convert", "arg": "D:\\文档\\年度报告.pdf" } },
+    { "name": "legacy-pipe-inside-arg", "input": "BDMC1|convert|C:\\a|b.pdf", "expect": { "kind": "legacy", "head": "convert", "arg": "C:\\a|b.pdf" } },
+    { "name": "legacy-crlf-terminator", "input": "BDMC1|convert|x\r\n", "expect": { "kind": "legacy", "head": "convert", "arg": "x" } },
+    { "name": "legacy-lf-terminator", "input": "BDMC1|convert|x\n", "expect": { "kind": "legacy", "head": "convert", "arg": "x" } },
+    { "name": "legacy-unknown-action-still-parses", "input": "BDMC1|no-such-action|x", "expect": { "kind": "legacy", "head": "no-such-action", "arg": "x" } },
+    { "name": "legacy-trailing-space-preserved", "input": "BDMC1|convert|x ", "expect": { "kind": "legacy", "head": "convert", "arg": "x " } },
+    { "name": "ctl-status-with-empty-arg", "input": "BDMC1|@ctl|status|", "expect": { "kind": "control", "head": "status", "arg": "" } },
+    { "name": "ctl-status-no-arg-field", "input": "BDMC1|@ctl|status", "expect": { "kind": "control", "head": "status", "arg": "" } },
+    { "name": "ctl-start-component", "input": "BDMC1|@ctl|start|desktop", "expect": { "kind": "control", "head": "start", "arg": "desktop" } },
+    { "name": "ctl-stop-component", "input": "BDMC1|@ctl|stop|desktop", "expect": { "kind": "control", "head": "stop", "arg": "desktop" } },
+    { "name": "ctl-set-value-with-space", "input": "BDMC1|@ctl|set|components.dock false", "expect": { "kind": "control", "head": "set", "arg": "components.dock false" } },
+    { "name": "ctl-get-key", "input": "BDMC1|@ctl|get|components.dock", "expect": { "kind": "control", "head": "get", "arg": "components.dock" } },
+    { "name": "ctl-pipe-inside-arg", "input": "BDMC1|@ctl|set|k a|b", "expect": { "kind": "control", "head": "set", "arg": "k a|b" } },
+    { "name": "ctl-empty-verb", "input": "BDMC1|@ctl||x", "expect": { "kind": "invalid", "reason": "empty-head" } },
+    { "name": "ctl-only-magic-atctl", "input": "BDMC1|@ctl", "expect": { "kind": "invalid", "reason": "empty-head" } },
+    { "name": "ctl-crlf-terminator", "input": "BDMC1|@ctl|capture|now\r\n", "expect": { "kind": "control", "head": "capture", "arg": "now" } },
+    { "name": "bad-magic-wrong-text", "input": "NOPE|a|b", "expect": { "kind": "invalid", "reason": "bad-magic" } },
+    { "name": "bad-magic-lowercase", "input": "bdmc1|a|b", "expect": { "kind": "invalid", "reason": "bad-magic" } },
+    { "name": "bad-magic-no-separator", "input": "BDMC1", "expect": { "kind": "invalid", "reason": "bad-magic" } },
+    { "name": "bad-magic-magic-only-with-pipe", "input": "BDMC1|", "expect": { "kind": "invalid", "reason": "empty-head" } },
+    { "name": "bad-magic-legacy-empty-action", "input": "BDMC1||x", "expect": { "kind": "invalid", "reason": "empty-head" } },
+    { "name": "invalid-empty", "input": "", "expect": { "kind": "invalid", "reason": "empty" } },
+    { "name": "invalid-only-newline", "input": "\n", "expect": { "kind": "invalid", "reason": "empty" } },
+    { "name": "invalid-whitespace-only", "input": "   ", "expect": { "kind": "invalid", "reason": "bad-magic" } },
+    { "name": "invalid-oversize", "generate": "oversize", "expect": { "kind": "invalid", "reason": "too-large" } },
+    { "name": "invalid-utf8", "generate": "invalid-utf8", "expect": { "kind": "invalid", "reason": "invalid-utf8" } }
+  ]
+}

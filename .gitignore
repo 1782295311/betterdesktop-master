@@ -41,3 +41,20 @@ tools/ShellComponentsPlayground/*.jpeg
 
 # 一次性会话修复脚本（保留但不入库）
 scripts/_scratch/
+
+# Rust 工程构建产物（Cargo target/，engine / engine-index / native/convert-engine）
+**/target/
+
+# 发布产物目录
+dist/
+
+# 本机门禁/构建日志（历史遗留，不入库）
+gates.log
+gates-run*.log
+build-tmp.log
+
+# 旧代码快照/备份目录（任意层级，本地保留不入库）
+**/backups/
+
+# 第三方转换引擎完整安装包（calibre / tesseract / ffmpeg / libreoffice，体积大 + 第三方二进制与许可证）
+engines/

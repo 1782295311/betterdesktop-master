@@ -1,0 +1,120 @@
+<!--
+  BetterDesktop 启动器 —— 唯一一屏 UI。
+
+  【布局意图】从上到下就是用户的心智顺序：
+    ① 现在在做什么（进度步骤，逐步出现）
+    ② 启动结果（有几处没搞定）
+    ③ 功能开关（用户可以改，也可以不动）
+    ④ 完成（点完就退，之后由托盘常驻接管）
+  样式全部来自 App.xaml 的自带资源（不依赖外部主题字典，见 App.xaml 顶部说明）。
+-->
+<Window x:Class="BetterDesktop.Launcher.LauncherWindow"
+        x:ClassModifier="internal"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="BetterDesktop"
+        Width="640" Height="720"
+        MinWidth="600" MinHeight="520"
+        WindowStartupLocation="CenterScreen"
+        Background="{StaticResource LauncherBackground}"
+        Foreground="{StaticResource LauncherText}"
+        TextOptions.TextFormattingMode="Display"
+        UseLayoutRounding="True"
+        Loaded="OnWindowLoaded">
+
+    <Window.Resources>
+        <!-- 启动步骤行：状态字形 + 标题 + 细节（颜色由状态决定，见 Rows.cs） -->
+        <DataTemplate x:Key="StepTemplate">
+            <Grid Margin="0,0,0,10">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
+                <TextBlock Grid.Column="0" Text="{Binding Glyph}" Foreground="{Binding Brush}"
+                           FontSize="14" FontWeight="Bold" Width="20" VerticalAlignment="Top" />
+                <StackPanel Grid.Column="1">
+                    <TextBlock Text="{Binding Title}" FontWeight="SemiBold" TextWrapping="Wrap" />
+                    <TextBlock Text="{Binding Detail}" Foreground="{StaticResource LauncherTextDim}"
+                               FontSize="12" TextWrapping="Wrap" Margin="0,2,0,0" />
+                </StackPanel>
+            </Grid>
+        </DataTemplate>
+
+        <!-- 开关行：勾选框 + 说明 + 落地结果（Note 为空时隐藏） -->
+        <DataTemplate x:Key="ToggleTemplate">
+            <Border Background="{StaticResource LauncherCard}" CornerRadius="8"
+                    Padding="12,10" Margin="0,0,0,8">
+                <StackPanel>
+                    <CheckBox Style="{StaticResource LauncherToggle}" Margin="0"
+                              IsChecked="{Binding IsOn, Mode=TwoWay}" Content="{Binding Label}" />
+                    <TextBlock Text="{Binding Description}" Foreground="{StaticResource LauncherTextDim}"
+                               FontSize="12" TextWrapping="Wrap" Margin="22,2,0,0" />
+                    <TextBlock Text="{Binding Note}" Foreground="{Binding NoteBrush}"
+                               FontSize="11" TextWrapping="Wrap" Margin="22,3,0,0"
+                               Visibility="{Binding NoteVisibility}" />
+                </StackPanel>
+            </Border>
+        </DataTemplate>
+    </Window.Resources>
+
+    <Grid Margin="22">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="2*" MinHeight="120" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="3*" MinHeight="120" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <!-- 标题 -->
+        <StackPanel Grid.Row="0">
+            <TextBlock Text="BetterDesktop" FontSize="22" FontWeight="SemiBold" />
+            <TextBlock Text="{Binding SubTitle}"
+                       Foreground="{StaticResource LauncherTextDim}"
+                       FontSize="12" Margin="0,4,0,0" TextWrapping="Wrap" />
+        </StackPanel>
+
+        <!-- 当前状态一句话 -->
+        <Border Grid.Row="1" Background="{StaticResource LauncherCard}" CornerRadius="10"
+                Padding="14,12" Margin="0,14,0,0">
+            <StackPanel>
+                <TextBlock Text="{Binding Headline}" FontSize="14" FontWeight="SemiBold" TextWrapping="Wrap" />
+                <TextBlock Text="{Binding Footer}" Foreground="{StaticResource LauncherTextDim}"
+                           FontSize="12" Margin="0,4,0,0" TextWrapping="Wrap" />
+            </StackPanel>
+        </Border>
+
+        <!-- 启动步骤 -->
+        <ScrollViewer Grid.Row="2" Margin="0,16,0,0" VerticalScrollBarVisibility="Auto"
+                      HorizontalScrollBarVisibility="Disabled">
+            <ItemsControl x:Name="StepList" />
+        </ScrollViewer>
+
+        <!-- 开关区标题 -->
+        <TextBlock Grid.Row="3" Text="按你的喜好选择功能" FontSize="14" FontWeight="SemiBold" Margin="0,8,0,0" />
+        <ScrollViewer Grid.Row="4" Margin="0,10,0,0" VerticalScrollBarVisibility="Auto"
+                      HorizontalScrollBarVisibility="Disabled">
+            <ItemsControl x:Name="ToggleList" />
+        </ScrollViewer>
+
+        <!-- 底部动作 -->
+        <Grid Grid.Row="5" Margin="0,16,0,0">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <TextBlock Grid.Column="0" VerticalAlignment="Center" FontSize="11"
+                       Foreground="{StaticResource LauncherTextDim}"
+                       Text="{Binding Hint}" TextWrapping="Wrap" />
+            <StackPanel Grid.Column="1" Orientation="Horizontal">
+                <Button x:Name="BtnEnableAll" Style="{StaticResource LauncherGhostButton}"
+                        Content="全部启用" Click="OnEnableAll" />
+                <Button x:Name="BtnRecommended" Style="{StaticResource LauncherGhostButton}"
+                        Content="恢复推荐" Margin="8,0,0,0" Click="OnRecommended" />
+                <Button x:Name="BtnDone" Style="{StaticResource LauncherPrimaryButton}"
+                        Content="完成" Margin="8,0,0,0" Click="OnDone" />
+            </StackPanel>
+        </Grid>
+    </Grid>
+</Window>

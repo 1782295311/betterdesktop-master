@@ -19,6 +19,7 @@ function Get-PackageReadmeViolation([string]$ReadmePath) {
 
 # 门禁主体（dot-source 时跳过）
 if ($MyInvocation.InvocationName -ne '.') {
+    Write-GateStart 'package-readme'
     $root = Get-RepoRoot
     $manifestPath = Join-Path $root 'scripts\manifests\readme-ratchet.baseline.json'
     $baseline = Get-Content $manifestPath -Raw | ConvertFrom-Json

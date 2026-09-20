@@ -1,4 +1,4 @@
-﻿<Solution>
+<Solution>
   <Folder Name="/packages/" />
   <Folder Name="/packages/kernel/" />
   <Folder Name="/packages/api/">
@@ -58,8 +58,13 @@
       <Platform Project="x64" />
     </Project>
   </Folder>
-  <Folder Name="/watchdog/">
-    <Project Path="watchdog/BetterDesktop.Watchdog.csproj">
+  <Folder Name="/launcher/">
+    <Project Path="launcher/BetterDesktop.Launcher.csproj">
+      <Platform Project="x64" />
+    </Project>
+  </Folder>
+  <Folder Name="/launcher-tests/">
+    <Project Path="launcher-tests/BetterDesktop.Launcher.Tests.csproj">
       <Platform Project="x64" />
     </Project>
   </Folder>
@@ -67,6 +72,16 @@
     <Project Path="recovery/BetterDesktop.Recovery.csproj">
       <Platform Project="x64" />
     </Project>
+  <Folder Name="/BetterDesktop.Cli/">
+    <Project Path="BetterDesktop.Cli/BetterDesktop.Cli.csproj">
+      <Platform Project="x64" />
+    </Project>
+  </Folder>
+  <Folder Name="/BetterDesktop.Cli.Tests/">
+    <Project Path="BetterDesktop.Cli.Tests/BetterDesktop.Cli.Tests.csproj">
+      <Platform Project="x64" />
+    </Project>
+  </Folder>
   </Folder>
   <Folder Name="/packages/shell/shell-dock/">
     <Project Path="packages/shell/shell-dock/BetterDesktop.Shell.Dock.csproj">
@@ -113,6 +128,7 @@
       <Platform Project="x64" />
     </Project>
   </Folder>
+  <Folder Name="/tools/" />
   <Folder Name="/tools/GdiAudit/">
     <Project Path="tools/GdiAudit/GdiAudit.csproj">
       <Platform Project="x64" />
@@ -189,12 +205,71 @@
       <Platform Project="x64" />
     </Project>
   </Folder>
+  <Folder Name="/packages/shell/shell-island/">
+    <Project Path="packages/shell/shell-island/BetterDesktop.Shell.Island.csproj">
+      <Platform Project="x64" />
+    </Project>
+  </Folder>
+  <Folder Name="/packages/shell/shell-island-tests/">
+    <Project Path="packages/shell/shell-island-tests/BetterDesktop.Shell.Island.Tests.csproj">
+      <Platform Project="x64" />
+    </Project>
+  </Folder>
   <Folder Name="/packages/shell/shell-clipboard/">
     <Project Path="packages/shell/shell-clipboard/BetterDesktop.Shell.Clipboard.csproj">
       <Platform Project="x64" />
     </Project>
   </Folder>
-  <Folder Name="/packages/shell/shell-clipboard-tests/">
+  <Folder Name="/packages/shell/shell-clipboard-ipc-tests/">
+    <Project Path="packages/shell/shell-clipboard-ipc-tests/BetterDesktop.Shell.Clipboard.Ipc.Tests.csproj">
+      <Platform Project="x64" />
+    </Project>
+  </Folder>
+  <Folder Name="/packages/shell/shell-clipboard-ipc/">
+    <Project Path="packages/shell/shell-clipboard-ipc/BetterDesktop.Shell.Clipboard.Ipc.csproj">
+      <Platform Project="x64" />
+    </Project>
+  </Folder>
+  <Folder Name="/packages/shell/shell-index-ipc/">
+    <Project Path="packages/shell/shell-index-ipc/BetterDesktop.Shell.IndexIpc.csproj">
+      <Platform Project="x64" />
+    </Project>
+  </Folder>
+  <Folder Name="/packages/shell/shell-index-ipc-tests/">
+    <Project Path="packages/shell/shell-index-ipc-tests/BetterDesktop.Shell.IndexIpc.Tests.csproj">
+      <Platform Project="x64" />
+    </Project>
+  </Folder>
+  <Folder Name="/packages/shell/shell-app-source-tests/">
+    <Project Path="packages/shell/shell-app-source-tests/BetterDesktop.Shell.AppSource.Tests.csproj">
+      <Platform Project="x64" />
+    </Project>
+  </Folder>
+  <Folder Name="/packages/shell/shell-clipboard-panel/">
+    <Project Path="packages/shell/shell-clipboard-panel/BetterDesktop.Clipboard.Panel.csproj">
+      <Platform Project="x64" />
+    </Project>
+  </Folder>
+  <Folder Name="/packages/shell/shell-hotkey-panel/">
+    <Project Path="packages/shell/shell-hotkey-panel/BetterDesktop.Shell.HotkeyPanel.csproj">
+      <Platform Project="x64" />
+    </Project>
+  </Folder>
+  <Folder Name="/packages/shell/shell-hotkey-panel-tests/">
+    <Project Path="packages/shell/shell-hotkey-panel-tests/BetterDesktop.Shell.HotkeyPanel.Tests.csproj">
+      <Platform Project="x64" />
+    </Project>
+  </Folder>
+  <Folder Name="/packages/shell/shell-capture/">
+    <Project Path="packages/shell/shell-capture/BetterDesktop.Shell.Capture.csproj">
+      <Platform Project="x64" />
+    </Project>
+  </Folder>
+  <Folder Name="/packages/shell/shell-capture-tests/">
+    <Project Path="packages/shell/shell-capture-tests/BetterDesktop.Shell.Capture.Tests.csproj">
+      <Platform Project="x64" />
+    </Project>
+  </Folder>  <Folder Name="/packages/shell/shell-clipboard-tests/">
     <Project Path="packages/shell/shell-clipboard-tests/BetterDesktop.Shell.Clipboard.Tests.csproj">
       <Platform Project="x64" />
     </Project>
@@ -216,6 +291,16 @@
   </Folder>
   <Folder Name="/tools/ShellComponentsPlayground/">
     <Project Path="tools/ShellComponentsPlayground/BetterDesktop.Tools.ShellComponentsPlayground.csproj">
+      <Platform Project="x64" />
+    </Project>
+  </Folder>
+  <Folder Name="/tray/">
+    <Project Path="tray/BetterDesktop.Tray.csproj">
+      <Platform Project="x64" />
+    </Project>
+  </Folder>
+  <Folder Name="/updater/">
+    <Project Path="updater/BetterDesktop.Updater.csproj">
       <Platform Project="x64" />
     </Project>
   </Folder>

@@ -13,6 +13,7 @@ function Get-GateTestPath([string]$ScriptName) {
 
 # 门禁主体（dot-source 时跳过）
 if ($MyInvocation.InvocationName -ne '.') {
+    Write-GateStart 'gate-registry'
     $root = Get-RepoRoot
     $fails = @()
     $verifyScripts = @(Get-ChildItem (Join-Path $root 'scripts') -Filter 'verify-*.ps1' -File | Where-Object { $_.Name -notmatch '\.Tests\.ps1$' } | Select-Object -ExpandProperty Name)

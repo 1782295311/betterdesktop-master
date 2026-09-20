@@ -1,0 +1,10 @@
+[package]
+name = "betterdesktop-hotkey-spec"
+version = "0.1.0"
+edition = "2024"
+description = "BetterDesktop 热键规范串解析（唯一真相源）——engine 与 core 共享，避免两边各写一遍必然漂移"
+
+# 刻意**零依赖**：这是纯字符串 → (修饰键, 虚拟键码) 的映射，
+# 不需要 `windows` crate。调用方各自把裸 u32 包成自己的类型：
+#   engine: HOT_KEY_MODIFIERS(m.bits)  /  core: 直接用 u32 调 RegisterHotKey
+[dependencies]

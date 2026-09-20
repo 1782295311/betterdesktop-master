@@ -20,6 +20,7 @@ function Test-DocBudget([string]$Text, [int]$Ceiling) {
 
 # 门禁主体（dot-source 时跳过）
 if ($MyInvocation.InvocationName -ne '.') {
+    Write-GateStart 'doc-budgets'
     $root = Get-RepoRoot
     $manifestPath = Join-Path $root 'scripts\manifests\doc-budgets.manifest.json'
     $manifest = Get-Content $manifestPath -Raw | ConvertFrom-Json

@@ -16,6 +16,7 @@ function Get-Slug([string]$heading) {
 
 # 门禁主体（dot-source 时跳过）
 if ($MyInvocation.InvocationName -ne '.') {
+    Write-GateStart 'md-links'
     $root = Get-RepoRoot
     $fails = @()
     $mdFiles = @()
