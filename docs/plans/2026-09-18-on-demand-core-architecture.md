@@ -3195,6 +3195,63 @@ A 路径是 **MSIX 稀疏包**（`scripts/pack-shellmenu-msix.ps1`），与 B �
 **教训**：*探针 PASS 不代表生产可用*（这条本项目的 `defensive-patterns.md` 第八节已有同族记载）；
 反过来，**探针 FAIL 也不代表生产不可用** —— 这次是后者的实例。
 
+#### 13.22.10 「桌面控制延迟高 / 不可靠 / 双击无法恢复」的根因（2026-09-20）
+
+**用户反馈**：*桌面控制的功能延迟很高、而且功能不可靠，双击隐藏了桌面，无法再双击快速恢复。自绘桌面的右键菜单反应很快，但其右键菜单栏的功能设计过于冗余。*
+
+**结论：不是延迟问题，是三个现象同一个根因 —— `settings.json` 里 `components.desktop = false`。**
+
+```
+core 日志:  - desktop (...) desired=Running tier=Surface type=Process gate=components.desktop=false => ensure=false stop=true
+```
+
+自绘桌面（`desktop` 组件）**处于关闭状态** ⇒ core 不拉起它、还会停它 ⇒
+
+| 用户感受 | 实际机理 |
+|---|---|
+| 延迟很高 | 服务不在 ⇒ CLI 转发 `The operation has timed out`（**2 秒超时**才返回）|
+| 功能不可靠 | 服务时在时不在 |
+| 双击隐藏后无法恢复 | `desktop.doubleClickHideIcons=true` **已经写进配置**，但**应用它的服务不在** |
+
+（`desktop.iconsHidden=false` ⇒ 图标当时没被隐藏；用户看到的"隐藏了"应是服务还活着时的那一次。）
+
+**连带修掉的第二个问题：安装根的 `components.json` 是残缺版**
+
+| 字段 | 源码 `core\components.json` | 安装根那份（修复前）|
+|---|---|---|
+| `liveness` | `"pipe"` | **缺失** |
+| `livenessPipe` | `"BetterDesktop.DesktopCmd"` | **缺失** |
+| `stopFlag` | `"desktop-stopped.flag"` | **缺失** |
+
+缺 `liveness: pipe` ⇒ core 的判活退化 ⇒ 无论服务在不在都判"不活" ⇒ **每 3 秒拉一次、每次都被"已有服务"弹回** ⇒
+`restart #2..#6` 直到熔断。用源码那份覆盖后，判活恢复（管道 `BetterDesktop.DesktopCmd` 随之出现）。
+
+**这是"部署缺斤少两"的第三个实例**（前两个：缺 `DesktopControl.exe`、缺 `Cli.exe`）。
+⇒ 再次印证 §13.22.8 的结论：**B1 不完整 ⇒ 真机行为不可信**。
+
+**修复后验证**（35 秒采样，实例集合不变）：
+
+```
+T1=932,24072   T2=932,24072   ✅ 稳定（同一批实例，没有重启）
+日志：restart #1 → restart #2（启动窗口那一次）→ 之后再无 restart
+```
+
+**顺带发现的两个次要问题（记入欠账）**
+
+1. **启动窗口会留下一个多余实例**：`restart #2` 那个进程没退出，与真服务并存（两个 `DesktopControl` 实例，只有一个持有管道）。
+   `is_alive` 修好后循环停止，但"启动窗口那一次重试"仍会多产一个进程。
+2. **`--toggle-key` 在服务缺席时静默写值**（真 bug，属并行工作流）：
+   ```
+   [shell.desktop] 桌面服务转发失败（服务未运行?）: The operation has timed out.
+   切换（免宿主）：desktop.doubleClickHideIcons=True（该开关无原生效果，等宿主上线应用）
+   ```
+   **它明知"无原生效果"，仍然写值并以退出码 0 结束** ⇒ 用户以为生效了。
+   这是本项目 `defensive-patterns.md` 反复批判的**静默失败**形态：
+   **一个"未来会被应用"的意图，与"已经生效"对用户不可区分** —— 应当报错（或明确提示"服务未运行，设置已暂存"）。
+
+**关于"右键菜单冗余"**：那是**自绘桌面自己的右键菜单**（WPF 自绘，走 `desktop` 服务，所以一直很快 —— 与 shellmenu 快照是两条独立的路）。
+它属于并行工作流区域（`packages/shell/shell-desktop/DesktopPlugin.cs`），且"哪里冗余"需要具体意见才能改，故先记录待议。
+
 ### 13.15 S4-2 第 2 步：core 的注册**触发** + `RepairGate`（2026-09-19）
 
 `cargo test --release` **145/145**（+4），0 warning。core 侧从"只读巡检"变为"巡检 + 一次性自动修复"。
