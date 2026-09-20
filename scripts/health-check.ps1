@@ -49,7 +49,9 @@ $script:SourceRoots = @(
     'BetterDesktop.Cli', 'BetterDesktop.Cli.Tests', 'launcher-tests',
     'watchdog', 'installer', 'protocols', 'tools'
 )
-$script:SkipRegex = '\\(bin|obj|target|node_modules|\.git|\.vs|backups|dist|Temp|poc|engines|decomp|\.workbuddy)\\'
+# 【同 verify-boundaries】`engines` 必须锚定到仓库根：不锚定 + `-match` 大小写不敏感，
+# 会连带把 `packages/shell/shell-convert/Services/Engines/`（我们自己的源码）也跳过。
+$script:SkipRegex = '\\(bin|obj|target|node_modules|\.git|\.vs|backups|dist|Temp|poc|decomp|\.workbuddy)\\|^\\engines\\'
 
 # 一次枚举 + 缓存（同 architecture-guard 的教训：扩展名过滤必须在排除判断**之前**）
 $script:FileCache = @{}

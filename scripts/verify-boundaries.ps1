@@ -46,7 +46,16 @@ $script:SourceRoots = @(
 # "Invalid pattern … Illegal \ at end of pattern" —— 异常被 Where-Object 吞掉后
 # 枚举返回空集，门禁于是**打印 PASS（0 项目 / 0 边 / 0 文件）**。
 # 这正是本门禁单测里那条"空集合让所有断言都成立"的活样本。
-$script:SkipRegex = '\\(bin|obj|target|node_modules|\.git|\.vs|backups|dist|Temp|poc|engines|decomp)\\'
+#
+# 【`engines` 必须锚定到仓库根，且大小写不敏感这件事必须显式处理】
+# 本仓库根有一个 `engines/`（第三方引擎安装包，故意不扫）；而 `packages/shell/shell-convert/
+# Services/Engines/` 里放的是**我们自己的转换引擎源码**。
+# 写成不带锚点的 `engines` 时：PowerShell 的 `-match` 默认**大小写不敏感** ⇒ `\Engines\`
+# 也被匹配 ⇒ 该目录下的源文件对 B3（电源）/B4（术语）两条规则**整目录隐形**。
+# 这与 .gitignore 那条 `engines/` 吞掉 3 个源文件（见提交 cc1d1a2）是**同一个坑的两种形态**：
+# 一个不锚定的目录名，在两个不同的"匹配引擎"里都咬到了不该咬的东西。
+# 故这里写成 `^\\engines\\`（锚定 + 只匹配根的那一份），并且**不要**改成大小写不敏感之外的写法。
+$script:SkipRegex = '\\(bin|obj|target|node_modules|\.git|\.vs|backups|dist|Temp|poc|decomp)\\|^\\engines\\'
 
 # 枚举（可单测）：root 下指定扩展名、且不在排除目录内的文件
 #
