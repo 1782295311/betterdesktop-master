@@ -370,7 +370,16 @@ impl RepairGate {
         Self::default()
     }
 
-    /// 是否处于熔断（诊断/测试用；`status` 不经此暴露 —— 管道本身坏了时 `status` 也拿不到）。
+    /// 是否处于熔断。
+    ///
+    /// **只被单测使用**，故标 `#[cfg(test)]`。
+    ///
+    /// 【为什么是 `cfg(test)` 而不是 `allow(dead_code)`】两者都能让 clippy 闭嘴，但语义不同：
+    /// `allow` 说的是"这段有存在的理由、只是暂时没人用"（= 预留借口），
+    /// `cfg(test)` 说的是"**它的唯一消费者就是测试**"（= 事实）。
+    /// 这里的情况是后者 —— 而且 `cfg(test)` 顺带保证它**永不进入发布二进制**。
+    /// （`status` 也不经它：管道本身坏了时 `status` 同样拿不到。）
+    #[cfg(test)]
     pub fn is_degraded(&self) -> bool {
         self.degraded
     }

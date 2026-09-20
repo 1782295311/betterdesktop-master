@@ -1018,7 +1018,7 @@ fn read_line_bounded(pipe: HANDLE) -> ReadOutcome {
 
         buf.extend_from_slice(&chunk[..read as usize]);
 
-        if buf.iter().any(|&b| b == b'\n') {
+        if buf.contains(&b'\n') {
             return ReadOutcome::Line(buf);
         }
         // 上限判定：允许恰好 MAX（含换行），再多一个字节即超限

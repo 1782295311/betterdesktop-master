@@ -6,6 +6,9 @@
 //! `uninstall-betterdesktop.ps1` 的第一步就是**停掉所有组件、并删掉 core 的计划任务** ——
 //! 它要停的，正是 core 自己。所以这条链的形态是"**core 主动交出控制权**"：
 //!
+//! 这是登记在案的**刻意例外**（`docs/known-exceptions.md` #1）：改经 CLI 会形成
+//! "core 派发 CLI → CLI 停 core"的循环依赖。
+//!
 //! ```text
 //! ① 写 user-pause.flag   （立刻停止监护）
 //! ② 异步拉起卸载脚本     （绝不等待）
@@ -51,6 +54,8 @@ pub const UNINSTALL_SCRIPT: &str = "uninstall-betterdesktop.ps1";
 /// 那是**数据目录**。卸载脚本是**程序文件**：从数据目录里翻出一个"可能是旧版本留下的"脚本
 /// 去删当前程序，属于最危险的那种"看起来很贴心"的回退 —— 旧脚本删新程序，或者更糟，
 /// 删到别的地方。宁可如实报"未找到"，也不猜。
+///
+/// （登记为刻意的非目标：`docs/known-exceptions.md` #7 —— 防止后人"顺手补全"这条回退。）
 pub fn locate_script(process_dir: Option<&Path>, install_root: Option<&Path>) -> Option<PathBuf> {
     for dir in [process_dir, install_root].into_iter().flatten() {
         let candidate = dir.join(UNINSTALL_SCRIPT);

@@ -456,20 +456,23 @@ fn validate(raw: RawComponent, seen: &[Component]) -> Result<Component, String> 
     if exe.is_empty() {
         return Err(format!("'{name}': missing 'exe'"));
     }
-    let desired = match raw.desired.as_deref().unwrap_or("on-demand") {
-        s => Desired::parse(s.trim())
-            .ok_or_else(|| format!("'{name}': unknown desired '{s}' (running|on-demand|stopped)"))?,
+    let desired = {
+        let s = raw.desired.as_deref().unwrap_or("on-demand");
+        Desired::parse(s.trim())
+            .ok_or_else(|| format!("'{name}': unknown desired '{s}' (running|on-demand|stopped)"))?
     };
-    let tier = match raw.tier.as_deref().unwrap_or("extension") {
-        s => Tier::parse(s.trim()).ok_or_else(|| {
+    let tier = {
+        let s = raw.tier.as_deref().unwrap_or("extension");
+        Tier::parse(s.trim()).ok_or_else(|| {
             format!(
                 "'{name}': unknown tier '{s}' (foundation|infrastructure|surface|extension|system-extension)"
             )
-        })?,
+        })?
     };
-    let component_type = match raw.component_type.as_deref().unwrap_or("process") {
-        s => ComponentType::parse(s.trim())
-            .ok_or_else(|| format!("'{name}': unknown type '{s}' (process|tool|panel)"))?,
+    let component_type = {
+        let s = raw.component_type.as_deref().unwrap_or("process");
+        ComponentType::parse(s.trim())
+            .ok_or_else(|| format!("'{name}': unknown type '{s}' (process|tool|panel)"))?
     };
     // surface + 常驻 但没显式声明 onResume → 唤醒后"进程活着但窗口已失效"会被静默放过。
     // 不拒绝（配置仍然可用），但必须记警告 —— 静默错默认值正是最难查的那类 bug。
@@ -495,9 +498,10 @@ fn validate(raw: RawComponent, seen: &[Component]) -> Result<Component, String> 
         .filter(|a| !a.is_empty());
     let stop_flag = normalize(raw.stop_flag);
 
-    let liveness = match raw.liveness.as_deref().unwrap_or("process") {
-        s => Liveness::parse(s.trim())
-            .ok_or_else(|| format!("'{name}': unknown liveness '{s}' (process|pipe)"))?,
+    let liveness = {
+        let s = raw.liveness.as_deref().unwrap_or("process");
+        Liveness::parse(s.trim())
+            .ok_or_else(|| format!("'{name}': unknown liveness '{s}' (process|pipe)"))?
     };
     let liveness_pipe = normalize(raw.liveness_pipe);
     // `liveness=pipe` 必须有管道名 —— 否则这条配置**无意义**（探测什么？）。

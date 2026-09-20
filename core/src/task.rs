@@ -336,13 +336,17 @@ fn extract_tag(xml: &str, tag: &str) -> Option<String> {
     Some(xml[start..end].trim().to_string())
 }
 
-/// 路径比较 —— **复用 `shellmenu::path_eq`**，不在这里再写一份。
-///
-/// 它是那份共享测试向量（`protocols/native-dll-path-test-vectors.json`）的 C 位实现，
-/// 决定"什么算同一条路径"。本模块原先自带一个只做 trim/lowercase 的版本，
-/// 它**不归一分隔符** —— 于是 `C:/x/core.exe` 与 `C:\x\core.exe` 在这里被判成两条路径
-/// （任务会被无谓地反复重建），而 shellmenu 那边判成同一条。同一进程里两套等价规则，
-/// 正是本仓库反复吃亏的那类病。
+// 路径比较 —— **复用 `shellmenu::path_eq`**，不在这里再写一份。
+//
+// 它是那份共享测试向量（`protocols/native-dll-path-test-vectors.json`）的 C 位实现，
+// 决定"什么算同一条路径"。本模块原先自带一个只做 trim/lowercase 的版本，
+// 它**不归一分隔符** —— 于是 `C:/x/core.exe` 与 `C:\x\core.exe` 在这里被判成两条路径
+// （任务会被无谓地反复重建），而 shellmenu 那边判成同一条。同一进程里两套等价规则，
+// 正是本仓库反复吃亏的那类病。
+//
+// 【为什么是 `//` 而不是 `///`】这段是**决策记录**，不是某个条目的文档 ——
+// 写成 `///` 会让它变成"下一个条目的 doc comment"（clippy `empty line after doc comment`
+// 抓的正是这个），语义上也是错的。
 
 /// XML 文本转义。Windows 目录名里 `&` 是合法的，不转义会让整份 XML 解析失败。
 fn xml_escape(s: &str) -> String {

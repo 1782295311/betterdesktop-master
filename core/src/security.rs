@@ -239,7 +239,7 @@ pub fn build_pipe_security(current: &CurrentUser) -> Result<PipeSecurity, String
     let sd = unsafe {
         let mem = LocalAlloc(LPTR, std::mem::size_of::<SECURITY_DESCRIPTOR>())
             .map_err(|e| format!("LocalAlloc(SECURITY_DESCRIPTOR) failed: {e}"))?;
-        PSECURITY_DESCRIPTOR(mem.0 as *mut c_void)
+        PSECURITY_DESCRIPTOR(mem.0)
     };
     unsafe {
         InitializeSecurityDescriptor(sd, SECURITY_DESCRIPTOR_REVISION)

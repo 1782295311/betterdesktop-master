@@ -74,7 +74,7 @@ thread_local! {
     /// 用 `thread_local` 而不是 `static Mutex`：`TrayIcon` 含 `HWND`/`HICON`，不是 `Send`，
     /// 放进进程级静态需要一句 `unsafe impl`；而它本来就没有跨线程需求，不该为省一个局部变量
     /// 去写不安全断言。
-    static TRAY: std::cell::RefCell<Option<tray::TrayIcon>> = std::cell::RefCell::new(None);
+    static TRAY: std::cell::RefCell<Option<tray::TrayIcon>> = const { std::cell::RefCell::new(None) };
 }
 
 /// 重新注册托盘图标（`TaskbarCreated` / 唤醒后调用）。

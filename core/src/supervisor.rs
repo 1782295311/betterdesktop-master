@@ -90,6 +90,8 @@ pub const UPDATER_PAUSE_FLAG: &str = "watchdog-pause.flag";
 /// 共用会有一个真实的 race：用户暂停 → 更新器接管文件、看到标记已存在于是"这不是我写的、我不该清"
 /// （或反过来），于是先结束的那一方把另一方**仍在生效**的暂停清掉 —— 用户以为还暂停着，
 /// 组件已经被拉起。两个独立标记 + "任一存在即暂停"，把这个 race 变成不可能。
+///
+/// （登记为刻意例外：`docs/known-exceptions.md` #4 —— S7 统一到 `pause\` 目录时一并收口。）
 pub const USER_PAUSE_FLAG: &str = "user-pause.flag";
 
 /// 暂停的来源（**只用于日志** —— 判据永远是"标记是否存在"）。
@@ -591,7 +593,7 @@ impl Supervisor {
         let components = inner.components.clone();
 
         for c in &components {
-            let gate_open = gate_open(c, &settings);
+            let gate_open = gate_open(c, settings);
             let stop_flag = c.stop_flag.as_deref().is_some_and(components::flag_exists);
             let alive = is_alive(c, &running);
             let st = inner.state.entry(c.name.clone()).or_default();
