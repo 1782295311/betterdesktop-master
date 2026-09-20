@@ -3125,6 +3125,76 @@ pwsh -File scripts\probe-shellmenu.ps1 -MenuProbeConfig "$env:APPDATA\BetterDesk
 ⇒ **D13 的"卡"是伪卡**：真阻塞从来不是"旧版本要兼容"，而是"**没走『用最新源码构建 → 部署 → 验证』这条路**"。
 ⇒ 而这恰好就是 B1。**所以 B1 不该排在 D13 后面等 —— 它正是 D13 的前置。**
 
+#### 13.22.9 清除旧部署 → 右键项复现（2026-09-20）
+
+**用户的一句话点破了我一直没做的事**：
+
+> 不应该把旧编译程序删除，来避免其的影响吗？你为什么一直没有做？
+
+**我一直在"分析"那个旧部署，却从没想过"它本身就在跑、就在被抓、就在把每个验证污染成旧版行为"。**
+把它当成分析对象，而正确动作是**消除变量**。删掉它，一半的"分析"根本不需要做 ——
+这与本项目里另一个反复出现的模式同族：**倾向于解释问题，而不是消除问题**。
+
+**做了什么**
+
+| 步骤 | 结果 |
+|---|---|
+| 停 core / 删计划任务 / 删注册表（4 个 shellex + CLSID）| 清掉全部引用点（否则会被拉回）|
+| **删 `app\2026.09.17.1610\`** | **2,922 MB** 旧部署（`native\` 里三个 DLL 是 09-01/09-12/09-14 —— 两周前）|
+| 建干净安装根 `app\2026.09.20.1350\` | 最新 core（`target\release` 产物）+ **新 DLL（274 KB / 09-18）**（旧的是 116 KB / 09-12）|
+| 起 core | 它自己检测到 `drift detected`（注册表被我删了）并**自动派发修复** |
+
+**过程中发现 core 的两条健康行为（值得记）**
+
+1. **自我修复需要 `BetterDesktop.Cli.exe`**：日志 `cannot locate BetterDesktop.Cli.exe — the action was NOT dispatched`。
+   把 CLI 放进安装根后立刻成功：`dispatched: ...\BetterDesktop.Cli.exe --shellmenu-register` ⇒
+   注册表自动重建，`InprocServer32` 指向新 DLL。**"最新源码 → 部署 → 自愈"这条链是通的。**
+2. **它拒绝把系统级任务指向非安装根的 exe**：`scheduled task ...: NOT registered — this core lives at ... which is neither under the install root ... nor under %LOCALAPPDATA%\BetterDesktop — refusing to point a system-wide task at it`。
+
+**结果：右键项出现了（B 路径 / "更多"里）**
+
+> 用户反馈："win11 的新版菜单中没有，但是**更多中还有桌面控制**"
+
+⇒ **「桌面控制」在经典菜单里出现了** ✓ —— 这是此前从未有过的（此前连项都没有）。
+⇒ **"旧部署"确实是"项不出现"的直接原因**；而 `probe-shellmenu.ps1` 在新部署下**仍然报**
+`[FAIL] 背景场景产生了菜单项` ⇒ **该探针的 background 场景模拟与真实 explorer 行为不一致**（探针自身的缺陷，见下）。
+
+**新问题一：点了功能不生效 → 根因是 `desktop` 组件未部署**
+
+core 日志：`supervisor(tick): degraded (circuit open) desktop` —— 监护器反复拉起 `desktop`
+（`BetterDesktop.DesktopControl.exe`）全部失败并熔断，因为**新安装根里没有它**（它在被我删掉的旧部署里）。
+补上 `DesktopControl` 的构建产物（`dotnet build` 成功：**0 警告 0 错误**）+ `components.json` 后，
+监护器立刻拉起它，且 **`shellmenu.json` 被它重写为"3 组"**（说明服务真的在工作）。
+
+**新问题二（真 bug，属并行工作流）：core 对 `desktop` 的判活窗口错位**
+
+证据链：
+
+| 来源 | 内容 |
+|---|---|
+| core 日志 | `started 'desktop' -> ...DesktopControl.exe (restart #2 / #3 / #4 / #5)` —— **每 3 秒拉一次** |
+| DesktopControl 日志 | 新实例一律 `已有桌面服务在运行，本次退出`（退出码 0）|
+| DesktopControl 日志（真正那个）| `14:15:12.826 启动` → **`14:15:17.181 服务支撑插件装配完成（state=Active）`** |
+
+⇒ **它冷启动要 ~4.4 秒，而 core 的 tick 是 3 秒** ⇒ 在"就绪"之前就被读成失败 ⇒ 再拉 ⇒ 死循环。
+`supervisor.rs` 的注释里**记录过这个病**（2026-09-19 真机：*"3 秒后对账时服务还没建好命令管道（WPF 冷启动数秒），
+于是被读成启动即崩 → 退避 1 秒 → 又拉起第二个实例"*），并声称已加两道防护 —— **但从本次日志看防护没挡住**。
+**待办（并行工作流）**：宽限期要覆盖"进程已起但服务未就绪"的窗口，或把 `desktop` 的就绪信号纳入判活。
+
+**新问题三：Win11 新版菜单（A 路径）没有项**
+
+A 路径是 **MSIX 稀疏包**（`scripts/pack-shellmenu-msix.ps1`），与 B 路径（`shellex` 注册表）**相互独立**。
+注册表里能看到的 `PackagedCom\Package\BetterDesktop.ShellMenu_1.3.261.22_neutral__87bpyamzrast8`
+是旧版本残留；**新版稀疏包未安装** ⇒ 新版菜单自然无项。**这条独立于 B 路径，需单独处理。**
+
+**探针自身的缺陷（值得记一笔）**
+
+`probe-shellmenu.ps1 -MenuProbeConfig` 在**新部署**下仍然 FAIL（`hr=9 / 顶级项=2`，两个都是 separator），
+但**真实 explorer 里项是出现的**。⇒ **该探针的 background 场景模拟与真实行为不一致** ——
+它把"配置 → HMENU"这条管线单独拉出来跑，绕过了 explorer 真实的 `IShellExtInit::Initialize` 形态。
+**教训**：*探针 PASS 不代表生产可用*（这条本项目的 `defensive-patterns.md` 第八节已有同族记载）；
+反过来，**探针 FAIL 也不代表生产不可用** —— 这次是后者的实例。
+
 ### 13.15 S4-2 第 2 步：core 的注册**触发** + `RepairGate`（2026-09-19）
 
 `cargo test --release` **145/145**（+4），0 warning。core 侧从"只读巡检"变为"巡检 + 一次性自动修复"。
