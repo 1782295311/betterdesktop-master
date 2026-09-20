@@ -34,11 +34,10 @@ namespace BetterDesktop.Shell.ContextMenus.Services;
 
 // ── 本文件方法级白话索引（白话 → 方法）──
 //   "对选中文件/文件夹弹系统右键菜单"   → TryShowItems（异步入口，失败返 false 让调用方回退）/ ShowItemsSync（子进程同步入口）
-//   "桌面空白处弹系统背景菜单"          → TryShowDesktopBackground；实现 ShowBackgroundCore（先转发 explorer DefView，失败降级 SHGetDesktopFolder）
 //   "弹菜单主流程（取 IContextMenu→建 HMENU→TrackPopupMenuEx）" → ShowItemsCore
-//   "把右键转发给 explorer 的 DefView 窗口" → TryForwardDefView
 //   "用户点中某项后执行命令"            → InvokeCommand
 //   "owner-draw 菜单的绘制/测量/选择消息（转发 IContextMenu2/3）" → 内部类 MenuOwnerWindow.WndProc
+//   （桌面空白右键已回归自绘 DesktopMenuPopup——跨进程 DefView 转发与相关方法 2026-09-10 移除，勿复活）
 // ────────────────────────────────────
 
 /// <summary>系统原生右键弹层（IContextMenu HMENU → TrackPopupMenuEx；全部 COM 在常驻 STA 线程）。</summary>
@@ -82,79 +81,12 @@ public static class NativeMenuPopup
         return true;
     }
 
-    /// <summary>桌面空白处弹原生背景菜单（优先转发 explorer DefView，失败降级桌面 IContextMenu）。</summary>
-    public static bool TryShowDesktopBackground(System.Windows.Point physicalPx)
-    {
-        if (!IsNativeMode)
-        {
-            return false;
-        }
-        var pos = physicalPx;
-        StaComWorker.Begin(() => ShowBackgroundCore(pos));
-        return true;
-    }
-
     // ===== 菜单服务同步入口（独立子进程调用；文件管理器逻辑：本进程 IContextMenu） =====
 
     /// <summary>菜单服务：同步弹图标菜单（当前线程执行，子进程内直接调用，不经 StaComWorker）。</summary>
     public static void ShowItemsSync(IReadOnlyList<string> paths, System.Windows.Point physicalPx, bool extendedVerbs = false)
     {
         ShowItemsCore(paths, physicalPx, extendedVerbs);
-    }
-
-    /// <summary>菜单服务：同步弹桌面背景菜单（本进程 CreateViewObject，不转发 DefView、不碰 explorer）。</summary>
-    public static void ShowBackgroundSync(System.Windows.Point physicalPx)
-    {
-        var x = (int)Math.Round(physicalPx.X);
-        var y = (int)Math.Round(physicalPx.Y);
-        var owner = new MenuOwnerWindow();
-        IntPtr hmenu = IntPtr.Zero;
-        try
-        {
-            var hrFolder = SHGetDesktopFolder(out var folder);
-            if (hrFolder != 0 || folder is null)
-            {
-                DiagnosticLog.Trace("shell.contextmenu", $"菜单服务 SHGetDesktopFolder 失败 hr=0x{hrFolder:X8}");
-                return;
-            }
-
-            var iidCm = IidIContextMenu;
-            var hrCm = folder.CreateViewObject(owner.Hwnd, ref iidCm, out var ppv);
-            if (hrCm != 0 || ppv == IntPtr.Zero)
-            {
-                DiagnosticLog.Trace("shell.contextmenu", $"菜单服务 CreateViewObject 失败 hr=0x{hrCm:X8}");
-                return;
-            }
-
-            var cm = (IContextMenu)Marshal.GetObjectForIUnknown(ppv);
-            _ = Marshal.Release(ppv);
-            owner.SetTarget(cm);
-
-            hmenu = NativeMethods.CreatePopupMenu();
-            var hr = cm.QueryContextMenu(hmenu, 0, CmdFirst, CmdLast, CmfNormal);
-            if (hr < 0 || NativeMethods.GetMenuItemCount(hmenu) <= 0)
-            {
-                return;
-            }
-
-            var cmd = TrackPopupMenuEx(hmenu, TpmReturnCmd | TpmRightButton | TpmNoNotify, x, y, owner.Hwnd, IntPtr.Zero);
-            if (cmd >= CmdFirst && cmd <= CmdLast)
-            {
-                InvokeCommand(cm, owner.Hwnd, cmd, physicalPx);
-            }
-        }
-        catch (Exception ex)
-        {
-            DiagnosticLog.Trace("shell.contextmenu", $"菜单服务背景菜单失败: {ex.Message}");
-        }
-        finally
-        {
-            if (hmenu != IntPtr.Zero)
-            {
-                _ = NativeMethods.DestroyMenu(hmenu);
-            }
-            owner.Dispose();
-        }
     }
 
     // ===== STA worker 侧实现 =====
@@ -313,98 +245,6 @@ public static class NativeMenuPopup
         {
             DiagnosticLog.Trace("shell.contextmenu", $"绑定 IContextMenu 失败: {ex.Message}");
             return null;
-        }
-    }
-
-    private static void ShowBackgroundCore(System.Windows.Point physicalPx)
-    {
-        var x = (int)Math.Round(physicalPx.X);
-        var y = (int)Math.Round(physicalPx.Y);
-
-        // 【回归修复 2026-09-07】空白右键 = DefView 转发（explorer 原生背景菜单，已验证可靠）。
-        // 实测：DefView 收到 WM_CONTEXTMENU 不看坐标、不看选中，一律弹背景菜单——空白右键
-        // 走 DefView 转发即弹正确背景菜单。菜单服务子进程 CreateViewObject 已实证 hr=0x1
-        // 失败（本机系统级），不再走子进程。
-        DesktopMenuDelegation.ClearDesktopSelection();
-        if (TryForwardDefView(x, y))
-        {
-            DiagnosticLog.Trace("shell.contextmenu", $"桌面空白 → DefView 转发 ({x},{y})");
-            return;
-        }
-        DiagnosticLog.Trace("shell.contextmenu", $"桌面空白 → DefView 转发失败，不弹菜单 ({x},{y})");
-
-        // 降级：桌面文件夹 IContextMenu（CreateViewObject 空选择 = 背景菜单）
-        var owner = new MenuOwnerWindow();
-        IntPtr hmenu = IntPtr.Zero;
-        try
-        {
-            var hrFolder = SHGetDesktopFolder(out var folder);
-            if (hrFolder != 0 || folder is null)
-            {
-                DiagnosticLog.Trace("shell.contextmenu", $"SHGetDesktopFolder 失败 hr=0x{hrFolder:X8}");
-                return;
-            }
-
-            var iidCm = IidIContextMenu;
-            var hrCm = folder.CreateViewObject(owner.Hwnd, ref iidCm, out var ppv);
-            if (hrCm != 0 || ppv == IntPtr.Zero)
-            {
-                DiagnosticLog.Trace("shell.contextmenu", $"桌面 CreateViewObject 失败 hr=0x{hrCm:X8}");
-                return;
-            }
-
-            var cm = (IContextMenu)Marshal.GetObjectForIUnknown(ppv);
-            _ = Marshal.Release(ppv);
-            owner.SetTarget(cm);
-
-            hmenu = NativeMethods.CreatePopupMenu();
-            var hr = cm.QueryContextMenu(hmenu, 0, CmdFirst, CmdLast, CmfNormal);
-            if (hr < 0 || NativeMethods.GetMenuItemCount(hmenu) <= 0)
-            {
-                return;
-            }
-
-            var cmd = TrackPopupMenuEx(hmenu, TpmReturnCmd | TpmRightButton | TpmNoNotify, x, y, owner.Hwnd, IntPtr.Zero);
-            if (cmd >= CmdFirst && cmd <= CmdLast)
-            {
-                InvokeCommand(cm, owner.Hwnd, cmd, physicalPx);
-            }
-        }
-        catch (Exception ex)
-        {
-            DiagnosticLog.Trace("shell.contextmenu", $"桌面原生背景菜单失败: {ex.Message}");
-        }
-        finally
-        {
-            if (hmenu != IntPtr.Zero)
-            {
-                _ = NativeMethods.DestroyMenu(hmenu);
-            }
-            owner.Dispose();
-        }
-    }
-
-    /// <summary>转发 WM_CONTEXTMENU 给 explorer 桌面的 SHELLDLL_DefView（兼容 WorkerW 变体）。</summary>
-    private static bool TryForwardDefView(int x, int y)
-    {
-        try
-        {
-            // 【回归修复 2026-09-06 / P2-9】共享验证版查找：空壳 DefView（无 SysListView32）
-            // 转发必无菜单——壁纸引擎重建桌面层后 Progman 直下可能残留空壳，真身移到顶层 WorkerW。
-            var defView = DesktopMenuDelegation.FindVerifiedDefView();
-            if (defView == IntPtr.Zero)
-            {
-                return false;
-            }
-
-            var lParam = unchecked((IntPtr)((y & 0xFFFF) << 16 | (x & 0xFFFF)));
-            _ = NativeMethods.SendMessage(defView, (uint)WmContextMenu, defView, lParam);
-            return true;
-        }
-        catch (Exception ex)
-        {
-            DiagnosticLog.Trace("shell.contextmenu", $"DefView 转发失败: {ex.Message}");
-            return false;
         }
     }
 

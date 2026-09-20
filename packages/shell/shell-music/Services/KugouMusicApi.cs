@@ -46,6 +46,15 @@ public sealed class KugouMusicApi : IKugouMusicApi
 
     private static readonly string Mid = Guid.NewGuid().ToString("N").Substring(0, 32);
 
+    /// <summary>
+    /// 入站 JSON 的解析选项。
+    /// <para>
+    /// 【C1 为什么限深】响应来自**外部 HTTP API**（酷狗）—— 最不可信的一类输入。
+    /// 显式限深 32，不依赖 STJ 的默认值：默认值是**库的行为**，显式值才是**我们的契约**。
+    /// </para>
+    /// </summary>
+    private static readonly JsonDocumentOptions ResponseJsonOptions = new() { MaxDepth = 32 };
+
     // ---------------- 签名四式（7407 §三 [verified] 逐函数移植） ----------------
 
     /// <summary>Android API 参数签名：MD5(SALT + 排序后 k=v 串 + data + SALT)。</summary>
@@ -127,7 +136,7 @@ public sealed class KugouMusicApi : IKugouMusicApi
 
         try
         {
-            using var doc = JsonDocument.Parse(json);
+            using var doc = JsonDocument.Parse(json, ResponseJsonOptions);
             if (doc.RootElement.TryGetProperty("data", out var data)
                 && data.TryGetProperty("play_url", out var playUrl)
                 && playUrl.GetString() is { Length: > 0 } url)
@@ -161,7 +170,7 @@ public sealed class KugouMusicApi : IKugouMusicApi
 
         try
         {
-            using var doc = JsonDocument.Parse(searchJson);
+            using var doc = JsonDocument.Parse(searchJson, ResponseJsonOptions);
             if (!doc.RootElement.TryGetProperty("candidates", out var candidates)
                 || candidates.GetArrayLength() == 0)
             {
@@ -184,7 +193,7 @@ public sealed class KugouMusicApi : IKugouMusicApi
                 return null;
             }
 
-            using var dlDoc = JsonDocument.Parse(downloadJson);
+            using var dlDoc = JsonDocument.Parse(downloadJson, ResponseJsonOptions);
             if (dlDoc.RootElement.TryGetProperty("content", out var content)
                 && content.GetString() is { Length: > 0 } lyric)
             {

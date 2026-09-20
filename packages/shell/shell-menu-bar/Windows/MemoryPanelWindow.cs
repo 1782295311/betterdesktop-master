@@ -172,7 +172,7 @@ internal sealed class MemoryPanelWindow : MenuBarPopupWindow
         host.Children.Add(grid);
 
         var track = NativePanelStyles.BuildProgressTrack(vm.UsagePercent01, 14,
-            new SolidColorBrush(Color.FromRgb(0, 122, 255)));
+            ThemeBrushes.Get("SkinAccentFromSkin"));
         track.Margin = new Thickness(0, 6, 0, 0);
         host.Children.Add(track);
 
@@ -254,7 +254,7 @@ internal sealed class MemoryPanelWindow : MenuBarPopupWindow
             Width = 22,
             Height = 22,
             CornerRadius = new CornerRadius(6),
-            Background = new SolidColorBrush(Color.FromArgb(30, 0, 0, 0)),
+            Background = new SolidColorBrush(Colors.Black) { Opacity = 0.12 },
             VerticalAlignment = VerticalAlignment.Center
         };
         if (source is not null)

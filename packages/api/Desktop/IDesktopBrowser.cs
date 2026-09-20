@@ -1,6 +1,8 @@
 // BetterDesktop.Shell.Desktop — 桌面/文件夹浏览器契约
-// 自绘桌面的核心交互面：Location 可导航（默认 = 用户桌面），支持历史导航与对选中项的文件操作。
+// 自绘桌面的核心交互面：Location 固定 = 用户桌面，提供对选中项的文件操作（菜单栏左区工具条消费）。
 // 菜单栏左区（导航入口 + 工具条）仅依赖本契约（由 DesktopPlugin Provide），不感知实现。
+// 【2026-09-17 用户拍板】历史导航（Navigate/Back/Forward/Up/CanGoBack/CanGoForward/LocationChanged）已移除：
+// 桌面的文件夹现在是直接交给 explorer 打开，自绘桌面不再做站内导航 → 历史栈恒空、路径恒为桌面，全属死代码。
 
 using System;
 
@@ -27,32 +29,13 @@ public interface IDesktopBrowser
     /// <summary>当前是否有剪贴板内容可粘贴（本浏览器剪切/复制过）。</summary>
     bool CanPaste { get; }
 
-    /// <summary>是否可后退。</summary>
-    bool CanGoBack { get; }
-
-    /// <summary>是否可前进。</summary>
-    bool CanGoForward { get; }
-
-    /// <summary>当前位置变化（导航/刷新后触发；已在 UI 线程）。</summary>
-    event EventHandler<string>? LocationChanged;
-
     /// <summary>选中集变化（已在 UI 线程）。</summary>
     event EventHandler? SelectionChanged;
 
     /// <summary>条目枚举完成（UI 重建图标网格；已在 UI 线程）。</summary>
     event EventHandler? ItemsChanged;
 
-    /// <summary>导航到指定目录（压入历史）。非目录时忽略。</summary>
-    void Navigate(string path);
-
-    bool Back();
-
-    bool Forward();
-
-    /// <summary>向上（父目录）；已在根时返回 false。</summary>
-    bool Up();
-
-    /// <summary>重新枚举当前位置。</summary>
+    /// <summary>重新枚举当前位置（桌面目录）。</summary>
     void Refresh();
 
     /// <summary>替换选中集（外部清空/同步用）。</summary>

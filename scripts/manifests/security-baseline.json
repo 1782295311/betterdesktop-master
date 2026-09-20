@@ -1,0 +1,52 @@
+{
+  "note": "verify-security 棘轮基线：**只许收缩**。① 未登记的新违规 → 报红；② 已登记的条目在现实中不再命中 → 同样报红（强制删条目，防清单变成历史垃圾场）。与 architecture-allowlist.json 同构。",
+  "why": {
+    "json-maxdepth": "这些文件的 JSON 来自**本地配置文件 / 自己的中间产物**（%LocalAppData% 下，仅当前用户可写）—— 按 docs/threat-model.md §一 的信任边界判定为可信输入。对可信输入限深是**纵深防御**（值得做，但不是红线），故登记为存量欠账、逐步清零。真正的外部输入（管道 / HTTP / 跨进程 stdio）走硬红线，**不允许**出现在本清单里；判定清单见 verify-security.ps1 的 $script:ExternalJsonInputs。",
+    "empty-catch": "历史空 catch（34 处 / 14 个文件），多为 UI 与 native interop 的容错路径。清零方向：补一句「为什么可以忽略」的注释即视为通过（规则把「仅有注释」判为通过，因为那说明作者是有意忽略而非遗漏）。"
+  },
+  "allowed": {
+    "json-maxdepth": [
+      "packages/entry/host/SettingsFileWriter.cs",
+      "packages/entry/launcher/Services/SettingsSnapshot.cs",
+      "packages/kernel/kernel/Deployment/DeploymentInfo.cs",
+      "packages/kernel/kernel/MenuCommandPipeCodec.cs",
+      "packages/shell/shell-app-source/Services/AppSourceSettings.cs",
+      "packages/shell/shell-calendar/Services/HolidayProvider.cs",
+      "packages/shell/shell-capture/Core/CaptureSettings.cs",
+      "packages/shell/shell-capture/HotKeyManager.cs",
+      "packages/shell/shell-clipboard-panel/EdgeHandleWindow.cs",
+      "packages/shell/shell-clipboard/ClipboardPlugin.cs",
+      "packages/shell/shell-clipboard/Sections/ClipboardSection.cs",
+      "packages/shell/shell-context-menu/Services/HandlerCrashGuard.cs",
+      "packages/shell/shell-context-menu/Services/RegTreeBackup.cs",
+      "packages/shell/shell-context-menu/Services/ShellMenuRegistryBackup.cs",
+      "packages/shell/shell-convert/Services/Engines/ManagedEngine.cs",
+      "packages/shell/shell-convert/Services/RustConvertRunner.cs",
+      "packages/shell/shell-core/Surface/EntryTheme.cs",
+      "packages/shell/shell-dock/Services/AppGroupStore.cs",
+      "packages/shell/shell-menu-bar/Windows/NetworkPanelWindow.cs",
+      "packages/shell/shell-pinning/Services/PinningService.cs",
+      "packages/shell/shell-recent/Services/RecentItemsService.cs",
+      "packages/shell/shell-settings/Services/SettingsService.cs",
+      "packages/entry/tray/SettingsBridge.cs",
+      "packages/entry/tray/UpdateStatusReader.cs",
+      "packages/entry/updater/ReleaseModels.cs"
+    ],
+    "empty-catch": [
+      "packages/entry/host/App.xaml.cs",
+      "packages/kernel/kernel-hmr/ExternalPluginAdapter.cs",
+      "packages/shell/shell-app-source/Native/HighResIconExtractor.cs",
+      "packages/shell/shell-capture-tests/WindowsMediaOcrIntegrationTests.cs",
+      "packages/shell/shell-context-menu-tests/MenuManagerServiceTests.cs",
+      "packages/shell/shell-convert/Services/ArchiveService.cs",
+      "packages/shell/shell-menu-bar/Services/ControlCenterFeatureCatalog.cs",
+      "packages/shell/shell-menu-bar/Status/MenuBarStatusStrip.cs",
+      "packages/shell/shell-menu-bar/Windows/SoundPanelWindow.cs",
+      "packages/shell/shell-music/Services/KugouMusicApi.cs",
+      "packages/shell/shell-settings/Native/SystemAccentColorReader.cs",
+      "packages/shell/shell-status/Native/AudioCoreNative.cs",
+      "packages/shell/shell-status/Native/KeyboardLayoutInterop.cs",
+      "packages/shell/shell-window-tracker/Native/RunningAppDetector.cs"
+    ]
+  }
+}

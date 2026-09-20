@@ -22,15 +22,25 @@
 | T3 | 10000 层嵌套 JSON / 超大管道消息 | `serde_json` 递归上限**不得关闭**；消息长度上限 + 单连接最长 30s | `components.rs::parse`（测试 `deeply_nested_json_is_rejected_not_stack_overflow`）、`pipe.rs::read_line_bounded` |
 | T4 | 参数里塞引号拼出额外命令 | 可执行体传绝对路径、参数**逐项构造**（禁拼接） | `process.rs::spawn_detached`（测试 `command_line_quotes_exe_and_appends_args`） |
 | T5 | 兼容期内 C# 与 core 同写配置 ⇒ 旧快照覆盖新值 | 同名互斥 + 互斥覆盖**整个读-合并-写** + 解析失败**拒写** + 原子替换 | `settings.rs::SAVE_MUTEX_NAME`（测试 `save_mutex_name_is_pinned`）、`settings.rs::set_flat_at` |
-| T6 | 计划任务指向可替换的开发目录 | 用户级任务 + 只认稳定位置，dev 目录**拒绝** | `task.rs::is_stable_location`（测试 `stable_location_accepts_install_root_and_production_folder`） |
+| T6 | 计划任务 / 开机自启指向可替换的开发目录，**或被同一台机器上的另一份 core 抢走** | 用户级 + 写权三态：dev 目录**拒绝**；产品目录里的副本只能"用"不能"写" | `ownership.rs::of`（测试 `a_second_copy_on_the_same_machine_is_only_a_tenant`） |
 | T7 | 边界随时间漂移 | 棘轮：**未登记即红，登记但已失效也红** | `scripts/verify-architecture-guard.ps1`、`scripts/manifests/architecture-allowlist.json` |
+
+**C# 侧（core 之外）**——此前只有 core 有统一判据，2026-09-20 起 C# 侧同样有机器门禁（`scripts/verify-security.ps1`）：
+
+| # | 威胁（场景） | 措施 | 证据 |
+|---|---|---|---|
+| C1 | 同用户进程连 Host / 桌面服务管道投递命令；或「只写不换行」吃满内存并钉死唯一实例槽 | 有界读 + 总超时 + magic 握手，实例数限 1 | `BoundedPipeLine`；规则 1 |
+| C2 | 外部数据（注册表 `UninstallString`、本进程命令行）拼进子进程参数 | `ArgumentList` 逐项传参，禁字符串拼接 | 规则 2（三处 `cmd /c` 已改） |
+| C3 | 外部输入的超深 JSON 打成栈深炸弹 | 管道 / HTTP / 跨进程 stdio 显式 `MaxDepth`，禁依赖库默认值 | 规则 3（外部 5 处，硬红线） |
+| C4 | 相对名 `LoadLibrary` 被当前目录劫持 | 只接受绝对路径变量 | 规则 4 |
+| C5 | 空 `catch` 让安全检查静默失效 | 块内至少留注释说明「为何可忽略」 | 规则 6（棘轮，存量 34 处） |
 
 ## 三、不防谁（**带触发条件才不会腐烂成借口**）
 
 | 威胁 | 为什么不防 | 触发条件 |
 |---|---|---|
 | 管理员级攻击者 | 可直接替换文件、读内存；防它等于改产品形态 | **永久不防**（本行**有意**不带条件：它不可能变成过时的借口） |
-| 同账户其它进程 | 用户级产品里它等价于用户本人 | **开放第三方插件生态时** |
+| 同账户其它进程 | 用户级产品里它等价于用户本人（C1 的 magic 握手与实例数限制只能提高门槛，**不构成防线**；per-session token 同理——同用户可读） | **开放第三方插件生态时** |
 | 安装目录可写的攻击者 | 用户级 Run 键已有同等能力，计划任务未引入新信任边界 | **引入 Authenticode 签名时** |
 | 第三方模型 / 插件文件被替换 | C20 留位未实现 | **S5.5 起用 C20 时** |
 | 屏幕内容（截图 / OCR / 翻译）外泄 | 无云端通路，全在本机 | **bd-infer 立项时** |

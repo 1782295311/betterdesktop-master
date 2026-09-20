@@ -21,6 +21,24 @@
 | `inject` / `provide` | 依赖服务 / 提供服务声明 | 否 |
 | `optional` | 可选依赖（缺省不阻塞加载） | 否 |
 | `license` / `homepage` | 社区分发信息 | 否 |
+| `contextMenus` | 系统右键菜单声明（M3.1 v1 可选，见下） | 否 |
+
+**contextMenus 字段（M3.1 统一注册体系 v1）**：一个功能声明一次，三路输出同源——① 自绘菜单项（各主体产出 `MenuItemDef` 时填 `Action` 对齐标识）；② 系统右键注册表 verb（`ContextMenuRegistry` 按 `scene` 注入 HKCU，命令 = CLI `--menu-cmd <action>`）；③ CLI 动作路由键（`Action` 即 CLI 的 `--menu-cmd` 参数：headless 直执行 / 需宿主提示 / `plugin:<id>:<action>` 分派）。
+
+```jsonc
+"contextMenus": [{
+  "scene": "file | directory | background | all",   // 场景，默认 file
+  "verb": "BetterDesktop.ConvertToPdf",             // 注册表键名（同场景唯一）
+  "title": "转换为 PDF",                            // MUIVerb，≤80 字符红线
+  "icon": "optional-path",                          // 可选
+  "action": "plugin:<pluginId>:<actionName>",       // CLI 分派标识（内置动作如 convert-to-pdf 亦可）
+  "args": ["%1"],                                   // %1=文件 %V=目录 背景=空
+  "extended": false                                 // Shift 扩展项（Win10 语义），可选
+}]
+```
+
+- 装配期注入 `HKCU\Software\Classes\<scene根>\shell\<verb>`（键名避让、`%1`/`%V` 后缀、MUIVerb≤80、幂等重写——红线见 `TECH-KNOWLEDGE/72-右键菜单/`）。
+- CLI 分派：action 前缀 `plugin:` → 定位插件 → ALC 加载 → 调能力接口（`IContextMenuActionHandler`，第二期骨架）；内置动作（convert-to-*/compress-*/unzip-*）走 headless 直执行。
 
 ## 三、API 兼容与弃用
 
@@ -45,12 +63,3 @@
 1. 插件包 = 压缩包 + `manifest.json` + 完整性哈希 + 可选签名；布局：清单与 `plugin/` 内容并存包根。
 2. 安装即校验：哈希 / 签名不通过拒绝安装；来源显示于状态中心。
 3. 审核分级：签名可信 → 免确认；未签名 → 用户显式确认；权限滥用 → 下架并熔断。
-
-## 机检状态（诚实标注）
-
-| 规则 | 当前机检 | 规划机检 |
-|---|---|---|
-| README 四小节存在 | `package-readme` ✅ | — |
-| 插件清单 schema 校验 | **暂无机检** | P1：内核 loader 校验（运行时） |
-| 公开契约破坏检测 | **暂无机检** | P2：API 差异比对（基线锁定） |
-| 示例新鲜度 | **暂无机检** | P1：gen --check |

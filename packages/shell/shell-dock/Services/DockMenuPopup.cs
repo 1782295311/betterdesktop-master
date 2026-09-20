@@ -95,7 +95,7 @@ public static class DockMenuPopup
     private static MenuItem BuildItem(MenuItemDef def)
     {
         var item = new MenuItem { Header = def.Text, IsEnabled = def.IsEnabled };
-        if (def.IsDefault)
+        if (def.IsDefault || def.Highlighted) // 2026-09-10：无损转换项高亮（加粗，同 IsDefault 模式）
         {
             item.FontWeight = FontWeights.Bold;
         }

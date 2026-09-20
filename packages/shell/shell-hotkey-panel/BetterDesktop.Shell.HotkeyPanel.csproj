@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <UseWPF>true</UseWPF>
+    <RootNamespace>BetterDesktop.Shell.HotkeyPanel</RootNamespace>
+    <AssemblyName>BetterDesktop.Shell.HotkeyPanel</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="BetterDesktop.Shell.HotkeyPanel.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\kernel\kernel\BetterDesktop.Kernel.csproj" />
+    <ProjectReference Include="..\..\api\BetterDesktop.Api.csproj" />
+    <ProjectReference Include="..\shell-core\BetterDesktop.Shell.Core.csproj" />
+    <!-- HotkeySpec 解析/归一/内置键清单的唯一来源 -->
+    <ProjectReference Include="..\shell-clipboard-ipc\BetterDesktop.Shell.Clipboard.Ipc.csproj" />
+    <!-- SettingsUi 卡片基元（设置中心"热键"分节用） -->
+    <ProjectReference Include="..\shell-settings\BetterDesktop.Shell.Settings.csproj" />
+  </ItemGroup>
+
+</Project>

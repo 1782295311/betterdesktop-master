@@ -163,6 +163,16 @@ public sealed class StatusPoller : IStatusPoller
 
     private void OnTick(MonitorTimer slot)
     {
+        // 【2026-09-18 电源管理】挂起中 / 恢复冷却期跳过本轮采集。
+        // 本采集常驻且频率高（音量 / 麦克风 / 输入法 500ms，CPU / 内存 / 网络 1s，合计约 9 次/秒原生调用：
+        // CoreAudio 会话枚举、键盘布局注册表 + TSF 等）。现代待机（S0ix）下 CPU 仍会被这些定时器
+        // 反复唤醒，是"合盖后风扇仍转"的来源之一；恢复瞬间设备/COM 正在重新枚举，采到的也多为无效值。
+        // 冷却期（默认 5s）结束后自动恢复采集。
+        if (BetterDesktop.Kernel.Core.SystemPowerMonitor.Current.ShouldPauseHighFrequencyWork)
+        {
+            return;
+        }
+
         // 一次采集未结束前不再重入，避免慢采集在短周期下叠加。
         if (Interlocked.CompareExchange(ref slot.Running, 1, 0) != 0)
         {

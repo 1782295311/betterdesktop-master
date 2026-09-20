@@ -23,7 +23,7 @@ public sealed class TextPdfEngine : IConversionEngine
         sources.Count == 1
         && Path.GetExtension(sources[0]).Equals(".pdf", StringComparison.OrdinalIgnoreCase)
         && (target.Prefer == EngineKind.PdfText || target.Fallback == EngineKind.PdfText)
-        && target.Format is "docx" or "xlsx";
+        && target.Format is "txt" or "md" or "html" or "docx" or "xlsx" or "epub" or "odt" or "rtf" or "opendocument";
 
     public EngineAvailability Probe() =>
         PopplerEngine.LocatePdftotext() is not null
@@ -52,17 +52,130 @@ public sealed class TextPdfEngine : IConversionEngine
         }
         var text = await File.ReadAllTextAsync(textFile, Encoding.UTF8, ct);
 
-        // 2) 生成最小 OOXML（纯托管）
-        var product = Path.Combine(job.TempDir, name + "." + format);
-        if (format == "docx")
+        // 2) 按目标格式生成（纯托管；无版式，诚实文本提取）
+        var product = Path.Combine(job.TempDir, name + "." + ExtensionOf(format));
+        switch (format)
         {
-            WriteMinimalDocx(product, text);
-        }
-        else
-        {
-            WriteMinimalXlsx(product, text);
+            case "docx":
+                WriteMinimalDocx(product, text);
+                break;
+            case "xlsx":
+                WriteMinimalXlsx(product, text);
+                break;
+            case "txt":
+            case "md":
+                await File.WriteAllTextAsync(product, text, new UTF8Encoding(false), ct);
+                break;
+            case "html":
+                await File.WriteAllTextAsync(product, BuildHtml(text), new UTF8Encoding(false), ct);
+                break;
+            case "epub":
+                WriteEpub(product, name, text);
+                break;
+            case "odt":
+                WriteOdt(product, text);
+                break;
+            case "rtf":
+                await File.WriteAllTextAsync(product, BuildRtf(text), new UTF8Encoding(false), ct);
+                break;
+            case "opendocument":
+                await File.WriteAllTextAsync(product, BuildOpenDocumentXml(text), new UTF8Encoding(false), ct);
+                break;
+            default:
+                throw new ConvertException(ConvertError.InputInvalid, $"TextPdf 引擎不支持的转换目标: {format}");
         }
         return [product];
+    }
+
+    // —— 目标格式扩展名（opendocument 输出单 XML） ——
+
+    private static string ExtensionOf(string format) => format switch
+    {
+        "md" => "md",
+        "html" => "html",
+        "epub" => "epub",
+        "odt" => "odt",
+        "rtf" => "rtf",
+        "opendocument" => "xml",
+        _ => format,
+    };
+
+    // —— html（转义段落，CJK 友好） ——
+
+    private static string BuildHtml(string text)
+    {
+        var body = string.Concat(text.Replace("\r\n", "\n").Split('\n')
+            .Select(line => "<p>" + EscapeXml(line) + "</p>\n"));
+        return "<!DOCTYPE html>\n<html lang=\"zh-CN\">\n<head><meta charset=\"utf-8\"/></head>\n<body>\n"
+            + body + "</body>\n</html>\n";
+    }
+
+    // —— rtf（\rtf1 单段落序列；\n 转 \par） ——
+
+    private static string BuildRtf(string text)
+    {
+        var escaped = text
+            .Replace("\\", "\\\\")
+            .Replace("{", "\\{")
+            .Replace("}", "\\}")
+            .Replace("\r\n", "\n")
+            .Replace("\n", "\\par\n");
+        return "{\\rtf1\\ansi\\deff0{\\fonttbl{\\f0 Courier New;}}\\f0\\fs24\n" + escaped + "\n}";
+    }
+
+    // —— opendocument（单 XML，pandoc -t opendocument 同形态：office:text 内容流） ——
+
+    private static string BuildOpenDocumentXml(string text)
+    {
+        var paragraphs = string.Concat(text.Replace("\r\n", "\n").Split('\n')
+            .Select(line => "<text:p>" + EscapeXml(line) + "</text:p>\n"));
+        return "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
+            + "<office:document xmlns:office=\"urn:oasis:names:tc:opendocument:xmlns:office:1.0\" "
+            + "xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\">\n"
+            + "<office:body><office:text>\n" + paragraphs + "</office:text></office:body>\n</office:document>\n";
+    }
+
+    // —— odt（zip：mimetype + content.xml，office:text 内容流） ——
+
+    private static void WriteOdt(string path, string text)
+    {
+        using var archive = ZipFile.Open(path, ZipArchiveMode.Create);
+        WriteEntry(archive, "mimetype", "application/vnd.oasis.opendocument.text");
+        var paragraphs = string.Concat(text.Replace("\r\n", "\n").Split('\n')
+            .Select(line => "<text:p>" + EscapeXml(line) + "</text:p>\n"));
+        WriteEntry(archive, "content.xml",
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
+            + "<office:document-content xmlns:office=\"urn:oasis:names:tc:opendocument:xmlns:office:1.0\" "
+            + "xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\">\n"
+            + "<office:body><office:text>\n" + paragraphs + "</office:text></office:body>\n</office:document-content>\n");
+    }
+
+    // —— epub（最小单章包：mimetype/container.opf/xhtml） ——
+
+    private static void WriteEpub(string path, string title, string text)
+    {
+        using var archive = ZipFile.Open(path, ZipArchiveMode.Create);
+        WriteEntry(archive, "mimetype", "application/epub+zip");
+        WriteEntry(archive, "META-INF/container.xml",
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
+            + "<container version=\"1.0\" xmlns=\"urn:oasis:names:tc:opendocument:xmlns:container\">"
+            + "<rootfiles><rootfile full-path=\"OEBPS/content.opf\" media-type=\"application/oebps-package+xml\"/>"
+            + "</rootfiles></container>");
+        WriteEntry(archive, "OEBPS/content.opf",
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
+            + "<package xmlns=\"http://www.idpf.org/2007/opf\" version=\"3.0\" unique-identifier=\"uid\">"
+            + "<metadata xmlns:dc=\"http://purl.org/dc/elements/1.1/\">"
+            + "<dc:identifier id=\"uid\">betterdt-pdf-text</dc:identifier>"
+            + "<dc:title>" + EscapeXml(title) + "</dc:title>"
+            + "<dc:language>zh-CN</dc:language></metadata>"
+            + "<manifest><item id=\"c1\" href=\"chapter.xhtml\" media-type=\"application/xhtml+xml\"/></manifest>"
+            + "<spine><itemref idref=\"c1\"/></spine></package>");
+        var body = string.Concat(text.Replace("\r\n", "\n").Split('\n')
+            .Select(line => "<p>" + EscapeXml(line) + "</p>\n"));
+        WriteEntry(archive, "OEBPS/chapter.xhtml",
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
+            + "<html xmlns=\"http://www.w3.org/1999/xhtml\"><head><title>"
+            + EscapeXml(title) + "</title></head><body>\n" + body + "</body></html>");
     }
 
     // —— docx 最小包（段落文本） ——
@@ -180,6 +293,8 @@ public sealed class TextPdfEngine : IConversionEngine
             FileName = exe,
             UseShellExecute = false, // 红线 1：参数数组直传
             CreateNoWindow = true,
+            RedirectStandardOutput = true, // 2026-09-10：读流必须重定向
+            RedirectStandardError = true,
         };
         foreach (var arg in args)
         {

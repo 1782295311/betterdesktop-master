@@ -118,7 +118,8 @@ public static class DwmapiHelper
         try
         {
             Marshal.StructureToPtr(policy, data.pData, false);
-            int hr = NativeMethods.SetWindowCompositionAttribute(hWnd, ref data); bool ok = hr == 0;
+            // 【2026-09-14 语义修正】该 API 返回 BOOL（非零 = 成功）；旧写法 `hr == 0` 判成功是反的。
+            bool ok = NativeMethods.SetWindowCompositionAttribute(hWnd, ref data);
             // F4/V5：SetLastError 已开但从不读等于没诊断（7437 纪律 2）——失败必须带错误码。
             if (!ok)
             {
@@ -147,7 +148,8 @@ public static class DwmapiHelper
         try
         {
             Marshal.StructureToPtr(policy, data.pData, false);
-            int hr = NativeMethods.SetWindowCompositionAttribute(hWnd, ref data); bool ok = hr == 0;
+            // 【2026-09-14 语义修正】BOOL 语义（同 SetAccent）：非零 = 成功。
+            bool ok = NativeMethods.SetWindowCompositionAttribute(hWnd, ref data);
             // F4/V5：同 SetAccent——失败带错误码，还原失败也要可诊断。
             if (!ok)
             {

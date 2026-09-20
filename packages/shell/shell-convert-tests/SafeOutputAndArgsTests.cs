@@ -12,7 +12,10 @@ public class SafeOutputAndArgsTests
     public void Soffice参数_顺序与内容锁定()
     {
         var args = SofficeEngine.BuildArguments("pdf", @"C:\tmp", @"C:\in\a b.docx");
-        Assert.Equal(["--headless", "--norestore", "--convert-to", "pdf", "--outdir", @"C:\tmp", @"C:\in\a b.docx"], args);
+        // 首参 = 受管独立 profile（隔离 LibreOffice 首次启动版本面板，不写用户 %APPDATA%）
+        Assert.StartsWith("-env:UserInstallation=file:///", args[0]);
+        Assert.Equal(["--headless", "--norestore", "--convert-to", "pdf", "--outdir", @"C:\tmp", @"C:\in\a b.docx"],
+            args.Skip(1));
     }
 
     [Fact]
@@ -20,56 +23,6 @@ public class SafeOutputAndArgsTests
     {
         Assert.Contains("UTF8", ConvertServiceConstants.TxtUtf8Filter);
         Assert.Contains("76", ConvertServiceConstants.CsvUtf8Filter); // StarCalc 代码页 76 = UTF-8
-    }
-
-    [Fact]
-    public void UniqueTarget_重名序号不覆盖()
-    {
-        var dir = Path.Combine(Path.GetTempPath(), "bd-conv-test-" + Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(dir);
-        try
-        {
-            Assert.Equal(Path.Combine(dir, "a.pdf"), ConversionService.UniqueTarget(dir, "a", "pdf"));
-            File.WriteAllText(Path.Combine(dir, "a.pdf"), "x");
-            Assert.Equal(Path.Combine(dir, "a (2).pdf"), ConversionService.UniqueTarget(dir, "a", "pdf"));
-            File.WriteAllText(Path.Combine(dir, "a (2).pdf"), "x");
-            Assert.Equal(Path.Combine(dir, "a (3).pdf"), ConversionService.UniqueTarget(dir, "a", "pdf"));
-        }
-        finally
-        {
-            Directory.Delete(dir, true);
-        }
-    }
-
-    [Fact]
-    public void PublishAll_多产物按序号命名且不覆盖()
-    {
-        var dir = Path.Combine(Path.GetTempPath(), "bd-conv-test-" + Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(dir);
-        try
-        {
-            var products = new List<string>();
-            for (var i = 1; i <= 3; i++)
-            {
-                var p = Path.Combine(dir, $"tmp{i}.png");
-                File.WriteAllText(p, "x");
-                products.Add(p);
-            }
-            var input = Path.Combine(dir, "in.pdf");
-            File.WriteAllText(input, "x");
-
-            var outputs = ConversionService.PublishAll(products, "in", "png", [input]);
-
-            Assert.Equal(3, outputs.Count);
-            Assert.EndsWith("in-1.png", outputs[0]);
-            Assert.EndsWith("in-2.png", outputs[1]);
-            Assert.EndsWith("in-3.png", outputs[2]);
-            Assert.All(outputs, o => Assert.True(File.Exists(o)));
-        }
-        finally
-        {
-            Directory.Delete(dir, true);
-        }
     }
 
     [Fact]

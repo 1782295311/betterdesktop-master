@@ -776,6 +776,16 @@ public static partial class KeyboardLayoutInterop
     public static bool CycleOnce()
     {
         // Win+Space 每调用一次全局切一步，不校验 HKL（校验会引入"连跳"风险，见上方历史教训）。
+        // 优先走原生 ImeCore.dll（natives/ 分发，随 4.4 状态采集迁原生）；DLL 缺失/调用失败时
+        // 回退下方托管实现，保证任何部署形态下行为一致。
+        if (ImeCoreNative.IsAvailable)
+        {
+            try
+            {
+                if (ImeCoreNative.CycleOnce()) return true;
+            }
+            catch { /* 回退托管实现 */ }
+        }
         return SimulateWinSpace();
     }
 

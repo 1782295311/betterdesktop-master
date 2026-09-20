@@ -1,11 +1,6 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <TargetFramework>net8.0-windows10.0.19041.0</TargetFramework>
-    <Nullable>enable</Nullable>
-    <ImplicitUsings>enable</ImplicitUsings>
-    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
-    <Platforms>x64</Platforms>
     <UseWPF>true</UseWPF>
     <RootNamespace>BetterDesktop.Shell.AppSource</RootNamespace>
     <AssemblyName>BetterDesktop.Shell.AppSource</AssemblyName>
@@ -21,5 +16,27 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\api\BetterDesktop.Api.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!--
+      【M2 · 2026-09-13】引擎候选源：`AppSourceService` 的 engine 后端经 IndexIpcClient 查询常驻索引引擎，
+      省掉每次打开应用提取器/开始菜单的全盘扫描（M0 基线：ScanAllPrograms 冷 53s）。
+      依赖方向：app-source → index-ipc（后者无任何工程引用）→ 无环。
+    -->
+    <ProjectReference Include="..\shell-index-ipc\BetterDesktop.Shell.IndexIpc.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- 供 shell-app-source-tests 访问 internal 升格层（AppCandidateMapper）。 -->
+    <InternalsVisibleTo Include="BetterDesktop.Shell.AppSource.Tests" />
+  </ItemGroup>
+
+
+  <ItemGroup>
+    <!-- 2026-09-17：独立设置进程（BetterDesktop.Settings.exe）按「分区目录」直接 new 本包的分区实现，
+         不再依赖插件 LoadAsync 注册（见 packages/shell/shell-settings-host/SectionCatalog.cs）。
+         只放开可见性，不改变任何运行时行为。 -->
+    <InternalsVisibleTo Include="BetterDesktop.Settings" />
   </ItemGroup>
 </Project>

@@ -1,5 +1,4 @@
 using System;
-using System.Collections.Generic;
 using System.Runtime.InteropServices;
 using BetterDesktop.Shell.Core.Native;
 using BetterDesktop.Shell.WindowTracker;
@@ -7,80 +6,59 @@ using BetterDesktop.Shell.WindowTracker.Native;
 
 namespace BetterDesktop.Shell.WindowTracker.Thumbnail;
 
-/// <summary>Z 序快照条目：顶层窗口句柄 + 是否处于置顶层（WS_EX_TOPMOST）。</summary>
-public readonly record struct ZOrderEntry(IntPtr Handle, bool IsTopmost);
-
 /// <summary>
-/// 纯裁决结果：能否 peek + 还原时插到哪个窗口之后（<see cref="IntPtr.Zero"/> = HWND_TOP，即普通层最前）。
-/// </summary>
-public readonly record struct PeekPlan(bool CanPeek, IntPtr InsertAfterOnRestore);
-
-/// <summary>
-/// 悬停缩略图的「窗口临时置顶」（Windows Aero Peek 语义）：
-/// 把目标窗口抬到<b>普通窗口层最前</b>（HWND_TOP）但**不激活、不抢焦点**，
-/// 鼠标移开后按抬起前记录的 Z 序锚点精确插回原位。
+/// 悬停缩略图的「窗口临时浮现」（Windows Aero Peek 语义）：
+/// 通过 DWM 合成器层的 <c>DwmActivateLivePreview</c> 让目标窗口全彩浮现、其余窗口透明化，
+/// 但不激活、不抢焦点、不改变真实 Z 序；鼠标移开后预览关闭、窗口还原。
 ///
-/// 【红线 1】绝不用 HWND_TOPMOST 抬窗：dock / 浮层 / 系统任务栏都在置顶层，
-/// 一旦把目标抬进置顶层，浮层会被它自己的预览目标盖住（且还原时必须清 TOPMOST 样式）。
-/// 抬到普通层最前即可——置顶层恒在普通层之上，天然压住被抬起的窗口。
+/// 【方案依据（2026-09-11，cairoshell/ManagedShell 标准做法）】旧实现用 SetWindowPos 改 Z 序抬窗，
+/// 对**高完整性窗口**（管理员运行的应用，IL12288 &gt; 宿主 IL8192）被 UIPI 拒绝（err=5）——
+/// 用户实测"管理员窗口 Peek 失效"的根因。cairoshell 底座 ManagedShell 的
+/// <c>WindowHelper.PeekWindow</c> 就是裸调 <c>DwmActivateLivePreview(enable, target, calling, AeroPeekType.Window)</c>：
+/// 预览动作发生在 DWM 合成器层，**天然免疫 UIPI**（explorer 中完整性对管理员窗口做任务栏预览正靠它），
+/// 无需提权。新版 cairoshell 用等价未文档化 API <c>DwmActivatePeek</c>，同为 DWM 层。
 ///
-/// 【红线 2】还原锚点必须是「抬起前紧邻其上的非置顶窗口」：Z 序分两层（置顶层 / 普通层），
-/// 拿置顶窗口当 hwndInsertAfter 会把目标带进置顶层（分层规则优先于插入位置）。
-/// 找不到非置顶锚点 → 回落 HWND_TOP（宁可高一位，不可插到置顶层）。
+/// 【红线 1】绝不用 HWND_TOPMOST / SetWindowPos 抬窗：既有 UIPI 缺口 + 抬完须精确还原 Z 序，
+/// DWM 预览不触碰 Z 序，无还原负担（本文件已整体移除 Z 序快照/锚点机制，见计划
+/// 2026-09-11-host-elevation-dock-peek.md）。
 ///
-/// 【红线 3】只改 Z 序不激活：SWP_NOACTIVATE，否则预览目标会抢走前台焦点。
+/// 【红线 2】Begin/End 必须成对：预览开启后，MouseLeave / 浮层关闭（Closed）/ 宿主销毁（Dispose）
+/// 任一路径都要调用 End/Cancel 关闭预览，否则窗口停留在"假预览"状态。
 ///
-/// 【红线 4（实测主因）】非前台进程抬窗必须先 `AttachThreadInput` 绑到前台线程再 `SetWindowPos`，抬完立刻解绑：
-/// 否则系统只把窗口放在「前台窗口**之后**」，前台窗口仍压在它上面 = 用户看到的就是"根本没置顶"。
-/// 与前台锁同源、解法也同源（本包 RunningAppDetector.ActivateWindow 同款已验证范式）。
-///
-/// 【红线 5】最小化窗口同样要 peek（用户明确要求）：
+/// 【红线 3】最小化窗口同样要 peek（用户明确要求）：
 /// - 显示：`NativeMethods.ShowWindowAsync(SW_SHOWNOACTIVATE=4)`——`ShowWindow(SW_RESTORE=9)` 会激活窗口抢焦点，禁用；
-///   且最小化窗口的 Z 序操作无意义，必须先让它显示出来。
+///   最小化窗口先以不激活方式显示，DWM 预览才能浮现它。
 /// - 收回：`SetWindowPlacement(原 placement)`——`ShowWindow(SW_MINIMIZE)` 会激活"下一个"窗口偷走焦点，禁用。
 /// - 点选激活前必须 `Cancel()`：否则 End 会先把它收回最小化、ActivateWindow 再还原，闪一下。
 /// </summary>
 public sealed class WindowPeek : IDisposable
 {
-    private const int GwlExStyle = -20;
-    private const long WsExTopmost = 0x00000008;
-
     // 显示最小化窗口但**不激活**（SW_RESTORE=9 会激活窗口抢焦点，禁用）。
     private const int SwShowNoActivate = 4;
 
-    // 置顶层入口/出口：仅当 HWND_TOP 被前台限制挡住时作为回退手段（End 必须成对退出）。
-    private static readonly IntPtr HwndTopmost = new(-1);
-    private static readonly IntPtr HwndNotTopmost = new(-2);
-
-    // SetWindowPos 标志：不动尺寸/位置、不激活、不动所有者 Z 序、不发 WM_WINDOWPOSCHANGING。
-    private const uint SwpNoSize = 0x0001;
-    private const uint SwpNoMove = 0x0002;
-    private const uint SwpNoActivate = 0x0010;
-    private const uint SwpNoOwnerZOrder = 0x0200;
-    private const uint SwpNoSendChanging = 0x0400;
-    private const uint ZOrderOnlyFlags =
-        SwpNoSize | SwpNoMove | SwpNoActivate | SwpNoOwnerZOrder | SwpNoSendChanging;
+    // AeroPeekType.Window = 3（ManagedShell 0.0.344 反射值：Default=0 / Desktop=1 / Window=3，勿臆改）。
+    private const int AeroPeekTypeWindow = 3;
 
     private IntPtr _target;
-    private IntPtr _restoreAnchor;
-    // 抬起前是否处于最小化：End 时须原样收回最小化（SetWindowPlacement，不激活）。
-    private bool _restoreMinimized;
-    private WindowPlacement _minimizedPlacement;
-    // 是否走了「置顶层」回退：End 时必须用 HWND_NOTOPMOST 退出，否则第三方窗口被永久置顶。
-    private bool _usedTopmost;
+    // 抬起前的最小化 placement：**可空**——读不到就绝不改写目标窗口
+    // （null = 本次 peek 没有"可还原的最小化状态"，End 不做任何写回）。
+    private WindowPlacement? _minimizedPlacement;
 
-    /// <summary>当前被临时抬起的窗口句柄（未 peek 时为 Zero）。</summary>
+    /// <summary>当前被临时预览的窗口句柄（未 peek 时为 Zero）。</summary>
     public IntPtr Target => _target;
 
-    /// <summary>是否有窗口正处于临时置顶态。</summary>
+    /// <summary>是否有窗口正处于临时预览态。</summary>
     public bool IsActive => _target != IntPtr.Zero;
 
     /// <summary>
-    /// 把窗口临时抬到普通层最前（**最小化窗口同样适用**：先以「不激活」方式显示出来，移开后原样收回最小化）。
-    /// 已 peek 同一句柄则无副作用返回 true；目标不可 peek（不可见/本身已置顶/属于本进程/不在 Z 序快照）
-    /// 时返回 false 且不改动任何窗口，原因写入调试日志（桌面 BetterDesktop_debug.log，tag=Peek）。
+    /// 让目标窗口以 Aero Peek 实时预览浮现（**最小化窗口同样适用**：先以「不激活」方式显示出来，
+    /// 移开后原样收回最小化）。已 peek 同一句柄则无副作用返回 true；目标不可 peek（无效句柄/
+    /// 不可见/本身已置顶/属于本进程）或 DWM 调用失败时返回 false 且不改动任何窗口，
+    /// 原因写入调试日志（桌面 BetterDesktop_debug.log，tag=Peek）。
     /// </summary>
-    public bool Begin(IntPtr hwnd)
+    /// <param name="hwnd">被预览的窗口句柄。</param>
+    /// <param name="callingHwnd">调用者窗口句柄（本 dock 预览浮层自身），语义同任务栏句柄。</param>
+    public bool Begin(IntPtr hwnd, IntPtr callingHwnd)
     {
         if (hwnd == IntPtr.Zero || !NativeMethods.IsWindow(hwnd))
         {
@@ -93,7 +71,7 @@ public sealed class WindowPeek : IDisposable
             return true;
         }
 
-        // 切换目标：先还原上一个，避免两个窗口同时被抬起。
+        // 切换目标：先关闭上一个预览，避免两个窗口同时处于预览态。
         End();
 
         var skip = GetSkipReason(hwnd);
@@ -103,281 +81,104 @@ public sealed class WindowPeek : IDisposable
             return false;
         }
 
-        var zOrder = SnapshotZOrder();
-        var plan = Plan(zOrder, hwnd);
-        if (!plan.CanPeek)
-        {
-            DebugLog.Trace("Peek", $"skip hwnd=0x{(long)hwnd:X} reason=not-in-zorder");
-            return false;
-        }
-
-        // 最小化窗口：先「不激活地」显示出来再抬 Z 序。
+        // 最小化窗口：先「不激活地」显示出来再开预览。
         // ⚠️ 必须用 SW_SHOWNOACTIVATE(4)——ShowWindow(SW_RESTORE=9) 会激活窗口抢焦点，与 peek 语义相悖；
-        // 且最小化窗口的 Z 序操作毫无意义，必须先让它显示。
+        // 且最小化窗口对 DWM 预览无意义，必须先让它显示出来。
         var minimized = NativeMethods.IsIconic(hwnd);
         if (minimized)
         {
-            RunningAppDetector.GetWindowPlacement(hwnd, out var placement);
+            // 【2026-09-18 安全闸门】读不到 placement 就**不显示**：一旦先显示再无法原样收回，
+            // 用户的窗口会被留在"被显示但未预览"的异常态——那是我们弄坏了别人的窗口。
+            // 宁可这一次不 peek（用户只是少看一张预览），也绝不冒"改坏他人窗口几何"的风险。
+            if (!RunningAppDetector.TryGetWindowPlacement(hwnd, out var placement))
+            {
+                DebugLog.Trace("Peek",
+                    $"skip hwnd=0x{(long)hwnd:X} reason=placement-unreadable（无法保证原样收回最小化，已放弃本次 peek）");
+                return false;
+            }
+
             _minimizedPlacement = placement;
-            _restoreMinimized = true;
             NativeMethods.ShowWindowAsync(hwnd, SwShowNoActivate);
         }
 
         _target = hwnd;
-        _restoreAnchor = plan.InsertAfterOnRestore;
-        // NOACTIVATE：只抬 Z 序，不抢焦点。抬完自校验，必要时退到置顶层最底部（见 RaiseToTop）。
-        var mode = RaiseToTop(hwnd, zOrder);
-        DebugLog.Trace("Peek", $"begin hwnd=0x{(long)hwnd:X} anchor=0x{(long)_restoreAnchor:X} wasMinimized={(minimized ? 1 : 0)} mode={mode}");
+        var hr = NativeMethods.DwmActivateLivePreview(1, hwnd, callingHwnd, AeroPeekTypeWindow, IntPtr.Zero);
+        if (hr != 0)
+        {
+            // DWM 预览失败（如 DWM 关闭/远程会话）：回滚状态，让调用方走失败抑制。
+            _target = IntPtr.Zero;
+            var rollback = _minimizedPlacement;
+            _minimizedPlacement = null;
+            // ⚠️ 补收回：失败前若已把最小化窗口 ShowWindowAsync 显示出来，必须原样收回最小化
+            // （否则窗口停留在"被显示但未预览"的异常态，表现为尺寸/状态错乱）。
+            // rollback 为 null = 本次没显示过（非最小化，或读失败已提前返回）：什么都不做。
+            if (rollback is { } restore && NativeMethods.IsWindow(hwnd))
+            {
+                SetWindowPlacement(hwnd, ref restore);
+            }
+            DebugLog.Trace("Peek", $"begin failed hwnd=0x{(long)hwnd:X} calling=0x{(long)callingHwnd:X} hr=0x{(uint)hr:X8}");
+            return false;
+        }
+
+        DebugLog.Trace("Peek", $"begin hwnd=0x{(long)hwnd:X} calling=0x{(long)callingHwnd:X} wasMinimized={(minimized ? 1 : 0)}");
         return true;
     }
 
     /// <summary>
-    /// 把窗口插回抬起前的位置；若抬起前是最小化的，再原样收回最小化（同样不激活）。
-    /// 幂等：重复调用无副作用。目标窗口已销毁 → 无需还原；锚点窗口已销毁 → 回落 HWND_TOP。
+    /// 关闭实时预览；若预览前是最小化的，再原样收回最小化（同样不激活）。
+    /// 幂等：重复调用无副作用。目标窗口已销毁 → 无需任何动作。
     /// </summary>
     public void End()
     {
         var target = _target;
-        var anchor = _restoreAnchor;
-        var restoreMinimized = _restoreMinimized;
-        var placement = _minimizedPlacement;
-        var usedTopmost = _usedTopmost;
+        var placement = _minimizedPlacement; // null = 本次没有"可还原的最小化状态"，End 不做任何写回
         _target = IntPtr.Zero;
-        _restoreAnchor = IntPtr.Zero;
-        _restoreMinimized = false;
-        _minimizedPlacement = default;
-        _usedTopmost = false;
+        _minimizedPlacement = null;
 
         if (target == IntPtr.Zero || !NativeMethods.IsWindow(target))
         {
             return;
         }
 
-        if (usedTopmost)
-        {
-            // 回退路径用到了置顶层：必须先退出（否则第三方窗口被永久置顶），
-            // HWND_NOTOPMOST 会把它落到普通层最前，随后再插回原锚点之下。
-            MoveZOrder(target, HwndNotTopmost);
-        }
-
-        var insertAfter = anchor != IntPtr.Zero && NativeMethods.IsWindow(anchor) ? anchor : IntPtr.Zero;
-        // 先还原 Z 序，再收回最小化：窗口还在普通层里时插锚点才准确。
-        NativeMethods.SetWindowPos(target, insertAfter, 0, 0, 0, 0, ZOrderOnlyFlags);
-        if (restoreMinimized)
+        var hr = NativeMethods.DwmActivateLivePreview(0, IntPtr.Zero, IntPtr.Zero, AeroPeekTypeWindow, IntPtr.Zero);
+        if (placement is { } restore)
         {
             // ⚠️ 用 SetWindowPlacement 而非 ShowWindow(SW_MINIMIZE)——后者会激活"下一个"窗口，
             // 把焦点从用户当前操作处抢走。SetWindowPlacement 只改显示状态，不动激活。
-            SetWindowPlacement(target, ref placement);
+            // 【2026-09-18】只在"确实读到过有效 placement"时才写回：这里写的是**别人的窗口**，
+            // 用零值写回会把目标窗口隐藏（showCmd=0）并把还原矩形归零（重开变成很小一块）。
+            SetWindowPlacement(target, ref restore);
         }
 
-        DebugLog.Trace("Peek", $"end hwnd=0x{(long)target:X} insertAfter=0x{(long)insertAfter:X} reMinimized={(restoreMinimized ? 1 : 0)}");
+        DebugLog.Trace("Peek", $"end hwnd=0x{(long)target:X} hr=0x{(uint)hr:X8} reMinimized={(placement is null ? 0 : 1)}");
     }
 
     /// <summary>
     /// 放弃还原（点选缩略图要真正激活窗口时调用）：
-    /// 清掉状态但**不执行"收回最小化"动作**，让激活流程接管——
+    /// 关闭预览并清掉状态但**不执行"收回最小化"动作**，让激活流程接管——
     /// 否则会先被 End() 收回最小化、再被 ActivateWindow 还原，出现"闪一下"的抖动。
-    ///
-    /// ⚠️ 但 peek 造成的**层级副作用必须还原**：若 Begin 走了置顶层回退（<see cref="_usedTopmost"/>），
-    /// 窗口已被设 WS_EX_TOPMOST。此时若只清状态不退出置顶层，点选进入的应用会被**永久留在置顶层**，
-    /// 从此无法被任何后来窗口覆盖（用户实测 bug）。因此仅放弃"收回最小化"，置顶层仍需退出。
     /// </summary>
     public void Cancel()
     {
         var target = _target;
-        var usedTopmost = _usedTopmost;
         _target = IntPtr.Zero;
-        _restoreAnchor = IntPtr.Zero;
-        _restoreMinimized = false;
-        _minimizedPlacement = default;
-        _usedTopmost = false;
+        _minimizedPlacement = null;
 
         if (target == IntPtr.Zero || !NativeMethods.IsWindow(target))
         {
             return;
         }
 
-        if (usedTopmost)
-        {
-            // 退出置顶层：HWND_NOTOPMOST 把它落回普通层最前，随后 ActivateWindow 的
-            // SetForegroundWindow 接手激活。普通层模式无需动作（窗口本就在普通层）。
-            MoveZOrder(target, HwndNotTopmost);
-            DebugLog.Trace("Peek", $"cancel hwnd=0x{(long)target:X} exitedTopmost=1");
-        }
+        var hr = NativeMethods.DwmActivateLivePreview(0, IntPtr.Zero, IntPtr.Zero, AeroPeekTypeWindow, IntPtr.Zero);
+        DebugLog.Trace("Peek", $"cancel hwnd=0x{(long)target:X} hr=0x{(uint)hr:X8}");
     }
 
-    /// <summary>释放即还原（宿主窗口/浮层销毁时的兜底路径）。</summary>
+    /// <summary>释放即关闭预览（宿主窗口/浮层销毁时的兜底路径）。</summary>
     public void Dispose() => End();
 
     /// <summary>
-    /// 抬到普通层最前（HWND_TOP）；抬完**自校验**，没抬动则回退到「置顶层最底部」。
-    ///
-    /// ⚠️ 前台限制：**非前台进程调 NativeMethods.SetWindowPos(HWND_TOP) 时，系统可能只把窗口放在
-    /// 「前台窗口之后」**，前台窗口仍压在上面 = 看起来完全没抬。
-    /// 对策一：抬之前先 AttachThreadInput 绑到前台线程取得前台权限（与本包
-    /// RunningAppDetector.ActivateWindow 同款已验证范式），抬完立刻解绑。
-    /// 对策二（回退）：显式用 HWND_TOPMOST 进入置顶层（该操作不受前台锁限制），
-    /// 再插到「抬窗前置顶层最底部窗口」之下——结果仍在 dock / 系统任务栏 **之下**，
-    /// 但一定压住所有普通窗口（包括前台窗口）。End 时用 HWND_NOTOPMOST 退出置顶层。
-    /// </summary>
-    /// <returns>实际采用的模式：normal（普通层最前）/ topmost（置顶层最底）。</returns>
-    private string RaiseToTop(IntPtr hwnd, List<ZOrderEntry> zOrder)
-    {
-        MoveZOrder(hwnd, IntPtr.Zero /* HWND_TOP */);
-        if (IsTopOfNormalBand(hwnd))
-        {
-            _usedTopmost = false;
-            return "normal";
-        }
-
-        // 没抬动 → 进置顶层，再插到原置顶层最底部之下（仍被 dock/任务栏压住，但压住所有普通窗口）。
-        MoveZOrder(hwnd, HwndTopmost);
-        var lastTopmost = IntPtr.Zero;
-        foreach (var entry in zOrder)
-        {
-            if (entry.IsTopmost)
-            {
-                lastTopmost = entry.Handle;
-            }
-        }
-
-        if (lastTopmost != IntPtr.Zero && lastTopmost != hwnd)
-        {
-            MoveZOrder(hwnd, lastTopmost);
-        }
-
-        _usedTopmost = true;
-        return "topmost";
-    }
-
-    /// <summary>目标窗口是否已是「普通层最前」（Z 序快照里第一个非置顶窗口）。</summary>
-    private static bool IsTopOfNormalBand(IntPtr hwnd)
-    {
-        foreach (var entry in SnapshotZOrder())
-        {
-            if (entry.IsTopmost)
-            {
-                continue;
-            }
-
-            return entry.Handle == hwnd;
-        }
-
-        return false;
-    }
-
-    /// <summary>
-    /// 改 Z 序，必要时先 AttachThreadInput 绑到前台线程取得前台权限（抬完立刻解绑）。
-    /// 只在必要时绑定：前台窗口存在且其线程不是本线程。
-    /// </summary>
-    private static void MoveZOrder(IntPtr hwnd, IntPtr insertAfter)
-    {
-        var fore = NativeMethods.GetForegroundWindow();
-        var foreThread = fore != IntPtr.Zero ? NativeMethods.GetWindowThreadProcessId(fore, out _) : 0u;
-        var thisThread = (uint)NativeMethods.GetCurrentThreadId();
-        var bound = foreThread != 0 && foreThread != thisThread;
-
-        if (bound)
-        {
-            _ = NativeMethods.AttachThreadInput(thisThread, foreThread, true);
-        }
-
-        try
-        {
-            var ok = NativeMethods.SetWindowPos(hwnd, insertAfter, 0, 0, 0, 0, ZOrderOnlyFlags);
-            if (!ok)
-            {
-                DebugLog.Trace("Peek", $"SetWindowPos failed hwnd=0x{(long)hwnd:X} insertAfter=0x{(long)insertAfter:X} err={Marshal.GetLastWin32Error()}");
-            }
-        }
-        finally
-        {
-            if (bound)
-            {
-                _ = NativeMethods.AttachThreadInput(thisThread, foreThread, false);
-            }
-        }
-    }
-
-    /// <summary>
-    /// 纯函数：按 Z 序快照裁决「能否 peek + 还原锚点」。不触碰 Win32，可单测。
-    /// 快照顺序必须是 EnumWindows 的自顶向底顺序。
-    /// </summary>
-    /// <returns>
-    /// 目标不在快照中、或目标本身已在置顶层 → <c>default</c>（CanPeek=false）；
-    /// 否则 CanPeek=true，锚点 = 其上方最近的<b>非置顶</b>窗口；上方无非置顶窗口则 Zero（HWND_TOP）。
-    /// </returns>
-    public static PeekPlan Plan(IReadOnlyList<ZOrderEntry> zOrder, IntPtr target)
-    {
-        if (target == IntPtr.Zero || zOrder is null)
-        {
-            return default;
-        }
-
-        var index = -1;
-        for (var i = 0; i < zOrder.Count; i++)
-        {
-            if (zOrder[i].Handle == target)
-            {
-                index = i;
-                break;
-            }
-        }
-
-        if (index < 0)
-        {
-            // 窗口不在可见顶层窗口序列中（已销毁/被过滤）：不动它。
-            return default;
-        }
-
-        if (zOrder[index].IsTopmost)
-        {
-            // 本身就在置顶层（如第三方悬浮窗）：已经在最上，无需也不应重排。
-            return default;
-        }
-
-        for (var i = index - 1; i >= 0; i--)
-        {
-            if (!zOrder[i].IsTopmost)
-            {
-                return new PeekPlan(true, zOrder[i].Handle);
-            }
-        }
-
-        // 上方全是置顶窗口 → 目标原本就是普通层最前，还原时回到 HWND_TOP。
-        return new PeekPlan(true, IntPtr.Zero);
-    }
-
-    /// <summary>
-    /// Z 序快照（自顶向底，仅可见顶层窗口），并记录每个窗口是否在置顶层。
-    /// </summary>
-    public static List<ZOrderEntry> SnapshotZOrder()
-    {
-        var list = new List<ZOrderEntry>();
-        NativeMethods.EnumWindows((hwnd, _) =>
-        {
-            try
-            {
-                if (NativeMethods.IsWindowVisible(hwnd))
-                {
-                    list.Add(new ZOrderEntry(hwnd, IsTopmostWindow(hwnd)));
-                }
-            }
-            catch
-            {
-                // 单窗口探测失败不阻断整体快照。
-            }
-
-            return true;
-        }, IntPtr.Zero);
-
-        return list;
-    }
-
-    /// <summary>
     /// 不可 peek 的原因；可 peek 返回 null。
-    /// 注意：**最小化不是拒绝理由**（IsWindowVisible 对最小化窗口恒为 true，
-    /// 最小化窗口也照样留在 EnumWindows 快照里，可以正常取 Z 序锚点）。
+    /// 注意：**最小化不是拒绝理由**（最小化窗口照样可以被 DWM 预览浮现）。
     /// </summary>
     private static string? GetSkipReason(IntPtr hwnd)
     {
@@ -390,6 +191,7 @@ public sealed class WindowPeek : IDisposable
 
             if (IsTopmostWindow(hwnd))
             {
+                // 本身就在置顶层（如第三方悬浮窗）：已恒在最上，DWM 预览无意义。
                 return "already-topmost";
             }
 
@@ -407,12 +209,14 @@ public sealed class WindowPeek : IDisposable
         }
     }
 
+    private const int GwlExStyle = -20;
+    private const long WsExTopmost = 0x00000008;
+
     private static bool IsTopmostWindow(IntPtr hwnd)
     {
         return (NativeMethods.GetWindowLongPtr(hwnd, GwlExStyle).ToInt64() & WsExTopmost) != 0;
     }
 
-    /// <summary>以「不激活」方式显示窗口（含从最小化还原）。</summary>
     /// <summary>只改显示状态（含收回最小化），**不激活**任何窗口。</summary>
     [DllImport("user32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]

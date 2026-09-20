@@ -12,7 +12,9 @@
 #    03-剪贴板面板    BetterDesktop.Clipboard.Panel.exe (self-contained publish)
 #    04-剪贴板引擎    BetterDesktop.Clipboard.Engine.exe (Rust)
 #    05-搜索索引引擎  BetterDesktop.Index.Engine.exe (Rust)
-#    06-格式转换引擎  engines/ (calibre/ffmpeg/libreoffice/tesseract third-party)
+#    06-可选引擎      engines/ - ONLY tesseract (OCR) + poppler (PDF) + ffmpeg (audio/video).
+#                     The document/table/ebook families are converted in-process by the Rust lite core
+#                     (native/convert-lite), so pandoc / libreoffice / calibre are no longer shipped.
 #    07-右键菜单扩展  native/BetterDesktopShellMenu.dll
 #
 #  NOTE: this file is intentionally ASCII-only (Windows PowerShell 5.1 parses
@@ -33,6 +35,10 @@ $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 
 $required = @(
+    # 2026-09-20 Rust core (see publish.ps1): the resident lifecycle owner. It belongs to 01-主程序
+    # (the family folder), because core resolves sibling executables relative to its own directory.
+    'betterdesktop-core.exe',
+    'BetterDesktop.ico',
     'BetterDesktop.Host.exe',
     'BetterDesktop.Cli.exe',
     'BetterDesktop.DesktopControl.exe',
@@ -133,28 +139,50 @@ foreach ($p in $enginePairs) {
     Write-Host "$($p.Name): $($p.Dst) copied (also into 01-主程序)"
 }
 
-# ---- 06-格式转换引擎: third-party engines tree ----
-# 【2026-09-18 真机：格式转换 80% 不可用 + 菜单缺一大半选项】
-# 所有转换引擎都按 <AppContext.BaseDirectory>\engines\... 定位（shell-convert/Services/ConvertEngine.cs:55
-# 与各 Engines\*.cs），而 01-主程序 刻意不含 engines（2.8GB），安装器又只拷 01-主程序\* ——
-# 结果"装完没有 engines"：除纯托管图片转换外全部探不到，而 ConvertMenuService 对不可用目标
-# 是**整项隐藏**（不是置灰，见其 AddConvertSubmenu）→ 用户看到的就是"选项缺了一大半 + 大部分转换失败"。
-# 故本模块改为**自解释布局**：引擎树收进 engines\ 子目录，并随附官方安装脚本，
-# 让"脚本与 engines 同目录"这一契约（scripts/install-engines.ps1:40）成立，用户单独运行它也有效。
-$enginesSrc = Join-Path $src 'engines'
+# ---- 06-可选引擎: ONLY the trees that lite cannot replace (tesseract / ffmpeg / poppler) ----
+# 2026-09-20 convert-lite migration: the document / table / ebook families are converted IN-PROCESS by
+# the Rust lite core (native/convert-lite, zero external exe), so pandoc / libreoffice / calibre are no
+# longer shipped at all (2372 MB removed). What remains:
+#   tesseract = OCR (lite has no OCR), poppler = PDF, ffmpeg = audio/video (menu hidden this round,
+#   tree kept on purpose).
+# IMPORTANT - source is the REPO ROOT engines\, NOT $src: since BetterDesktop.Cli.csproj stopped copying
+# the tree into the build output, the full dist no longer contains engines\ at all. Reading it from the
+# repo is what keeps this optional module populated (otherwise OCR would silently disappear with it).
+# Layout stays self-explanatory: trees under engines\, with the official installer beside them, so the
+# "installer next to engines" contract (scripts/install-engines.ps1:40) still holds.
+$enginesSrc = Join-Path $root 'engines'
+$keptTrees = @('tesseract', 'ffmpeg', 'poppler')
+# Trees lite already replaced: they must NOT be shipped. Named explicitly so that "I thought we deleted
+# them" is caught at package time instead of silently re-shipping 2.3 GB.
+$replacedTrees = @('pandoc', 'libreoffice', 'calibre')
+$modEngines = Join-Path $out '06-可选引擎'
 if (Test-Path $enginesSrc) {
-    $modEngines = Join-Path $out '06-格式转换引擎'
     $enginesDst = Join-Path $modEngines 'engines'
     New-Item -ItemType Directory -Path $enginesDst -Force | Out-Null
-    Get-ChildItem -Path $enginesSrc -Force | ForEach-Object { Copy-Item -Path $_.FullName -Destination $enginesDst -Recurse -Force }
+
+    $copied = 0
+    foreach ($tree in $keptTrees) {
+        $from = Join-Path $enginesSrc $tree
+        if (-not (Test-Path $from)) {
+            Write-Host "06-可选引擎: '$tree' not found in repo engines\ (skipped)" -ForegroundColor Yellow
+            continue
+        }
+        Copy-Item $from (Join-Path $enginesDst $tree) -Recurse -Force
+        $copied++
+    }
+
+    $stillThere = @($replacedTrees | Where-Object { Test-Path (Join-Path $enginesSrc $_) })
+    if ($stillThere.Count -gt 0) {
+        Write-Host ("06-可选引擎: WARNING - lite-replaced trees still present in repo engines\: " + ($stillThere -join ', ') + " - NOT shipped, but they should be deleted (2372 MB)") -ForegroundColor Yellow
+    }
 
     $engineInstaller = Join-Path $root 'scripts\install-engines.ps1'
     if (Test-Path $engineInstaller) { Copy-Item $engineInstaller -Destination $modEngines -Force }
 
-    Write-Host "06-格式转换引擎: copied (engines\ + install-engines.ps1)"
+    Write-Host "06-可选引擎: copied $copied tree(s) ($($keptTrees -join ', ')) + install-engines.ps1"
 }
 else {
-    Write-Host "06-格式转换引擎: skipped (no engines/ in source)" -ForegroundColor Yellow
+    Write-Host "06-可选引擎: skipped (no engines\ in repo root)" -ForegroundColor Yellow
 }
 
 # ---- 07-右键菜单扩展: native COM DLL ----

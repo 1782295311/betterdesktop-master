@@ -91,13 +91,17 @@ public static class UninstallResolver
 
         try
         {
-            _ = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+            // C1：`/c` 与卸载命令**分成两个参数**传（见 AppEntryActions.RunUninstaller 的同类说明）。
+            // uninstallCommand 来自注册表，含引号时字符串拼接会破坏参数边界。
+            var psi = new System.Diagnostics.ProcessStartInfo
             {
                 FileName = "cmd.exe",
-                Arguments = $"/c {uninstallCommand}",
                 UseShellExecute = false,
                 CreateNoWindow = true
-            });
+            };
+            psi.ArgumentList.Add("/c");
+            psi.ArgumentList.Add(uninstallCommand);
+            _ = System.Diagnostics.Process.Start(psi);
         }
         catch
         {

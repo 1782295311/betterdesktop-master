@@ -16,12 +16,23 @@ public class DockTickPolicyTests
     }
 
     [Theory]
-    [InlineData(true, false)]  // dock 隐藏等待唤出
     [InlineData(false, true)]  // 光标在预唤出带/悬停
-    [InlineData(true, true)]
+    [InlineData(true, true)]   // 隐藏 + 光标已靠近 → 快档（唤出及时性靠它）
     public void PendingOrNearCursor_UsesFastTier(bool statePending, bool cursorNearDock)
     {
         Assert.Equal(DockTickPolicy.FastMs, DockTickPolicy.NextIntervalMs(statePending, cursorNearDock));
+    }
+
+    [Fact]
+    public void Hidden_FarCursor_UsesSlowTier()
+    {
+        // 【2026-09-18 电源管理修正】隐藏态**不再**升快档。
+        // 原因：隐藏发生在系统空闲阈值之后（默认 20 分钟无输入）—— 也就是用户已经离开电脑、
+        // 系统可能正在进入现代待机（S0ix）的时刻；此时升到 60ms 常驻轮询（每拍还有 P/Invoke
+        // 乃至一次 COM 激活）与省电目标完全相反，是笔记本风扇长转的来源之一。
+        Assert.Equal(
+            DockTickPolicy.SlowMs,
+            DockTickPolicy.NextIntervalMs(statePending: true, cursorNearDock: false));
     }
 
     [Fact]

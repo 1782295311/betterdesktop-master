@@ -8,7 +8,7 @@
 //      与 ManagedShell GetLowestDesktopChildHwnd 反编译实现一致（挂 DefView 而非 Progman！
 //      挂 Progman 直接子级会被壁纸引擎 DComp 层压住不上屏）。失联看门狗 3 秒自动重挂。
 //   3) 禁止 Maximized——手动 SetWindowPos 铺 VirtualScreen（高度 -1 防 ABN_FULLSCREENAPP）。
-//   4) explorer 原生图标的隐藏/恢复由 DesktopPlugin 负责（ToggleDesktopIcons）。
+//   4) explorer 原生图标的隐藏/恢复由 DesktopPlugin 负责（SetNativeIconsVisible：自绘=ShowWindow、原生=SetParent 摘除法）。
 //
 // 【分层透明（ULW）上屏验证】
 //   历史上曾因"分层窗口跨进程挂 Progman 后 PrintWindow 有图但屏幕不上屏"而禁用透明并自画壁纸。
@@ -47,7 +47,7 @@ using BetterDesktop.Shell.Settings.Contracts;
 namespace BetterDesktop.Shell.Desktop.Windows;
 
 // ── 本文件方法级白话索引（桌面宿主窗口，白话 → 方法）──
-//   "把自绘窗口嵌入 explorer 桌面"     → TryEmbedDesktop（找宿主 FindDesktopHostWindow/IsDesktopHostClass、填虚拟屏 FillVirtualScreen、排挤出 Peek ExcludeFromPeek）
+//   "把自绘窗口嵌入 explorer 桌面"     → TryEmbedDesktop（找宿主 FindDesktopHostWindow/DesktopHostWindow.IsHostClass、填虚拟屏 FillVirtualScreen、排挤出 Peek ExcludeFromPeek）
 //   "嵌入态校验/看门狗（防脱钩）"      → VerifyEmbedding / StartEmbedWatchdog
 //   "隐藏/恢复 explorer 原生图标"      → ToggleIconsHidden / ApplyIconsHidden / UpdateIconsReserve
 //   "壁纸遮挡（弹菜单时遮壁纸操作）"   → SetWallpaperOcclusionImpl
@@ -137,10 +137,6 @@ internal sealed class DesktopWindow : ShellWindow
         _transparentBackground = new SolidColorBrush(Color.FromArgb(1, 0, 0, 0));
         Background = _transparentBackground;
 
-        // ★ 壁纸遮挡注册（2026-09-07）：图标右键跨进程委托 SW_SHOW listView 时 explorer 图标
-        // 透过透明背景透出；菜单显示期间本窗口临时渲染壁纸（不透明）盖住，菜单关闭后恢复透明。
-        DesktopMenuDelegation.SetWallpaperOcclusion = SetWallpaperOcclusionImpl;
-
         // 图标网格：瀑布列（先填列后换列），避开顶部菜单栏条带 + 底部 dock/原生任务栏
         _icons = new DesktopIconsControl(_browser, _settings, _convertMenu, _archive, _events, _clipboardFactory);
         UpdateIconsReserve();
@@ -149,8 +145,28 @@ internal sealed class DesktopWindow : ShellWindow
         // 双击空白处 → 切换隐藏桌面图标。两条触发路径按布局模式互补：
         //   自动排列：WrapPanel 空白不吞事件，冒泡到窗口层（图标 cell 的按下已 Handled，不会误触发）；
         //   自由布局：空白按下被框选逻辑 Handled，由 DesktopIconsControl.BlankAreaDoubleClick 上报。
-        _icons.BlankAreaDoubleClick += (_, _) => ToggleIconsHidden();
+        // 【2026-09-11 二次修复 · "双击太敏感"】判定依据由「事件源是否属于图标 cell」改为
+        //   「落点几何是否命中图标格」：cell 宽 = CellWidth-6，列间天然留 6px 空隙，格子边缘也有
+        //   padding——原事件源判定在这些位置上判成"空白"，于是用户**双击图标启动应用**被当成
+        //   双击桌面空白 → 图标全被隐藏（用户实测"太敏感"）。
+        //   三条触发路径（自由布局画布 / 自动排列冒泡 / Preview 隧道）现在统一过同一个闸门。
+        _icons.BlankAreaDoubleClick += (_, p) => TryToggleOnBlankDoubleClick("自由布局空白", p);
         MouseLeftButtonDown += OnWindowBlankDoubleClick;
+        // 【2026-09-11 修复】双击切换统一走窗口层 Preview 隧道（隧道先于 ScrollViewer/Canvas 处理，
+        // 任何位置空白都收得到——自由布局 canvas 只有图标区大小 420x1064，canvas 之外桌面空白
+        // 左键会被 ScrollViewer 吞掉冒泡，此前判定范围太小；隐藏态 Content=null 后内部链全断）。
+        // 显示态：落点在图标上**既不切换也不 mark Handled**（Handled 会让 cell 收不到事件，
+        // "双击图标=打开文件"会一起失效）；隐藏态：Content=null 无 cell，任何位置双击都恢复。
+        PreviewMouseLeftButtonDown += (_, e) =>
+        {
+            // 【2026-09-11】精确 ==2：仅双击触发。三击（ClickCount=3）曾触发二次切换 = 图标闪回。
+            if (e.ClickCount != 2) return;
+            if (!TryToggleOnBlankDoubleClick("Preview隧道", e.GetPosition(_icons)))
+            {
+                return; // 落点在图标上：放行给 cell
+            }
+            e.Handled = true;
+        };
         // 【2026-09-07 诊断】窗口层左键按下
         MouseLeftButtonDown += (_, e) =>
             DiagnosticLog.Trace("shell.desktop",
@@ -169,9 +185,10 @@ internal sealed class DesktopWindow : ShellWindow
 
 
         // ★ 原生菜单抑制生死线（2026-09-02 截图实证）：本窗口 WS_CHILD 嵌入 explorer 桌面。
-        //   右键已由 WPF 层接管并弹菜单（桌面图标 → NativeMenuPopup；桌面空白 → DesktopMenuDelegation
-        //   转发 explorer DefView），但 WPF 不吞 WM_CONTEXTMENU——DefWindowProc 会把未处理的
-        //   WM_CONTEXTMENU 转发给父窗口（explorer 桌面）→ 原生右键菜单与我们的菜单**同时弹出并存**（截图实证）。
+        //   右键已由 WPF 层接管并弹菜单（桌面图标/空白 → DesktopIconsControl.ShowMenu 统一自绘
+        //   DesktopMenuPopup；跨进程 DefView 转发已 2026-09-10 移除），但 WPF 不吞 WM_CONTEXTMENU——
+        //   DefWindowProc 会把未处理的 WM_CONTEXTMENU 转发给父窗口（explorer 桌面）→
+        //   原生右键菜单与我们的菜单**同时弹出并存**（截图实证）。
         //   故在 hwnd hook 一律吞掉 WM_CONTEXTMENU（覆盖整棵子窗口树的转发链）。
         SourceInitialized += (_, _) =>
         {
@@ -194,46 +211,6 @@ internal sealed class DesktopWindow : ShellWindow
                 });
             Closed += (_, _) => _settingsSub?.Dispose();
         }
-    }
-
-    /// <summary>菜单期间壁纸遮挡：true=本窗口背景切换为系统壁纸（不透明，盖住下方
-    /// explorer listView 透出的原生图标）；false=恢复 #01000000 透明。调用方为
-    /// DesktopMenuDelegation 跨进程委托（STA worker 线程）→ Dispatcher.Invoke 切 UI 线程。</summary>
-    private void SetWallpaperOcclusionImpl(bool enabled)
-    {
-        Dispatcher.Invoke(() =>
-        {
-            try
-            {
-                if (enabled)
-                {
-                    var sb = new StringBuilder(2048);
-                    if (NativeMethods.SystemParametersInfo(SpiGetdeskwallpaper, 2048, sb, 0) &&
-                        sb.Length > 0 && File.Exists(sb.ToString()))
-                    {
-                        var bmp = new BitmapImage();
-                        bmp.BeginInit();
-                        bmp.CacheOption = BitmapCacheOption.OnLoad;
-                        bmp.UriSource = new Uri(sb.ToString());
-                        bmp.EndInit();
-                        Background = new ImageBrush(bmp) { Stretch = Stretch.UniformToFill };
-                    }
-                    // 壁纸获取失败（纯色壁纸等）：保持现状（不遮挡），退化为旧行为。
-                }
-                else if (_transparentBackground is not null)
-                {
-                    Background = _transparentBackground;
-                }
-            }
-            catch (Exception ex)
-            {
-                DiagnosticLog.Trace("shell.desktop", $"壁纸遮挡失败: {ex.Message}");
-                if (!enabled && _transparentBackground is not null)
-                {
-                    Background = _transparentBackground;
-                }
-            }
-        });
     }
 
     /// <summary>
@@ -325,10 +302,19 @@ internal sealed class DesktopWindow : ShellWindow
     /// 两者共享同一意图键但各管各的层，靠模式与类名过滤天然互斥。
     /// 窗口本体保持可见可交互：藏的只是图标网格，恢复通道（再次双击）永远在本窗口上；
     /// 若 Hide() 整个窗口，第二次双击会落进 explorer DefView，自绘层就再也收不回来了。</summary>
-    private void ToggleIconsHidden()
+    private void ToggleIconsHidden(string origin)
     {
+        // 2026-09-10 开关：desktop.doubleClickHideIcons=false 时双击空白不切换（默认 true 保持原行为）。
+        if (!(_settings?.Get("desktop.doubleClickHideIcons", true) ?? true))
+        {
+            return;
+        }
+
         var hidden = _settings?.Get("desktop.iconsHidden", false) ?? false;
-        DiagnosticLog.Trace("shell.desktop", $"双击桌面空白：desktop.iconsHidden {hidden} → {!hidden}");
+        // 【2026-09-11】日志补来源：原实现无论哪条路径都打"双击桌面空白"，导致"点图标被误判"
+        // 这类问题在日志里完全无法自证（今天排查时就被这条误导过）。
+        DiagnosticLog.Trace("shell.desktop",
+            $"双击切换图标显隐（来源={origin}）：desktop.iconsHidden {hidden} → {!hidden}");
         _settings?.Set("desktop.iconsHidden", !hidden);
     }
 
@@ -358,13 +344,45 @@ internal sealed class DesktopWindow : ShellWindow
         }
     }
 
+    /// <summary>落点（DesktopIconsControl 坐标系）是否在图标上。
+    /// 【2026-09-11 二次修复】改为**几何判定**（按每个 cell 的实际矩形，含容差），
+    /// 原实现按事件源是否属于某个 cell 判定，在"格边缘/列间 6px 空隙"上会漏判成空白。
+    /// 隐藏态（网格 Content=null）恒为 false = 空白（任何双击都是恢复通道）。</summary>
+    private bool IsOverIcon(Point pInIcons)
+    {
+        if (_settings?.Get("desktop.iconsHidden", false) ?? false)
+        {
+            return false;
+        }
+
+        return _icons is not null && _icons.IsPointOverIcon(pInIcons);
+    }
+
+    /// <summary>统一的"双击空白"闸门：仅当**落点确实在空白处**才切换，返回是否已切换。
+    /// 三条触发路径（自由布局画布 / 自动排列冒泡 / Preview 隧道）全部经此判定，
+    /// 任何一条路径单独漏判都会重现"双击图标启动应用 → 图标全被隐藏"。</summary>
+    private bool TryToggleOnBlankDoubleClick(string origin, Point pInIcons)
+    {
+        if (IsOverIcon(pInIcons))
+        {
+            // 这条日志是"双击太敏感"类问题的自证依据：能看到「点图标 → 已放行」
+            DiagnosticLog.Trace("shell.desktop",
+                $"双击落在图标上：不切换（来源={origin}，落点={pInIcons.X:F0},{pInIcons.Y:F0}）");
+            return false;
+        }
+
+        ToggleIconsHidden(origin);
+        return true;
+    }
+
     /// <summary>窗口层空白双击（自动排列路径：WrapPanel 空白不吞事件冒泡到此）。
-    /// 图标上的双击（打开文件）在 cell 层已标记 Handled，不会到达这里。</summary>
+    /// 图标上的双击（打开文件）在 cell 层已标记 Handled，不会到达这里；此处仍过同一闸门（双保险）。</summary>
     private void OnWindowBlankDoubleClick(object sender, MouseButtonEventArgs e)
     {
-        if (e.ClickCount >= 2)
+        // 【2026-09-11】精确 ==2：三击（ClickCount=3）不重复切换（曾导致图标闪回）。
+        if (e.ClickCount == 2)
         {
-            ToggleIconsHidden();
+            _ = TryToggleOnBlankDoubleClick("窗口冒泡", e.GetPosition(_icons));
         }
     }
 
@@ -549,25 +567,6 @@ internal sealed class DesktopWindow : ShellWindow
             Dispatcher);
     }
 
-    /// <summary>hwnd 是否为桌面宿主窗口（SHELLDLL_DefView / Progman）——看门狗按类名接受，
-    /// 消除 DefView/Progman 查找抖动导致的重挂振荡。</summary>
-    private static bool IsDesktopHostClass(IntPtr hwnd)
-    {
-        if (hwnd == IntPtr.Zero)
-        {
-            return false;
-        }
-
-        var sb = new System.Text.StringBuilder(64);
-        if (NativeMethods.GetClassName(hwnd, sb, 64) <= 0)
-        {
-            return false;
-        }
-
-        var cls = sb.ToString();
-        return cls is "SHELLDLL_DefView" or "Progman";
-    }
-
 
     private const int SwShow = 5;
 
@@ -599,7 +598,7 @@ internal sealed class DesktopWindow : ShellWindow
             // 【重挂≠显示 2026-09-06 真机实证】父窗口正常但 WS_VISIBLE=0 时重挂永远修不好
             //   可见位（SetParent 不改可见性），只会制造高频跨进程 SetParent churn（冻结嫌疑）
             //   ——这种情形只补 NativeMethods.ShowWindow(SW_SHOW)。
-            if (!NativeMethods.IsWindow(parent) || !IsDesktopHostClass(parent))
+            if (!NativeMethods.IsWindow(parent) || !DesktopHostWindow.IsHostClass(parent))
             {
                 DiagnosticLog.Trace("shell.desktop",
                     $"嵌入看门狗：重挂（parent=0x{parent:X} isWindow={NativeMethods.IsWindow(parent)} visible={NativeMethods.IsWindowVisible(hwnd)}）");
@@ -664,38 +663,14 @@ internal sealed class DesktopWindow : ShellWindow
     /// 找桌面挂载点：**SHELLDLL_DefView（原生图标视图窗口）本身**——对齐 cairoshell/
     /// ManagedShell <c>WindowHelper.GetLowestDesktopChildHwnd</c> 反编译实现（不是 Progman！）。
     /// 挂 DefView 之下 = 与原生图标同层且 HWND_TOP 提层后可交互（自由挪动/拖拽/右键委托）。
+    /// <para>查找已收口 shell-core（<c>DesktopHostWindow.FindMountPoint</c>：DefView → 兜底 Progman，
+    /// 含顶层 WorkerW 变体）；此处只保留"挂载点选 DefView 而不是 Progman"这一策略。</para>
     /// </summary>
-    private static IntPtr FindDesktopHostWindow()
-    {
-        var progman = NativeMethods.GetShellWindow();
-        if (progman == IntPtr.Zero)
-        {
-            return IntPtr.Zero;
-        }
-
-        // 默认形态：DefView 直接在 Progman 下 → 挂载点 = DefView
-        var defView = NativeMethods.FindWindowEx(progman, IntPtr.Zero, "SHELLDLL_DefView", null);
-        if (defView != IntPtr.Zero)
-        {
-            return defView;
-        }
-
-        // WorkerW 变体（壁纸软件切换过桌面结构）：DefView 在某顶层 WorkerW 下 → 挂载点仍是 DefView
-        IntPtr worker = IntPtr.Zero;
-        IntPtr dv = IntPtr.Zero;
-        do
-        {
-            worker = NativeMethods.FindWindowEx(IntPtr.Zero, worker, "WorkerW", null);
-            dv = worker != IntPtr.Zero ? NativeMethods.FindWindowEx(worker, IntPtr.Zero, "SHELLDLL_DefView", null) : IntPtr.Zero;
-        }
-        while (dv == IntPtr.Zero && worker != IntPtr.Zero);
-
-        return dv != IntPtr.Zero ? dv : progman; // 兜底 Progman（罕见）
-    }
+    private static IntPtr FindDesktopHostWindow() => DesktopHostWindow.FindMountPoint();
 
     /// <summary>
-    /// 吞 WM_CONTEXTMENU：自绘桌面右键统一走本进程菜单路径（图标 → NativeMenuPopup；
-    /// 空白 → DesktopMenuDelegation 转发 explorer DefView）。
+    /// 吞 WM_CONTEXTMENU：自绘桌面右键统一走本进程自绘菜单路径（图标/空白 → DesktopIconsControl.ShowMenu
+    /// → DesktopMenuPopup；跨进程 DefView 转发已于 2026-09-10 移除）。
     /// 不吞则 DefWindowProc 转发给父窗口（explorer 桌面）→ 原生右键菜单与本进程菜单并存。
     /// </summary>
     private IntPtr DesktopWndProc(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)

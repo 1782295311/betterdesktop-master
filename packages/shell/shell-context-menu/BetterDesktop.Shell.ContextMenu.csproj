@@ -1,11 +1,6 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <TargetFramework>net8.0-windows10.0.19041.0</TargetFramework>
-    <Nullable>enable</Nullable>
-    <ImplicitUsings>enable</ImplicitUsings>
-    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
-    <Platforms>x64</Platforms>
     <UseWPF>true</UseWPF>
   </PropertyGroup>
 
@@ -17,6 +12,28 @@
   <ItemGroup>
     <!-- CLSID 反查内置字典（GuidInfo 引擎加载；来源 ContextMenuManager GuidInfosDic.ini） -->
     <EmbeddedResource Include="Assets\GuidInfosDic.ini" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!--
+      原生右键扩展（C++ 双路 COM 服务器）：随构建复制到 <BaseDirectory>\native\。
+      构建方式：powershell -ExecutionPolicy Bypass -File scripts\build-shellmenu.ps1
+      （CMake + MSVC，**刻意不进 dotnet build 链路**——与 shell-taskbar/native/ExplorerTAP.dll 同构）。
+      Condition：未跑原生构建时跳过复制而非报错，保证纯 C# 环境仍可编译；
+      此时 ComShellExtensionRegistrar 会记"未找到原生扩展"并跳过注册（不静默失效）。
+    -->
+    <None Include="native\BetterDesktopShellMenu.dll"
+          CopyToOutputDirectory="PreserveNewest"
+          Link="native\BetterDesktopShellMenu.dll"
+          Condition="Exists('native\BetterDesktopShellMenu.dll')" />
+    <!--
+      进程外 broker（第三方 shell 扩展的实例化/查询搬出宿主进程；跨语言候选评估 §4.1 第二/三步）。
+      未部署时 MenuBrokerClient 返回不可用 → ShellMenuInterop 回落 in-proc 实现并记日志（不静默失效）。
+    -->
+    <None Include="native\BetterDesktopMenuBroker.exe"
+          CopyToOutputDirectory="PreserveNewest"
+          Link="native\BetterDesktopMenuBroker.exe"
+          Condition="Exists('native\BetterDesktopMenuBroker.exe')" />
   </ItemGroup>
 
   <PropertyGroup>

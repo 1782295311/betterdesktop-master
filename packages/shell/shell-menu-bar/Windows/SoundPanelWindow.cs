@@ -1,18 +1,22 @@
 // 声音面板：主功能是“应用”会话音量混音器（按进程图标/名称/音量/静音），
 // 由 AudioCore 原生模块提供；主音量滑块与输出设备列表属冗余（Windows 托盘已覆盖），已移除。
-// 另含 SMTC 正在播放（MediaPlayerCore）与播放控制。
+// 另含 SMTC 正在播放（IMediaPlaybackService）与播放控制。
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Media;
+using System.Windows.Media.Imaging;
 using System.Windows.Threading;
 using BetterDesktop.Shell.Core.Surface;
 using BetterDesktop.Shell.Core.Vibrancy;
+using BetterDesktop.Shell.Music.Contracts;
 using BetterDesktop.Shell.Status.Native;
+using Windows.Storage.Streams;
 
 namespace BetterDesktop.Shell.MenuBar.Windows;
 
@@ -27,10 +31,12 @@ namespace BetterDesktop.Shell.MenuBar.Windows;
 internal sealed class SoundPanelWindow : MenuBarPopupWindow
 {
     private SoundPanelViewModel? _vm;
+    private readonly IMediaPlaybackService? _media;
 
-    public SoundPanelWindow(IVibrancyService vibrancy, IAppearanceService? appearance = null)
+    public SoundPanelWindow(IVibrancyService vibrancy, IAppearanceService? appearance = null, IMediaPlaybackService? media = null)
         : base(vibrancy, appearance)
     {
+        _media = media;
         Width = 320;
         MinWidth = 320;
         SizeToContent = SizeToContent.Height;
@@ -73,23 +79,29 @@ internal sealed class SoundPanelWindow : MenuBarPopupWindow
             MinHeight = 22,
             Style = NativePanelStyles.CreateCircleThumbSliderStyle()
         };
+        var micGlyph = new TextBlock
+        {
+            Text = "\uE720",
+            FontFamily = new FontFamily("Segoe MDL2 Assets"),
+            FontSize = 14,
+            Foreground = NativePanelStyles.TextSecondary,
+            HorizontalAlignment = HorizontalAlignment.Center,
+            VerticalAlignment = VerticalAlignment.Center
+        };
         var micIcon = new Border
         {
             Width = 28,
             Height = 28,
             CornerRadius = new CornerRadius(14),
+            Cursor = Cursors.Hand,
+            ToolTip = "点击切换麦克风静音",
+            VerticalAlignment = VerticalAlignment.Center,
             // 麦克风圆底：内容层背景走主题令牌（与窗口属性一致）
-            Child = new TextBlock
-            {
-                Text = "\uE720",
-                FontFamily = new FontFamily("Segoe MDL2 Assets"),
-                FontSize = 14,
-                Foreground = NativePanelStyles.TextSecondary,
-                HorizontalAlignment = HorizontalAlignment.Center,
-                VerticalAlignment = VerticalAlignment.Center
-            }
+            Child = micGlyph
         };
         micIcon.SetResourceReference(Border.BackgroundProperty, "ThemeContentBackground");
+        // 点击翻转麦克风静音（替代原纯装饰图标；控制中心移除内嵌声音卡片后，麦克风静音在此唯一承载）
+        micIcon.MouseLeftButtonUp += (_, _) => _vm?.ToggleMicMute();
         var volumeRow = new Grid();
         volumeRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         volumeRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
@@ -119,7 +131,18 @@ internal sealed class SoundPanelWindow : MenuBarPopupWindow
         pillStack.Children.Add(volumeRow);
         volumePill.Child = pillStack;
 
-        // 正在播放信息（SMTC）：两行——歌名 + “艺术家 · 应用”
+        // 正在播放（SMTC）：封面 + 歌名/艺术家 · 应用 + 可拖动进度条 + 播放模式按钮
+        var cover = new Border
+        {
+            Width = 56,
+            Height = 56,
+            CornerRadius = new CornerRadius(10),
+            VerticalAlignment = VerticalAlignment.Center,
+            Clip = new RectangleGeometry(new Rect(0, 0, 56, 56)) { RadiusX = 10, RadiusY = 10 }
+        };
+        cover.SetResourceReference(Border.BackgroundProperty, "ThemeContentBackground");
+        cover.Child = CoverPlaceholderGlyph();
+
         var mediaTitle = new TextBlock
         {
             Text = "—",
@@ -127,8 +150,8 @@ internal sealed class SoundPanelWindow : MenuBarPopupWindow
             FontSize = 12,
             FontWeight = FontWeights.SemiBold,
             TextTrimming = TextTrimming.CharacterEllipsis,
-            HorizontalAlignment = HorizontalAlignment.Center,
-            Margin = new Thickness(0, 2, 0, 0)
+            HorizontalAlignment = HorizontalAlignment.Left,
+            Margin = new Thickness(0, 0, 0, 1)
         };
         var mediaSub = new TextBlock
         {
@@ -136,11 +159,44 @@ internal sealed class SoundPanelWindow : MenuBarPopupWindow
             Foreground = NativePanelStyles.TextSecondary,
             FontSize = 10.5,
             TextTrimming = TextTrimming.CharacterEllipsis,
+            HorizontalAlignment = HorizontalAlignment.Left
+        };
+        var textCol = new StackPanel { VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(10, 0, 0, 0) };
+        textCol.Children.Add(mediaTitle);
+        textCol.Children.Add(mediaSub);
+
+        var mediaTop = new Grid { Margin = new Thickness(0, 4, 0, 2) };
+        mediaTop.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        mediaTop.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        Grid.SetColumn(cover, 0); mediaTop.Children.Add(cover);
+        Grid.SetColumn(textCol, 1); mediaTop.Children.Add(textCol);
+
+        // 进度条（可拖动 seek，0-1000 映射曲目位置/时长）+ 时间标签
+        var progressSlider = new Slider
+        {
+            Minimum = 0,
+            Maximum = 1000,
+            Value = 0,
+            SmallChange = 5,
+            LargeChange = 50,
+            IsEnabled = false,
+            MinHeight = 22,
+            Margin = new Thickness(2, 0, 2, 0),
+            Style = NativePanelStyles.CreateCircleThumbSliderStyle()
+        };
+        var timeLabel = new TextBlock
+        {
+            Text = "--:-- / --:--",
+            FontSize = 10,
+            Foreground = NativePanelStyles.TextSecondary,
             HorizontalAlignment = HorizontalAlignment.Center,
-            Margin = new Thickness(0, 0, 0, 4)
+            Margin = new Thickness(0, 0, 0, 2)
         };
 
         var (prevBtn, playBtn, nextBtn) = MakeControls();
+        // 播放模式：随机 / 循环（状态高亮由 Attach 里 IsShuffle/IsRepeat 驱动）
+        var shuffleBtn = MakeGlyphButton("\uE8B1");
+        var repeatBtn = MakeGlyphButton("\uE8EE");
 
         var root = NativePanelStyles.Root(withColumn: col =>
         {
@@ -164,7 +220,7 @@ internal sealed class SoundPanelWindow : MenuBarPopupWindow
 
             col.Children.Add(NativePanelStyles.Separator(top: 6, bottom: 6));
 
-            // 正在播放（SMTC 会话） + 播放控制
+            // 正在播放（SMTC 会话）：封面 + 信息 + 可拖动进度条 + 播放控制
             col.Children.Add(new TextBlock
             {
                 Text = "正在播放",
@@ -174,20 +230,28 @@ internal sealed class SoundPanelWindow : MenuBarPopupWindow
                 HorizontalAlignment = HorizontalAlignment.Center,
                 Margin = new Thickness(0, 2, 0, 2)
             });
-            col.Children.Add(mediaTitle);
-            col.Children.Add(mediaSub);
 
+            // 实时视图：封面 + 信息 + 进度条 + 播放控制（无会话时由控件自身的空态文案承接）
             var ctrl = new Grid { HorizontalAlignment = HorizontalAlignment.Center };
+            col.Children.Add(mediaTop);
+            col.Children.Add(progressSlider);
+            col.Children.Add(timeLabel);
+            col.Children.Add(ctrl);
             ctrl.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
             ctrl.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
             ctrl.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-            Grid.SetColumn(prevBtn, 0);
-            Grid.SetColumn(playBtn, 1);
-            Grid.SetColumn(nextBtn, 2);
+            ctrl.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            ctrl.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            Grid.SetColumn(shuffleBtn, 0);
+            Grid.SetColumn(prevBtn, 1);
+            Grid.SetColumn(playBtn, 2);
+            Grid.SetColumn(nextBtn, 3);
+            Grid.SetColumn(repeatBtn, 4);
+            ctrl.Children.Add(shuffleBtn);
             ctrl.Children.Add(prevBtn);
             ctrl.Children.Add(playBtn);
             ctrl.Children.Add(nextBtn);
-            col.Children.Add(ctrl);
+            ctrl.Children.Add(repeatBtn);
 
             col.Children.Add(NativePanelStyles.Separator(top: 6, bottom: 4));
 
@@ -208,17 +272,37 @@ internal sealed class SoundPanelWindow : MenuBarPopupWindow
             col.Children.Add(prefLink);
         });
 
-        var vm = _vm = new SoundPanelViewModel();
+        var vm = _vm = new SoundPanelViewModel(_media);
         vm.Attach(v =>
         {
-            volumeValue.Text = v.VolumePct.ToString("0");
-            if (Math.Abs(volumeSlider.Value - v.VolumePct) > 0.5) volumeSlider.Value = v.VolumePct;
-            sessions.Children.Clear();
-            foreach (var a in v.Apps) sessions.Children.Add(BuildAppRow(a, vm));
+            // 主音量：拖动中（已捕获鼠标）不覆盖数值与滑块，避免 1s 轮询把滑块/读数拉回（对齐控制中心先例）。
+            if (!volumeSlider.IsMouseCaptureWithin)
+            {
+                volumeValue.Text = v.VolumePct.ToString("0");
+                if (Math.Abs(volumeSlider.Value - v.VolumePct) > 0.5)
+                    volumeSlider.Value = v.VolumePct;
+            }
 
+            // 应用列表：有行正在拖动时本轮跳过全量重建（重建会销毁正在拖的滑块、丢失鼠标捕获）。
+            if (v.AppDraggingCount == 0)
+            {
+                sessions.Children.Clear();
+                foreach (var a in v.Apps) sessions.Children.Add(BuildAppRow(a, vm));
+            }
+
+            // 空态：无活动会话时由实时视图内控件自身的空态文案承接（"没有正在播放的媒体"等）。
             mediaTitle.Text = v.NowPlayingTitle;
             mediaSub.Text = v.NowPlayingSub;
             playBtn.Child = GetGlyph(v.Playing);
+
+            // 播放控制能力态：播放器明确不支持某操作时置灰；无会话全灰（SMTC 无真实能力位时
+            // CanPlay/CanPause/CanNext/CanPrev 为 false，避免"点了没反应"的错觉）。
+            var session = v.ActiveMedia;
+            ApplyButtonEnabled(prevBtn, session?.CanPrev == true);
+            ApplyButtonEnabled(nextBtn, session?.CanNext == true);
+            ApplyButtonEnabled(playBtn, session is not null && (session.CanPlay || session.CanPause));
+
+            UpdateMediaExtras(v, cover, progressSlider, timeLabel, shuffleBtn, repeatBtn, micIcon, micGlyph);
         });
 
         // 流畅滑杆：拖动过程中只更新百分比显示，拖动结束/点击跳转时才设置主音量
@@ -234,9 +318,29 @@ internal sealed class SoundPanelWindow : MenuBarPopupWindow
                 volumeValue.Text = ((int)Math.Round(v)).ToString("0");
             });
 
-        prevBtn.MouseLeftButtonUp += async (_, _) => await vm.SendMediaCommandAsync(MediaCommand.Previous);
-        nextBtn.MouseLeftButtonUp += async (_, _) => await vm.SendMediaCommandAsync(MediaCommand.Next);
-        playBtn.MouseLeftButtonUp += async (_, _) => await vm.SendMediaCommandAsync(MediaCommand.Toggle);
+        // 进度条：拖动中只预览时间标签，拖动结束/点击跳转才下发 Seek
+        NativePanelStyles.ConfigureSmoothSlider(progressSlider,
+            onValueCommitted: v =>
+            {
+                var session = vm.ActiveMedia;
+                if (session is null || session.EndTime is not { Ticks: > 0 } || !session.CanSeek) return;
+                var target = TimeSpan.FromTicks((long)(session.EndTime.Value.Ticks * v / 1000.0));
+                _ = vm.SendMediaCommandAsync(MediaPlaybackCommand.Seek, target);
+            },
+            onValueChanging: v =>
+            {
+                var session = vm.ActiveMedia;
+                var total = session?.EndTime;
+                timeLabel.Text = total is { Ticks: > 0 }
+                    ? $"{FormatTime(TimeSpan.FromTicks((long)(total.Value.Ticks * v / 1000.0)))} / {FormatTime(total)}"
+                    : "--:-- / --:--";
+            });
+
+        prevBtn.MouseLeftButtonUp += async (_, _) => await vm.SendMediaCommandAsync(MediaPlaybackCommand.Previous);
+        nextBtn.MouseLeftButtonUp += async (_, _) => await vm.SendMediaCommandAsync(MediaPlaybackCommand.Next);
+        playBtn.MouseLeftButtonUp += async (_, _) => await vm.SendMediaCommandAsync(MediaPlaybackCommand.Toggle);
+        shuffleBtn.MouseLeftButtonUp += async (_, _) => await vm.SendMediaCommandAsync(MediaPlaybackCommand.ToggleShuffle);
+        repeatBtn.MouseLeftButtonUp += async (_, _) => await vm.SendMediaCommandAsync(MediaPlaybackCommand.ToggleRepeat);
 
         return root;
     }
@@ -245,9 +349,11 @@ internal sealed class SoundPanelWindow : MenuBarPopupWindow
     {
         return new TextBlock
         {
-            Text = playing ? "⏸" : "▶",
-            Foreground = NativePanelStyles.TextPrimary,
-            FontSize = 14,
+            Text = playing ? "\uE769" : "\uE768", // Pause / Play（Segoe MDL2 Assets）
+            FontFamily = new FontFamily("Segoe MDL2 Assets"),
+            FontSize = 12,
+            // 播放中 Pause 用强调色（主按钮视觉），暂停时主题前景
+            Foreground = playing ? NativePanelStyles.AccentBack : NativePanelStyles.TextPrimary,
             HorizontalAlignment = HorizontalAlignment.Center,
             VerticalAlignment = VerticalAlignment.Center
         };
@@ -255,30 +361,184 @@ internal sealed class SoundPanelWindow : MenuBarPopupWindow
 
     private static (Border prev, Border play, Border next) MakeControls()
     {
-        Border MakeButton(string glyph, int w = 38)
-        {
-            var b = new Border
-            {
-                Width = w,
-                Height = 28,
-                CornerRadius = new CornerRadius(14),
-                Background = Brushes.Transparent,
-                Margin = new Thickness(2, 0, 2, 0),
-                Child = new TextBlock
-                {
-                    Text = glyph,
-                    Foreground = NativePanelStyles.TextPrimary,
-                    FontSize = 14,
-                    HorizontalAlignment = HorizontalAlignment.Center,
-                    VerticalAlignment = VerticalAlignment.Center
-                }
-            };
-            return b;
-        }
-        var prev = MakeButton("⏮");
-        var play = MakeButton("▶", w: 46);
-        var next = MakeButton("⏭");
+        // MDL2 字形：Previous / Play（暂停态由 GetGlyph 切换）/ Next
+        var prev = MakeGlyphButton("\uE892");
+        var play = MakeGlyphButton("\uE768", w: 46);
+        var next = MakeGlyphButton("\uE893");
         return (prev, play, next);
+    }
+
+    /// <summary>MDL2 字形圆形按钮（播放控制行通用工厂；字形颜色由 SetGlyphAccent 动态高亮）。
+    /// 悬停/按下反馈对齐控制中心：Enter→Hover、Leave→透明、Down→Pressed、Up→点击。</summary>
+    private static Border MakeGlyphButton(string glyph, int w = 38)
+    {
+        var btn = new Border
+        {
+            Width = w,
+            Height = 28,
+            CornerRadius = new CornerRadius(14),
+            Background = Brushes.Transparent,
+            Margin = new Thickness(2, 0, 2, 0),
+            Cursor = Cursors.Hand,
+            Child = new TextBlock
+            {
+                Text = glyph,
+                FontFamily = new FontFamily("Segoe MDL2 Assets"),
+                FontSize = 12,
+                Foreground = NativePanelStyles.TextPrimary,
+                HorizontalAlignment = HorizontalAlignment.Center,
+                VerticalAlignment = VerticalAlignment.Center
+            }
+        };
+        btn.MouseEnter += (_, _) => { if (btn.IsHitTestVisible) btn.Background = NativePanelStyles.RowHover; };
+        btn.MouseLeave += (_, _) => btn.Background = Brushes.Transparent;
+        btn.MouseLeftButtonDown += (_, _) => btn.Background = PressedBack;
+        btn.MouseLeftButtonUp += (_, _) => btn.Background = NativePanelStyles.RowHover;
+        return btn;
+    }
+
+    /// <summary>播放控制按钮能力态：禁用时置灰 + 阻断点击（IsHitTestVisible=false 同时阻断 hover 反馈）。</summary>
+    private static void ApplyButtonEnabled(Border btn, bool enabled)
+    {
+        btn.Opacity = enabled ? 1.0 : 0.35;
+        btn.Cursor = enabled ? Cursors.Hand : null;
+        btn.IsHitTestVisible = enabled;
+    }
+
+    /// <summary>按钮按下态底色（比 RowHover 更深的半透明黑）。</summary>
+    private static readonly Brush PressedBack = new SolidColorBrush(Color.FromArgb(64, 0, 0, 0));
+
+    /// <summary>按钮字形开/关高亮（开启时强调色，不重建控件树，避免闪烁）。</summary>
+    private static void SetGlyphAccent(Border btn, bool on)
+    {
+        if (btn.Child is TextBlock tb)
+            tb.Foreground = on ? NativePanelStyles.AccentBack : NativePanelStyles.TextPrimary;
+    }
+
+    private static FrameworkElement CoverPlaceholderGlyph()
+    {
+        return new Viewbox
+        {
+            Width = 22,
+            Height = 22,
+            Stretch = Stretch.Uniform,
+            Child = new TextBlock
+            {
+                Text = "\uE8D6", // MusicInfo
+                FontFamily = new FontFamily("Segoe MDL2 Assets"),
+                FontSize = 22,
+                Foreground = NativePanelStyles.TextSecondary,
+                HorizontalAlignment = HorizontalAlignment.Center,
+                VerticalAlignment = VerticalAlignment.Center
+            }
+        };
+    }
+
+    /// <summary>实时封面防重键（歌曲身份 Title|Artist|AppName；引用相等不可靠，见 UpdateCoverAsync）。</summary>
+    private string? _coverKey;
+
+    /// <summary>每帧刷新音乐区扩展与麦克风状态（进度条、随机/循环高亮、麦克风静音态、封面异步加载）。</summary>
+    private void UpdateMediaExtras(
+        SoundPanelViewModel v, Border cover, Slider progressSlider, TextBlock timeLabel,
+        Border shuffleBtn, Border repeatBtn, Border micIcon, TextBlock micGlyph)
+    {
+        var session = v.ActiveMedia;
+        var total = session?.EndTime;
+
+        // 进度条/时间标签：拖动中不拉回（拖动预览由 onValueChanging 维护）；有时长且可 seek 才启用
+        if (!progressSlider.IsMouseCaptureWithin && total is { Ticks: > 0 })
+        {
+            var frac = session!.Position is { } pos ? pos.Ticks / (double)total.Value.Ticks : 0d;
+            progressSlider.Value = Math.Clamp(frac * 1000d, 0d, 1000d);
+            timeLabel.Text = $"{FormatTime(session!.Position)} / {FormatTime(total)}";
+        }
+        progressSlider.IsEnabled = session is not null && session.CanSeek && total is { Ticks: > 0 };
+
+        // 播放模式高亮：开启时强调色
+        SetGlyphAccent(shuffleBtn, session?.IsShuffle == true);
+        SetGlyphAccent(repeatBtn, session?.IsRepeat == true);
+
+        // 麦克风：静音红色高亮，正常回主题背景
+        if (v.MicMuted)
+        {
+            micIcon.Background = ThemeBrushes.Get("StatusDanger");
+            micGlyph.Foreground = Brushes.White;
+        }
+        else
+        {
+            micIcon.SetResourceReference(Border.BackgroundProperty, "ThemeContentBackground");
+            micGlyph.Foreground = NativePanelStyles.TextSecondary;
+        }
+
+        // 封面：引用变化才异步重载，失败/无封面回退占位
+        _ = UpdateCoverAsync(cover, v);
+    }
+
+    private async Task UpdateCoverAsync(Border cover, SoundPanelViewModel v)
+    {
+        var session = v.ActiveMedia;
+        var thumbRef = session?.ThumbnailRef;
+        // 防重键 = 歌曲身份（Title|Artist|AppName）而非 ThumbnailRef 引用：
+        // 切歌后系统可能复用同一 IRandomAccessStreamReference 实例（引用相等），
+        // 若按引用判重，封面永不刷新、一直显示上一首的图。
+        var key = session is null ? null : $"{session.Title}|{session.Artist}|{session.AppName}";
+        if (string.Equals(_coverKey, key, StringComparison.Ordinal)) return;
+        _coverKey = key;
+        var bytes = await ReadThumbnailBytesAsync(thumbRef);
+        if (!string.Equals(_coverKey, key, StringComparison.Ordinal)) return; // 已切歌：丢弃过期结果
+        var img = ToBitmapImage(bytes);
+        if (img is null)
+        {
+            cover.Child = CoverPlaceholderGlyph();
+            return;
+        }
+        var image = new Image
+        {
+            Source = img,
+            Stretch = Stretch.UniformToFill,
+            SnapsToDevicePixels = true
+        };
+        RenderOptions.SetBitmapScalingMode(image, BitmapScalingMode.HighQuality);
+        cover.Child = image;
+    }
+
+    /// <summary>读取 SMTC 封面缩略图字节（后台 I/O，失败静默返回 null 由 UI 回退占位）。</summary>
+    private static async Task<byte[]?> ReadThumbnailBytesAsync(IRandomAccessStreamReference? thumbRef)
+    {
+        if (thumbRef is null) return null;
+        try
+        {
+            using var stream = await thumbRef.OpenReadAsync();
+            var size = (uint)Math.Min(stream.Size, 10 * 1024 * 1024); // 封面图不应过大，设 10MB 上限
+            using var reader = new DataReader(stream);
+            await reader.LoadAsync(size);
+            var bytes = new byte[size];
+            reader.ReadBytes(bytes);
+            return bytes;
+        }
+        catch { return null; }
+    }
+
+    private static BitmapImage? ToBitmapImage(byte[]? bytes)
+    {
+        if (bytes is null || bytes.Length == 0) return null;
+        try
+        {
+            var img = new BitmapImage();
+            img.BeginInit();
+            img.CacheOption = BitmapCacheOption.OnLoad;
+            img.StreamSource = new MemoryStream(bytes);
+            img.EndInit();
+            img.Freeze();
+            return img;
+        }
+        catch { return null; }
+    }
+
+    private static string FormatTime(TimeSpan? t)
+    {
+        if (t is not { } v || v < TimeSpan.Zero) return "--:--";
+        return v.TotalHours >= 1 ? v.ToString(@"h\:mm\:ss") : v.ToString(@"mm\:ss");
     }
 
     private static FrameworkElement BuildAppRow(AudioSessionNative a, SoundPanelViewModel vm)
@@ -312,8 +572,8 @@ internal sealed class SoundPanelWindow : MenuBarPopupWindow
                 Width = 24,
                 Height = 24,
                 CornerRadius = new CornerRadius(6),
-                // 应用图标占位：白色半透明（原深色半透明在毛玻璃面板上几乎不可见）
-                Background = new SolidColorBrush(Color.FromArgb(60, 255, 255, 255)),
+                // 应用图标占位：前景色半透明（深色半透明在毛玻璃面板上几乎不可见）
+                Background = ThemeBrushes.Tint("ThemeForeground", 0.24),
                 Child = new TextBlock
                 {
                     Text = "♫",
@@ -389,8 +649,8 @@ internal sealed class SoundPanelWindow : MenuBarPopupWindow
             Height = 22,
             CornerRadius = new CornerRadius(6),
             // 静音：红色；未静音：浅灰（与白色滑杆基调一致）
-            Background = muted ? new SolidColorBrush(Color.FromRgb(255, 59, 48))
-                               : new SolidColorBrush(Color.FromArgb(140, 230, 230, 230)),
+            Background = muted ? ThemeBrushes.Get("StatusDanger")
+                               : ThemeBrushes.Tint("ThemeForeground", 0.55),
             Child = new TextBlock
             {
                 Text = muted ? "⍻" : "♩",
@@ -398,7 +658,7 @@ internal sealed class SoundPanelWindow : MenuBarPopupWindow
                 HorizontalAlignment = HorizontalAlignment.Center,
                 VerticalAlignment = VerticalAlignment.Center,
                 // 静音红底用白字；未静音浅灰底用深字
-                Foreground = muted ? Brushes.White : new SolidColorBrush(Color.FromRgb(60, 60, 60))
+                Foreground = muted ? Brushes.White : Brushes.DimGray
             },
             Cursor = Cursors.Hand,
             ToolTip = muted ? "取消静音" : "静音",
@@ -438,14 +698,25 @@ internal sealed class SoundPanelViewModel
     public int VolumePct { get; private set; } = 12;
     public IReadOnlyList<AudioSessionNative> Apps { get; private set; } = Array.Empty<AudioSessionNative>();
 
-    public IReadOnlyList<MediaSessionSnapshot> MediaSessions { get; private set; } = Array.Empty<MediaSessionSnapshot>();
-    public MediaSessionSnapshot? ActiveMedia { get; private set; }
-    public string NowPlayingTitle => ActiveMedia?.Title ?? "—";
-    public string NowPlayingSub => ActiveMedia is null ? "" : $"{ActiveMedia.Artist} · {ActiveMedia.AppName}".TrimStart(' ', '·');
+    /// <summary>麦克风（采集端点）是否静音；面板显示与切换静音的状态源。</summary>
+    public bool MicMuted { get; private set; }
+
+    /// <summary>当前正在拖动中的应用音量行数（UI 据此跳过全量重建，防止拖动中断）。</summary>
+    public int AppDraggingCount => _appDragging.Count;
+
+    public IReadOnlyList<MediaPlaybackSnapshot> MediaSessions { get; private set; } = Array.Empty<MediaPlaybackSnapshot>();
+    public MediaPlaybackSnapshot? ActiveMedia { get; private set; }
+    public string NowPlayingTitle => ActiveMedia?.Title ?? "没有正在播放的媒体";
+    public string NowPlayingSub => ActiveMedia is null
+        ? "打开音乐或视频应用后会显示在这里"
+        : $"{ActiveMedia.Artist} · {ActiveMedia.AppName}".TrimStart(' ', '·');
     public bool Playing => ActiveMedia?.State == MediaPlaybackState.Playing;
 
-    public SoundPanelViewModel()
+    private readonly IMediaPlaybackService? _media;
+
+    public SoundPanelViewModel(IMediaPlaybackService? media = null)
     {
+        _media = media;
         _uiDispatcher = Dispatcher.CurrentDispatcher;
         _audioWorker = new System.Threading.Thread(AudioWorkerLoop)
         {
@@ -506,16 +777,64 @@ internal sealed class SoundPanelViewModel
     }
 
     // 主音量 + 会话枚举移到专用后台线程，结果回 UI 线程应用；worker 忙时跳过本轮，保留上一帧。
+    // 应用列表按进程聚合后再渲染（同进程多会话并一行，见 AggregateSessions）。
     private void ReloadAudio()
     {
         SubmitAudioRefresh(() =>
         {
             var s = AudioCoreNative.GetStatus(AudioFlow.Render);
+            var mic = AudioCoreNative.GetStatus(AudioFlow.Capture);
             var apps = AudioCoreNative.EnumerateSessions();
             _uiDispatcher.BeginInvoke((Action)(() =>
             {
                 if (s.Ok) VolumePct = (int)Math.Round(s.VolumeFloat * 100f, MidpointRounding.AwayFromZero);
-                Apps = apps;
+                MicMuted = mic.Ok && mic.Muted;
+                Apps = AggregateSessions(apps);
+                _changed?.Invoke(this);
+            }));
+        });
+    }
+
+    /// <summary>
+    /// 把原生平铺会话列表按进程聚合为 UI 行：同一进程多会话并一行（对齐 103 聚合红线，
+    /// 同一 App 多窗口不再重复出现）；无进程会话（系统声音）归并为一行。
+    /// 设置侧 <see cref="AudioCoreNative.SetSessionVolume"/> 按 PID 对该进程全部会话生效，聚合不损失控制。
+    /// </summary>
+    internal static IReadOnlyList<AudioSessionNative> AggregateSessions(IReadOnlyList<AudioSessionNative> raw)
+    {
+        if (raw is null || raw.Count == 0) return Array.Empty<AudioSessionNative>();
+        var byPid = new Dictionary<int, AudioSessionNative>();
+        AudioSessionNative? system = null;
+        foreach (var s in raw)
+        {
+            if (s.ProcessId <= 0)
+            {
+                // 系统声音等无进程会话：并入一行（保留首个非空显示名）。
+                if (system is null || string.IsNullOrWhiteSpace(system.Value.Name))
+                    system = s;
+                continue;
+            }
+            if (!byPid.ContainsKey(s.ProcessId))
+                byPid[s.ProcessId] = s;
+        }
+        var list = new List<AudioSessionNative>(byPid.Count + (system is null ? 0 : 1));
+        list.AddRange(byPid.Values);
+        if (system is not null) list.Add(system.Value);
+        return list;
+    }
+
+    /// <summary>切换麦克风静音（保持当前采集音量不变），随后回读系统真值刷新 UI。</summary>
+    public void ToggleMicMute()
+    {
+        SubmitAudioRefresh(() =>
+        {
+            var s = AudioCoreNative.GetStatus(AudioFlow.Capture);
+            if (!s.Ok) return;
+            AudioCoreNative.SetCaptureVolume(s.VolumeFloat, !s.Muted);
+            var after = AudioCoreNative.GetStatus(AudioFlow.Capture);
+            _uiDispatcher.BeginInvoke((Action)(() =>
+            {
+                MicMuted = after.Ok && after.Muted;
                 _changed?.Invoke(this);
             }));
         });
@@ -615,11 +934,12 @@ internal sealed class SoundPanelViewModel
         ReloadAudio();
     }
 
-    /// <summary>向下发一个媒体控制命令，并在命令后立即刷新媒体状态。</summary>
-    public async Task SendMediaCommandAsync(MediaCommand command)
+    /// <summary>向下发一个媒体控制命令，并在命令后立即刷新媒体状态。Seek 命令需传 position。</summary>
+    public async Task SendMediaCommandAsync(MediaPlaybackCommand command, TimeSpan? position = null)
     {
-        if (ActiveMedia is null) return;
-        await MediaPlayerCore.SendCommandAsync(ActiveMedia, command);
+        var media = _media;
+        if (media is null || ActiveMedia is null) return;
+        await media.SendCommandAsync(command, position);
         await RefreshMediaAsync();
     }
 
@@ -629,26 +949,15 @@ internal sealed class SoundPanelViewModel
         _mediaRefreshing = true;
         try
         {
-            if (!await MediaPlayerCore.EnsureInitializedAsync()) return;
-            var snap = MediaSessions = await MediaPlayerCore.GetSnapshotAsync();
-            ActiveMedia = PickActiveMedia(snap);
+            var media = _media;
+            if (media is null) return;
+            MediaSessions = await media.GetSessionsAsync();
+            ActiveMedia = await media.GetActiveSessionAsync();
         }
         finally
         {
             _mediaRefreshing = false;
         }
         _changed?.Invoke(this);
-    }
-
-    // 优先正在播放的会话，其次任意非关闭会话；都没有则返回 null。
-    private static MediaSessionSnapshot? PickActiveMedia(IReadOnlyList<MediaSessionSnapshot> snap)
-    {
-        MediaSessionSnapshot? fallback = null;
-        foreach (var item in snap)
-        {
-            if (item.State == MediaPlaybackState.Playing) return item;
-            fallback ??= item;
-        }
-        return fallback;
     }
 }

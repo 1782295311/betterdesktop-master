@@ -24,13 +24,6 @@
 ## 五、分发形态
 
 1. 宿主主程序：单文件自包含优先；插件程序集：**禁止 AOT / 裁剪**（动态加载与 HMR 的前提，与 ADR-001 D2 同一逻辑）。
-2. 发布产物签名（P2）；已知限制写各包 Known Limitations。
-
-## 机检状态（诚实标注）
-
-| 规则 | 当前机检 | 规划机检 |
-|---|---|---|
-| SDK 锁定 | `global.json` P1 落地 | P1：`verify-sdk-version.ps1` |
-| 发布门禁 | **暂无机检** | P2：`verify-release.ps1` |
-| CHANGELOG 完整性 | **暂无机检** | P2：`verify-changelog.ps1` |
-| 插件禁 AOT | **暂无机检** | P1：csproj 文本检查（入架构测试） |
+2. **系统右键菜单命令入口 = `BetterDesktop.Cli.exe`（M3.1）**：必须与宿主同目录部署；注册表命令指向 CLI 的 `--menu-cmd <action>`（无宿主 headless 直执行）。缺失时宿主 `--menu-cmd` fallback 与 `MenuCommandPaths.GetCliPath()` 均回退宿主自身路径——**CLI 缺失 = 无宿主场景右键功能不可用**，发布物清单必须含 CLI（剪贴板历史项例外：命令保持指向 Host.exe，见 DesktopSystemMenuRegistrar）。
+3. **格式转换不再依赖第三方引擎**（2026-09-20）：文档/表格/电子书族由 `convert-engine.exe` **进程内 lite 核心**完成（`native/convert-lite`，零外部 exe），`engines\pandoc\`、`libreoffice\`、`calibre\` **已从仓库与发布物删除**（-2372MB）。仍保留的三棵树（`tesseract` OCR / `poppler` PDF / `ffmpeg` 音视频）**不进主包**，只作 `06-可选引擎` 模块由安装器落位到 `<BaseDirectory>\engines\`；缺失只影响 OCR 与 PDF 渲染，转换本身照常。
+4. 发布产物签名（P2）；已知限制写各包 Known Limitations。

@@ -43,7 +43,7 @@ public sealed class QuickNotePlugin : IPlugin
         // 依赖可能为 null（M10 降级）：本插件仅消费，缺失时静默不激活，不抛。
         _settings = context.Get<ISettingsService>();
         _appearance = context.Get<IAppearanceService>();
-        _vibrancy = context.Get<IVibrancyService>() ?? new NullVibrancy();
+        _vibrancy = context.Get<IVibrancyService>() ?? NullVibrancyService.Instance;
 
         if (_settings is not null)
         {
@@ -162,11 +162,4 @@ public sealed class QuickNotePlugin : IPlugin
             app.Dispatcher.Invoke(action);
         }
     }
-}
-
-/// <summary>兜底：IVibrancyService 不存在时降级为空壳（窗口不变毛玻璃，但不崩溃）。</summary>
-internal sealed class NullVibrancy : IVibrancyService
-{
-    public void Apply(IntPtr hwnd, VibrancyStyle style, bool roundCorners, bool smallRadius) { }
-    public void Disable(IntPtr hwnd) { }
 }

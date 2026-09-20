@@ -1,7 +1,8 @@
 using System;
 using System.Diagnostics;
 using System.IO;
-using Microsoft.Win32;
+using BetterDesktop.Kernel.Core;
+using BetterDesktop.Kernel.Deployment;
 
 namespace BetterDesktop.Shell.Settings.Services;
 
@@ -11,8 +12,6 @@ namespace BetterDesktop.Shell.Settings.Services;
 /// </summary>
 public static class SystemManagement
 {
-    private const string RunKey = @"Software\Microsoft\Windows\CurrentVersion\Run";
-    private const string AppName = "BetterDesktop";
 
     private static string SettingsFilePath
         => Path.Combine(
@@ -22,94 +21,99 @@ public static class SystemManagement
     private static string LogDirectory
         => Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory);
 
-    /// <summary>设置开机自启（写入 HKCU\Run）。</summary>
+    /// <summary>
+    /// 设置开机自启（HKCU）。
+    /// 【2026-09-17】改走 <see cref="AutostartRegistrar"/>：Run 键 + StartupApproved **双写**——
+    /// 只写 Run 键会被任务管理器的"禁用"状态静默压制（技术力 7430 红线 1，本仓此前两处都踩了）。
+    /// 指向目标也一并修正：以前写的是"当前进程 exe"（从独立设置进程点开关会把**设置中心**登记成自启），
+    /// 现在优先登记组件目录/安装根里的 BetterDesktop.Host.exe（这开关的语义就是"开机启动桌面环境"）。
+    /// </summary>
     public static void SetAutoStart(bool enabled)
     {
-        using var key = Registry.CurrentUser.OpenSubKey(RunKey, writable: true);
-        if (key is null)
+        var exe = ResolveComponent("BetterDesktop.Host.exe") ?? Environment.ProcessPath;
+        if (enabled && string.IsNullOrWhiteSpace(exe))
         {
             return;
         }
 
-        if (enabled)
+        if (!AutostartRegistrar.Set(AutostartRegistrar.ShellValueName, enabled ? exe : null, out var error))
         {
-            // 当前可执行文件完整路径；host 入口可能为 BetterDesktop.Host.exe
-            var exe = Environment.ProcessPath;
-            if (string.IsNullOrWhiteSpace(exe))
-            {
-                return;
-            }
-
-            key.SetValue(AppName, $"\"{exe}\"");
-        }
-        else
-        {
-            if (key.GetValue(AppName) is not null)
-            {
-                key.DeleteValue(AppName, throwOnMissingValue: false);
-            }
+            DiagnosticLog.Trace("shell.settings", $"开机自启设置失败（enabled={enabled}）：{error}");
         }
     }
 
-    /// <summary>查询当前是否已配置开机自启。</summary>
+    /// <summary>查询当前是否已配置开机自启（含"任务管理器是否禁用"这一层，见 AutostartRegistrar.IsEnabled）。</summary>
     public static bool IsAutoStartEnabled()
-    {
-        using var key = Registry.CurrentUser.OpenSubKey(RunKey, writable: false);
-        return key is not null && key.GetValue(AppName) is not null;
-    }
+        => AutostartRegistrar.IsEnabled(AutostartRegistrar.ShellValueName);
 
     /// <summary>
-    /// 看门狗常驻 exe 名称（与 Host 同目录，由 host/Bootstrap 或 watchdog 自身安装时放置）。
+    /// 解析组件路径：同目录优先 → 安装根（deployment.json）→ 同目录父级兜底。
+    /// 独立设置进程与宿主不在同一目录时，"同目录"会落空，故必须带安装根这一层。
     /// </summary>
-    private const string WatchdogExeName = "BetterDesktop.Watchdog.exe";
+    private static string? ResolveComponent(string exeName)
+    {
+        try
+        {
+            var sameDir = Path.Combine(AppContext.BaseDirectory, exeName);
+            if (File.Exists(sameDir))
+            {
+                return sameDir;
+            }
 
-    /// <summary>看门狗注册表键名（HKCU\Run）。</summary>
+            var root = BetterDesktop.Kernel.Deployment.DeploymentInfo.ResolveInstallRoot();
+            if (root is not null)
+            {
+                var installed = Path.Combine(root, exeName);
+                if (File.Exists(installed))
+                {
+                    return installed;
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            DiagnosticLog.Trace("shell.settings", $"解析组件路径失败（{exeName}）：{ex.Message}");
+        }
+
+        return null;
+    }
+
+    /// <summary>看门狗注册表键名（HKCU\Run）—— 现在只用于**清理**旧值，见 <see cref="SetWatchdogAutoStart"/>。</summary>
     private const string WatchdogAppName = "BetterDesktop.Watchdog";
 
     /// <summary>
-    /// 设置看门狗开机自启（写入 HKCU\Run，指向同目录的 BetterDesktop.Watchdog.exe）。
-    /// 看门狗为外部常驻进程（C3），负责 Host 崩溃时拉起，shell 替代必须常驻。
+    /// 看门狗开机自启：**已随 S4-4（2026-09-20）退役**（那个进程不存在了，监护职责迁入 core）。
     /// </summary>
+    /// <remarks>
+    /// <para>
+    /// 方法签名保留（设置中心仍在调用），但语义只剩一件事：**清掉历史遗留的 Run 值**。
+    /// 这才是当前真实且**用户可见**的故障 —— 旧版本注册的自启指向 `BetterDesktop.Watchdog.exe`，
+    /// 文件已不存在，于是每次开机都**静默失败**：Windows 找不到目标，而用户看不到任何提示。
+    /// </para>
+    /// <para>
+    /// 注意原先的 <c>ResolveComponent</c> 保护只挡住了"指向不存在的**新**路径"，
+    /// 挡不住**已经写进注册表的旧值** —— 所以这里改成无条件清理。
+    /// </para>
+    /// <para>
+    /// `enabled = true` 不再"注册"任何东西：已经没有可注册的进程了；
+    /// 继续写一个指向不存在文件的路径，等于把那个静默失败再生产一次。
+    /// </para>
+    /// </remarks>
     public static void SetWatchdogAutoStart(bool enabled)
     {
-        using var key = Registry.CurrentUser.OpenSubKey(RunKey, writable: true);
-        if (key is null)
+        _ = enabled; // 参数保留只为不改调用方签名；两种取值都走同一条"清理"路径。
+        if (!AutostartRegistrar.Set(AutostartRegistrar.WatchdogValueName, null, out var error))
         {
-            return;
-        }
-
-        if (enabled)
-        {
-            var hostDir = Path.GetDirectoryName(Environment.ProcessPath);
-            if (string.IsNullOrWhiteSpace(hostDir))
-            {
-                return;
-            }
-
-            var watchdogExe = Path.Combine(hostDir, WatchdogExeName);
-            // 仅当看门狗 exe 确实存在时才写入（避免指向不存在的路径导致启动失败）
-            if (!File.Exists(watchdogExe))
-            {
-                return;
-            }
-
-            key.SetValue(WatchdogAppName, $"\"{watchdogExe}\"");
-        }
-        else
-        {
-            if (key.GetValue(WatchdogAppName) is not null)
-            {
-                key.DeleteValue(WatchdogAppName, throwOnMissingValue: false);
-            }
+            DiagnosticLog.Trace("shell.settings", $"清理看门狗自启失败：{error}");
         }
     }
 
-    /// <summary>查询看门狗是否已配置开机自启。</summary>
-    public static bool IsWatchdogAutoStartEnabled()
-    {
-        using var key = Registry.CurrentUser.OpenSubKey(RunKey, writable: false);
-        return key is not null && key.GetValue(WatchdogAppName) is not null;
-    }
+    /// <summary>看门狗是否已配置开机自启：**恒 false**（它已退役；且上面那一路会把旧值清掉）。</summary>
+    /// <remarks>
+    /// 刻意不返回"注册表里是否还有值"：那是一个**正在被清理的残留**，
+    /// 把它显示成"已启用"只会让用户以为这个开关还有意义。
+    /// </remarks>
+    public static bool IsWatchdogAutoStartEnabled() => false;
 
     /// <summary>查询看门狗进程当前是否正在运行（C3 常驻）。</summary>
     public static bool IsWatchdogRunning()

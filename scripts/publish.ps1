@@ -35,8 +35,8 @@ $components = [ordered]@{
     # 放最前：它只额外带来 BetterDesktop.exe/.dll/.deps.json/.runtimeconfig.json 与图标，
     # 共享程序集随后被 Host 的那份覆盖（同一版本，覆盖顺序只影响"哪一份更权威"）。
     'Launcher' = 'launcher\BetterDesktop.Launcher.csproj'
-    'Host'     = 'host\BetterDesktop.Host.csproj'
-    'Cli'      = 'BetterDesktop.Cli\BetterDesktop.Cli.csproj'
+    'Host'     = 'packages\entry\host\BetterDesktop.Host.csproj'
+    'Cli'      = 'packages\entry\cli\BetterDesktop.Cli.csproj'
     # 2026-09-17 桌面控制独立化：主程序没跑时「桌面控制」菜单靠它（原生扩展 → Cli --menu-batch → 本 exe）。
     # 必须与 Host/Cli 同目录：CLI 按 AppContext.BaseDirectory 定位它。
     'DesktopControl' = 'packages\shell\shell-desktop-control\BetterDesktop.DesktopControl.csproj'
@@ -52,6 +52,13 @@ $required = @(
     # 2026-09-18：启动器 = 用户唯一入口（拉起全部组件 + 自检修复 + 首次偏好）。
     # 与 install-betterdesktop.ps1 的 $required 逐字同步（门禁 verify-system-integration 会校验）。
     'BetterDesktop.exe',
+    # 2026-09-20 Rust core = the single resident process (tray icon / global hotkeys / control pipe /
+    # supervision / power / security). Without it the package has NO lifecycle owner and the whole
+    # on-demand architecture is simply absent - a release blocker, not an optional extra.
+    'betterdesktop-core.exe',
+    # core's tray icon: it looks for <exeDir>\BetterDesktop.ico (core/src/tray.rs). Missing = the
+    # notification area shows the generic system icon, i.e. the product ships without a face.
+    'BetterDesktop.ico',
     'BetterDesktop.Host.exe',
     'BetterDesktop.Cli.exe',
     'BetterDesktop.DesktopControl.exe',
@@ -105,6 +112,33 @@ foreach ($name in $components.Keys) {
     if (-not (Test-Path $out)) { Fail "publish output missing for $name" }
 }
 
+# ---- Rust core: COLLECT the product (never build it here) ----
+# The single resident process (betterdesktop-core.exe: tray icon / global hotkeys / control pipe /
+# supervision / power / security). Repo rule: cargo builds are an EXPLICIT step
+# (BetterDesktop.Shell.Convert.csproj: "this repo does not run cargo for you" - engine/ and
+# engine-index/ follow the same rule), so this script only collects it, exactly like convert-engine.exe.
+# Build it with:  pwsh -File scripts\build-core.ps1
+#
+# Name: the file is lower-case/hyphenated because that IS the cargo crate name (core/Cargo.toml
+# `name = "betterdesktop-core"`) and the CLI resolves exactly that name
+# (BetterDesktop.Cli/ComponentPathResolver.cs, CoreExeName). Renaming it here alone would break
+# resolution - it would have to be a crate rename.
+$coreSrc = Join-Path $root 'core\target\release\betterdesktop-core.exe'
+if (-not (Test-Path $coreSrc)) {
+    Fail "Rust core binary missing: $coreSrc`n  run: pwsh -File scripts\build-core.ps1"
+}
+
+# core renders the tray icon and looks for <exeDir>\BetterDesktop.ico (core/src/tray.rs). Without it
+# it logs a WARN and falls back to the system default icon, i.e. the product ships without a face.
+$coreIco = Join-Path $root 'packages\entry\host\Assets\BetterDesktop.ico'
+if (-not (Test-Path $coreIco)) { Fail "tray icon missing: $coreIco" }
+
+$coreStage = Join-Path $staging 'Core'
+New-Item -ItemType Directory -Path $coreStage -Force | Out-Null
+Copy-Item $coreSrc (Join-Path $coreStage 'betterdesktop-core.exe') -Force
+Copy-Item $coreIco (Join-Path $coreStage 'BetterDesktop.ico') -Force
+Write-Host "--- collected Rust core -> $coreStage"
+
 # Merge: Host first (bulk), then everything else overwrites.
 $finalDir = Join-Path $root "$OutRoot\BetterDesktop-$stamp"
 if (Test-Path $finalDir) { Remove-Item $finalDir -Recurse -Force }
@@ -114,6 +148,9 @@ foreach ($name in $components.Keys) {
     $out = Join-Path $staging $name
     Copy-Item -Path (Join-Path $out '*') -Destination $finalDir -Recurse -Force
 }
+
+# Rust core (collected above): it has no dotnet project, so it is not a $components key.
+Copy-Item -Path (Join-Path $staging 'Core\*') -Destination $finalDir -Force
 
 # Installer scripts ship with the release (see $required below): the uninstaller MUST be a separate
 # script, because it deletes the very folder the tray runs from.

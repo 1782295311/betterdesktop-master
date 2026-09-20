@@ -63,13 +63,28 @@ public sealed class StartMenuSearchService : IStartMenuSearchService
             }
         }
 
-        var ranked = results
-            .OrderByDescending(x => x.Score)
-            .ThenBy(x => x.Category, StringComparer.Ordinal)
-            .ThenBy(x => x.Title, StringComparer.OrdinalIgnoreCase)
-            .Take(30)
+        // 【2026-09-17 分组展示改造】不再全局 Score 降序 + Take(30) 截断：
+        //  - 不截断：所有适配结果全量返回（各 Provider 已全量收集），UI 分组折叠 + 筛选消费；
+        //  - 组序：App 固定第一（程序优先级最前）；其余类别按组内命中数升序（结果少的类别放前，
+        //    同数 Settings 在 File 前，保稳定）；组内 Score 降序 → Title 升序。
+        // 说明：组序是「类别优先级」不是「逐条置信度」——某组命中多不代表它该排前，
+        //    少而精确的类别（如设置 2 条 vs 文件 40 条）放前面让用户先看到精匹配。
+        var ordered = results
+            .GroupBy(x => x.Category, StringComparer.OrdinalIgnoreCase)
+            .OrderBy(g => GroupRank(g.Key, g.Count()))
+            .SelectMany(g => g
+                .OrderByDescending(x => x.Score)
+                .ThenBy(x => x.Title, StringComparer.OrdinalIgnoreCase))
             .ToList();
 
-        return Task.FromResult<IReadOnlyList<SearchResult>>(ranked);
+        return Task.FromResult<IReadOnlyList<SearchResult>>(ordered);
     }
+
+    /// <summary>
+    /// 组排序键：App 固定 (0,0,0) 恒第一；其余 (1, 命中数, Settings=0/File=1)
+    /// ——结果少的类别放前，同数时 Settings 在 File 前（元组按序比较）。
+    /// </summary>
+    private static (int, int, int) GroupRank(string category, int count) =>
+        category.Equals("App", StringComparison.OrdinalIgnoreCase) ? (0, 0, 0)
+        : (1, count, category.Equals("Settings", StringComparison.OrdinalIgnoreCase) ? 0 : 1);
 }

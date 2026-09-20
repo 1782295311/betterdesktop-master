@@ -17,12 +17,11 @@ namespace BetterDesktop.Shell.Core;
 //   "菜单栏扩展注册（第三方加状态图标）"         → Services/MenuBarExtensionRegistry.cs + Contracts/IMenuBarExtension.cs
 //   "原生任务栏管理 / 窗口样式工具"             → Windowing/NativeTaskbarManager.cs、Windowing/WindowStyleHelper.cs
 //   "动画能力"                                  → Animation/（见 AnimationPlugin）
+//   "活动仲裁（灵动岛的统一消息入口）"          → Activity/ActivityPlugin.cs + Activity/ActivityService.cs
 // ============================================================
 
-/// <summary>
-/// shell-core 插件：在桌面主窗口上应用透亮毛玻璃（无圆角），并向内核 Provide&lt;IDesktopSurface&gt;，
-/// 供 bar/dock 取屏幕几何。依赖 IWindowHandleService（宿主 Provide）与 IVibrancyService（VibrancyService Provide）。
-/// </summary>
+/// <summary>shell-core 插件：在桌面主窗口上应用透亮毛玻璃（无圆角），并向内核 Provide&lt;IDesktopSurface&gt;，
+/// 供 bar/dock 取屏幕几何。依赖 IWindowHandleService（宿主 Provide）与 IVibrancyService（VibrancyService Provide）。</summary>
 public sealed class ShellCorePlugin : IPlugin
 {
     /// <inheritdoc />

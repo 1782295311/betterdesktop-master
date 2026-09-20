@@ -73,7 +73,7 @@ public partial class PlaygroundWindow : Window
             TryPlugin(context, new StatusPlugin(), WriteLog);
 
             // 获取服务（Monitor 缺失时工厂会降级为占位文案，不抛异常）
-            var vibrancy = context.Get<IVibrancyService>() ?? new NullVibrancyPlay();
+            var vibrancy = context.Get<IVibrancyService>() ?? NullVibrancyService.Instance;
             var bat = context.Get<IBatteryMonitor>();
             var vol = context.Get<IVolumeMonitor>();
             var mic = context.Get<IMicrophoneMonitor>();
@@ -165,11 +165,4 @@ public partial class PlaygroundWindow : Window
     }
 
     private void OnCloseClick(object sender, RoutedEventArgs e) => Close();
-}
-
-/// <summary>兜底：IVibrancyService 缺失时的空实现。</summary>
-file sealed class NullVibrancyPlay : IVibrancyService
-{
-    public void Apply(IntPtr hWnd, VibrancyStyle style, bool roundCorners, bool smallRadius) { }
-    public void Disable(IntPtr hWnd) { }
 }

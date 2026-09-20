@@ -54,9 +54,12 @@ public abstract class PopupWindowBase : ShellWindow
         if (CanSetProperty("Topmost")) Topmost = true;
 
         // 失焦自动收起（双保险）：窗口若曾被激活，失焦即隐藏。
+        // 【手动收起模式必须一并受控】只关外点钩子会漏这条路径：点面板外 → 面板失焦 →
+        // Deactivated 照样把它关掉，表现为"设了手动收起，点别处还是消失"（2026-09-12）。
         Deactivated += (_, _) =>
         {
-            if (IsVisible)
+            DiagTrace("Deactivated; IsVisible=" + IsVisible);
+            if (AutoHideOnOutsideClick && IsVisible)
             {
                 HidePopup();
             }
@@ -69,25 +72,21 @@ public abstract class PopupWindowBase : ShellWindow
     protected override bool UseSkinBackground => false;
 
     /// <summary>
-    /// 是否套用 Win32 层 WS_EX_NOACTIVATE + WS_EX_TOOLWINDOW（与 WPF 层 ShowActivated=false
+    /// 弹层窗口默认套用 Win32 层 WS_EX_NOACTIVATE + WS_EX_TOOLWINDOW（与 WPF 层 ShowActivated=false
     /// 「双层缺一不可」，对照 602 文档）。含键盘输入的弹窗（搜索框/密码框/重命名）必须重写为 false——
     /// NOACTIVATE 会让窗口点击后仍不获得焦点，键盘输入落不进 TextBox。
+    /// 注：机制本体与消费点在 <see cref="ShellWindow.OnSourceInitialized"/>，此处只改默认值。
     /// </summary>
-    protected virtual bool UseNoActivateWindowStyle => true;
+    protected override bool UseNoActivateWindowStyle => true;
 
-    /// <summary>句柄就绪后补 Win32 层"不抢焦点"样式（全库 MakeFloatingNoActivate 唯一消费点）。</summary>
-    protected override void OnSourceInitialized(EventArgs e)
-    {
-        base.OnSourceInitialized(e);
-        if (UseNoActivateWindowStyle)
-        {
-            var hwnd = new WindowInteropHelper(this).Handle;
-            if (hwnd != IntPtr.Zero)
-            {
-                WindowStyleHelper.MakeFloatingNoActivate(hwnd);
-            }
-        }
-    }
+    /// <summary>
+    /// 是否「点窗口外 / 失焦即自动收起」（默认 true，仿 macOS 面板"点别处即消失"）。
+    /// 重写为 false = **手动收起**：只有显式 <see cref="HidePopup"/>（关闭按钮 / Esc）才收起，
+    /// 面板可长期停留（适合边看历史边在其他窗口操作）。
+    /// 【两处路径都要受控】外点钩子（<see cref="OnMouseEvent"/>）与 <see cref="Deactivated"/> 是双保险 ——
+    /// 只关一处会漏（见构造器内注释）。子类通常在构造期从配置读取该值。
+    /// </summary>
+    protected virtual bool AutoHideOnOutsideClick => true;
 
     /// <summary>子类在此构建根内容（布局 + 真实数据 Binding），返回根 Visual。</summary>
     protected abstract FrameworkElement BuildContent();
@@ -111,6 +110,7 @@ public abstract class PopupWindowBase : ShellWindow
         {
             Show();
         }
+        DiagTrace($"ShowAt after Show IsVisible={IsVisible} shown={_shown} at={screenTopLeft.X:0},{screenTopLeft.Y:0}");
 
         if (WindowState == WindowState.Minimized)
         {
@@ -122,11 +122,16 @@ public abstract class PopupWindowBase : ShellWindow
 
         // 显示后挂全局鼠标钩子：鼠标点击面板窗口外任意处 → 自动收起。
         EnsureMouseHook();
+
+        Hotkeys.SurfaceScopeBridge.Report(SurfaceScopeId, active: true);
     }
 
     /// <summary>隐藏面板并卸下全局鼠标钩子（下次 Show 再挂）。</summary>
     protected void HidePopup()
     {
+        DiagTrace("HidePopup ENTER\n" + Environment.StackTrace);
+        Hotkeys.SurfaceScopeBridge.Report(SurfaceScopeId, active: false);
+        OnBeforeHide(); // 【必须在 Hide 之前】此时本进程仍是前台进程（见 OnBeforeHide 注释）
         RemoveMouseHook();
         if (IsVisible)
         {
@@ -134,8 +139,53 @@ public abstract class PopupWindowBase : ShellWindow
         }
     }
 
+    /// <summary>
+    /// 收起**之前**的钩子（在窗口仍可见、本进程仍是前台进程时调用）。默认空实现。
+    /// <para>
+    /// 【为什么需要 · 2026-09-12 真机】WPF `Hide()` 会把焦点移交给**同进程的另一个可见窗口**
+    ///（如侧边栏手柄），`WS_EX_NOACTIVATE` 拦不住这条路径。后果：面板收起后前台"蒸发"到自家窗口上，
+    /// 于是 `SendPaste` 的 Ctrl+V 打在自己身上 —— 按序粘贴**第一条凭空消失**
+    ///（用户实测"还是漏了第一个"，且因时序竞态而**偶发**：固定延时有时够、有时不够）。
+    /// </para>
+    /// <para>
+    /// 子类可在此刻 `SetForegroundWindow` 把前台还给用户的窗口。**必须在此刻做**：
+    /// 只有当前台进程调用时 `SetForegroundWindow` 才被系统接受，`Hide()` 之后再调会被静默忽略。
+    /// </para>
+    /// </summary>
+    protected virtual void OnBeforeHide()
+    {
+    }
+
+    /// <summary>
+    /// 弹窗诊断追踪总开关，默认关闭。
+    /// <para>
+    /// 本方法被 WH_MOUSE_LL 钩子回调调用（每次鼠标按下 1~3 条），属**全局低级钩子上下文**：
+    /// 在那里做任何磁盘 IO（即使异步入队也有锁与队列成本）都可能让钩子超过系统的
+    /// LowLevelHooksTimeout 而被静默摘除，表现正是"外点自动收起偶发失效"。
+    /// 排查时设环境变量 BETTERDESKTOP_POPUP_TRACE=1 打开（此时日志走内核异步管道）。
+    /// </para>
+    /// </summary>
+    private static readonly bool PopupTraceEnabled =
+        !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("BETTERDESKTOP_POPUP_TRACE"));
+
+    internal static void DiagTrace(string msg)
+    {
+        if (!PopupTraceEnabled)
+        {
+            return;
+        }
+
+        // 转投内核单管道（异步 + 有界），不再直写 %LocalAppData% 的 popup-trace.log。
+        BetterDesktop.Kernel.Core.DiagnosticLog.Trace("popup-diag", msg);
+    }
+
     private void EnsureMouseHook()
     {
+        // 手动收起模式不挂全局鼠标钩子：少一个低级钩子常驻，也少一条意外的收起路径。
+        if (!AutoHideOnOutsideClick)
+        {
+            return;
+        }
         _mouseHook.Start();
     }
 
@@ -148,7 +198,7 @@ public abstract class PopupWindowBase : ShellWindow
 
     private void OnMouseEvent(int nCode, IntPtr wParam, IntPtr lParam)
     {
-        if (nCode < 0)
+        if (nCode < 0 || !AutoHideOnOutsideClick)
         {
             return;
         }
@@ -166,8 +216,12 @@ public abstract class PopupWindowBase : ShellWindow
             var info = Marshal.PtrToStructure<NativeMethods.MSLLHOOKSTRUCT>(lParam);
             // 面板窗口内 → 不收起（面板自身交互）；宿主条带内 → 不收起（操作宿主图标）；
             // 其余"窗口外"点击 → 自动收起。
-            if (!IsPointInWindow(info.pt) && !IsPointInMenuBarStrip(info.pt))
+            var inWin = IsPointInWindow(info.pt);
+            var inStrip = IsPointInMenuBarStrip(info.pt);
+            DiagTrace($"click pt={info.pt.X},{info.pt.Y} inWin={inWin} inStrip={inStrip} vis={IsVisible}");
+            if (!inWin && !inStrip)
             {
+                DiagTrace($"OutsideClick msg=0x{msg:X} pt={info.pt.X},{info.pt.Y} -> hide");
                 // 异步收起（不在系统钩子上下文里做复杂 UI 操作）
                 Dispatcher.BeginInvoke(new Action(HidePopup));
             }
@@ -192,10 +246,20 @@ public abstract class PopupWindowBase : ShellWindow
         var hwnd = new WindowInteropHelper(this).Handle;
         if (hwnd == IntPtr.Zero || !NativeMethods.GetWindowRect(hwnd, out var rect))
         {
+            DiagTrace($"IsPointInWindow no-hwnd/rect hwnd={hwnd} pt={pt.X},{pt.Y}");
             return false;
         }
-        return pt.X >= rect.Left && pt.X <= rect.Right && pt.Y >= rect.Top && pt.Y <= rect.Bottom;
+        var inside = pt.X >= rect.Left && pt.X <= rect.Right && pt.Y >= rect.Top && pt.Y <= rect.Bottom;
+        DiagTrace($"IsPointInWindow pt={pt.X},{pt.Y} rect=({rect.Left},{rect.Top},{rect.Right},{rect.Bottom}) inside={inside}");
+        return inside;
     }
+
+    /// <summary>
+    /// 面板背景覆盖（默认 null = 用主题令牌 ThemePanelBackground 半透明面板底）。
+    /// 全透明面板（如热键侧板，用户要求"窗口属性全透明"）重写为 Brushes.Transparent，
+    /// 同时去掉 CardBorderBrush 描边，文字靠自身阴影衬底可读。
+    /// </summary>
+    protected virtual Brush? PanelBackgroundOverride => null;
 
     /// <summary>
     /// 挂载面板内容并应用统一主题外观（ShellWindow 窗口属性对齐入口）。
@@ -205,17 +269,27 @@ public abstract class PopupWindowBase : ShellWindow
     /// </summary>
     protected void ApplyContent(FrameworkElement inner)
     {
+        var transparentPanel = PanelBackgroundOverride is not null;
         // 面板根 Border：背景/描边/圆角全部走主题，随设置里的主题系统切换。
         var chrome = new Border
         {
             CornerRadius = new CornerRadius(SystemCornerRadius),
-            BorderThickness = new Thickness(AppearanceService?.CardBorderThickness ?? 1),
+            BorderThickness = transparentPanel
+                ? new Thickness(0)
+                : new Thickness(AppearanceService?.CardBorderThickness ?? 1),
             SnapsToDevicePixels = true,
             UseLayoutRounding = true,
             Child = inner
         };
-        SetThemeBinding(chrome, Border.BackgroundProperty, "ThemePanelBackground");
-        SetThemeBinding(chrome, Border.BorderBrushProperty, "CardBorderBrush");
+        if (transparentPanel)
+        {
+            chrome.Background = PanelBackgroundOverride;
+        }
+        else
+        {
+            SetThemeBinding(chrome, Border.BackgroundProperty, "ThemePanelBackground");
+            SetThemeBinding(chrome, Border.BorderBrushProperty, "CardBorderBrush");
+        }
         // 前景统一绑定主题主色：未显式设 Foreground 的子文本自动继承，随亮/暗/无色模式切换。
         SetThemeBinding(chrome, TextElement.ForegroundProperty, "ThemeForeground");
         // 递归兜底：对未显式设前景的 TextBlock 逐一绑定 ThemeForeground（按钮默认样式等会中断继承）。
@@ -255,6 +329,7 @@ public abstract class PopupWindowBase : ShellWindow
 
     protected override void OnClosed(EventArgs e)
     {
+        Hotkeys.SurfaceScopeBridge.Report(SurfaceScopeId, active: false); // 兜底：非 HidePopup 路径关闭也退作用域
         RemoveMouseHook();
         _shown = false;
         base.OnClosed(e);

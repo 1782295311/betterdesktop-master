@@ -10,7 +10,7 @@
 
 ## 目录（域）
 
-`AppSource` `Calendar` `ContextMenu` `Convert` `Core` `Desktop` `Dock` `Music` `Notification` `PluginWindow` `Recent` `Search` `Settings` `StartMenu` `Status` `Taskbar` `WindowTracker`
+`AppSource` `Calendar` `Clipboard` `ContextMenu` `Convert` `Core` `Desktop` `Dock` `Music` `Notification` `PluginWindow` `Recent` `Search` `Settings` `StartMenu` `Status` `Taskbar` `WindowTracker`
 
 ## 使用方式
 

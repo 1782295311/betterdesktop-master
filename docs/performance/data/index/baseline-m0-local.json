@@ -1,0 +1,38 @@
+{
+  "measuredAt": "2026-09-13 22:56:11",
+  "machine": "\u68A6\u7684\u5F00\u59CB",
+  "os": "Microsoft Windows NT 10.0.26200.0",
+  "purpose": "M0 \u57FA\u7EBF\uFF08native-index-service-rust \u8BA1\u5212 \u00A77\uFF09\uFF1AM2/M3 \u5B8C\u6210\u540E\u636E\u6B64\u505A D6 \u52A0\u901F\u5BF9\u7167",
+  "results": [
+    {
+      "id": "scan-all-programs",
+      "coldMs": 53107,
+      "hotMs": 465,
+      "items": 1619,
+      "detail": "\u5168\u7A0B\u5E8F\u5927\u76D8\u70B9\uFF08Program Files\u00D72 / LocalAppData Programs / \u5404\u56FA\u5B9A\u76D8\uFF0C\u6DF1\u5EA6 3\uFF09"
+    },
+    {
+      "id": "scan-start-menu",
+      "ms": 4254,
+      "items": 127
+    },
+    {
+      "id": "scan-installed-apps",
+      "ms": 65,
+      "items": 107
+    },
+    {
+      "id": "get-running-apps",
+      "ms": 411,
+      "items": 4,
+      "detail": "\u6BCF\u6B21\u8C03\u7528\u91CD\u5EFA\u8DEF\u5F84\u7D22\u5F15\uFF08\u5DF2\u77E5\u8BBE\u8BA1\u7F3A\u9677\uFF0C\u672C\u8BA1\u5212\u4E0D\u6539\uFF09"
+    },
+    {
+      "id": "fallback-file-scan",
+      "ms": 105,
+      "items": 20,
+      "detail": "query=maa\uFF1B1.5s \u8D85\u65F6 / \u6DF1\u5EA6 2 / \u4E0A\u9650 20 \u6761"
+    }
+  ],
+  "notes": []
+}

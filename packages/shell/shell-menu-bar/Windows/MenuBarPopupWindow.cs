@@ -27,6 +27,9 @@ internal abstract class MenuBarPopupWindow : PopupWindowBase
     {
     }
 
+    /// <summary>菜单栏弹层共享同一热键表面作用域（侧板"此刻可用"含面板键的判定依据）。</summary>
+    protected override string? SurfaceScopeId => "Surface.MenuBar";
+
     /// <summary>点击点是否落在屏幕顶部菜单栏条带内（菜单栏固定在主屏顶部，全宽）。</summary>
     protected override bool IsPointInMenuBarStrip(NativeMethods.POINT pt)
     {

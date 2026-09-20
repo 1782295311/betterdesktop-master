@@ -92,8 +92,20 @@ internal static class OfficeComPdfRunner
         dynamic app = Activator.CreateInstance(type)!;
         try
         {
-            app.Visible = false;
             app.DisplayAlerts = false;
+            switch (category)
+            {
+                case ConvertEngineLocator.FileCategory.Word:
+                case ConvertEngineLocator.FileCategory.Spreadsheet:
+                    // Word/Excel 支持隐藏窗口
+                    app.Visible = false;
+                    break;
+                case ConvertEngineLocator.FileCategory.Presentation:
+                    // PowerPoint COM 不允许 Visible=false（抛 "Hiding the application window is not allowed"）；
+                    // 改最小化窗口（ppWindowMinimized=2），转换短暂闪任务栏可接受。
+                    app.WindowState = 2;
+                    break;
+            }
             switch (category)
             {
                 case ConvertEngineLocator.FileCategory.Word:
@@ -113,7 +125,12 @@ internal static class OfficeComPdfRunner
                 case ConvertEngineLocator.FileCategory.Presentation:
                     {
                         dynamic deck = app.Presentations.Open(input, ReadOnly: true, Untitled: false, WithWindow: false);
-                        try { deck.ExportAsFixedFormat(target, 2); } // 2 = ppFixedFormatTypePDF
+                        try
+                        {
+                            // SaveAs(Path, 32=ppSaveAsPDF)：2 参数简单可靠（ExportAsFixedFormat 的 PrintRange
+                            // 对象参数在 dynamic COM 绑定下报 "Could not convert argument 6"）。
+                            deck.SaveAs(target, 32);
+                        }
                         finally { deck.Close(); Release(deck); }
                         break;
                     }

@@ -23,8 +23,12 @@ internal sealed class ExtensionsCenterWindow : MenuBarPopupWindow
     private const double PanelWidth = 320;
     private const double ListMaxHeight = 380;
 
-    /// <summary>已落地的外部扩展（开关可真实启停）；其余为规划条目，开关先持久化意图。</summary>
-    private static readonly HashSet<string> Implemented = new() { "quick-note", "programs-menu", "clipboard-history" };
+    /// <summary>已落地的扩展（开关可真实启停）；其余为规划条目，开关先持久化意图。</summary>
+    private static readonly HashSet<string> Implemented = new()
+    {
+        "quick-note", "programs-menu", "clipboard-history",
+        "screenshot", "hotkeys-panel", "island",
+    };
 
     private readonly ISettingsService? _settings;
     private readonly Action<MenuBarStatusButtonId, bool>? _applyVisibility;
@@ -101,7 +105,7 @@ internal sealed class ExtensionsCenterWindow : MenuBarPopupWindow
             Width = 32,
             Height = 32,
             CornerRadius = new CornerRadius(8),
-            Background = new SolidColorBrush(Color.FromArgb(40, 255, 255, 255)),
+            Background = ThemeBrushes.Tint("ThemeForeground", 0.16),
             VerticalAlignment = VerticalAlignment.Center,
             HorizontalAlignment = HorizontalAlignment.Center
         };
@@ -131,7 +135,7 @@ internal sealed class ExtensionsCenterWindow : MenuBarPopupWindow
         text.Children.Add(new TextBlock
         {
             Text = ext.Description,
-            Foreground = new SolidColorBrush(Color.FromArgb(160, 255, 255, 255)),
+            Foreground = ThemeBrushes.Tint("ThemeForeground", 0.63),
             FontSize = 10,
             Margin = new Thickness(0, 2, 0, 0),
             TextWrapping = TextWrapping.Wrap
@@ -140,16 +144,16 @@ internal sealed class ExtensionsCenterWindow : MenuBarPopupWindow
         text.Children.Add(new TextBlock
         {
             Text = Implemented.Contains(ext.Id) ? "已接入 · 开关立即生效" : "规划中 · 开关将保存你的选择",
-            Foreground = new SolidColorBrush(Color.FromArgb(130, 255, 255, 255)),
+            Foreground = ThemeBrushes.Tint("ThemeForeground", 0.51),
             FontSize = 9,
             Margin = new Thickness(0, 2, 0, 0)
         });
         Grid.SetColumn(text, 1);
 
         // 开关：启用态持久化；映射到菜单栏按钮的项实时显隐。
-        // 外部扩展**默认关闭**（它们是可选能力，不该一上来就往桌面加东西——
-        // 此前 quick-note 默认 true，导致启动后桌面上凭空多出一个笔记浮窗）。
-        var toggle = new ToggleSwitch { IsOn = _settings?.Get(ext.SettingsKey, false) ?? false };
+        // 初始态 = 板块当前实际态（DefaultEnabled 表达板块默认；如热键/灵动岛默认开、截屏等默认关）。
+        // 键 = 板块自己的设置键（hotkeys-panel.enabled / island.enabled）或扩展中心约定键（extensions.<id>.enabled）。
+        var toggle = new ToggleSwitch { IsOn = _settings?.Get(ext.SettingsKey, ext.DefaultEnabled) ?? ext.DefaultEnabled };
         toggle.Toggled += (_, _) =>
         {
             bool on = toggle.IsOn;

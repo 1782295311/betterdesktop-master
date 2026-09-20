@@ -1,11 +1,6 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <TargetFramework>net8.0-windows10.0.19041.0</TargetFramework>
-    <Nullable>enable</Nullable>
-    <ImplicitUsings>enable</ImplicitUsings>
-    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
-    <Platforms>x64</Platforms>
     <UseWPF>true</UseWPF>
     <RootNamespace>BetterDesktop.Shell.Desktop</RootNamespace>
     <AssemblyName>BetterDesktop.Shell.Desktop</AssemblyName>
@@ -22,7 +17,7 @@
     <!-- 底部避让：读 components.dock / components.wintaskbar / dock.* 计算图标网格底部预留。
          无环：shell-settings 仅依赖 kernel/kernel-hmr/shell-core，不反向引用 shell-desktop。 -->
     <ProjectReference Include="..\shell-settings\BetterDesktop.Shell.Settings.csproj" />
-    <!-- 统一右键菜单：消费 IMenuService/IFileClassifier（服务）与 MenuStyling（主题工厂）。 -->
+    <!-- 右键菜单：消费 IFileClassifier 与 MenuItemDef（中央 IMenuService 管线已退役，桌面自绘+原生分流）。 -->
     <ProjectReference Include="..\shell-context-menu\BetterDesktop.Shell.ContextMenu.csproj" />
     <!-- 转换挂点（2026-09-07）：桌面图标右键「转换为 ▸」消费 IConvertMenuService（shell-convert）。 -->
     <ProjectReference Include="..\shell-convert\BetterDesktop.Shell.Convert.csproj" />

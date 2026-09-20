@@ -1,5 +1,7 @@
 # Cairo 开发计划 · 剪贴板历史扩展（落地扩展中心）
 
+> **状态（2026-09-10 标注）**：🗄 **已归档蓝图，功能目录（§1A A-N 与版本归属）仍为唯一权威**；但本文架构决策已被后续阶段升级——契约位置改入 `packages/api/Clipboard/`（Phase A）、v1.1 功能提前并入 v1.3（Phase B，用户拍板「我们都是 v1.3 版本了」）。**读链顺序**：本文 → `2026-09-09-clipboard-public-api.md` → `2026-09-09-clipboard-phase-b.md` → `docs/audits/2026-09-10-clipboard-plan-completion-review.md`（核销）。导航见 `docs/plans/clipboard-docs-index.md`。
+
 > Task: 在 better-desktop-cordis 将剪贴板做成**系统级能力**（非扩展中心小插件）：注册 `IClipboardService` 内核服务，为**多个板块**（扩展中心/菜单栏/历史面板/启动器/搜索框/未来板块）提供统一支持。**三方融合**：① **自家探索版** cairoshell-master（功能主框架：监听/UI/热键/隐私/持久化）；② **外部开源实现** 技术力仓库 1301-clipboard-history.md（ZTools 3.2.0，功能想法：图片落盘元数据化/总量限流/最近复制 API/延迟读取兜底）；③ **官方原版** cairoshell原版（机制参考：写回抑制令牌/测试接缝/三格式模型）。在 betterdt 内核服务图（ADR-002 D1：`Provide<T>`/`Get<T>`/依赖感知）上做**完美实现**。**只规划不实现**。
 > 证据基于 commit `0ecd841`（2026-09-07 context-menu 收口）验证；目标仓库 `better-desktop-cordis`（工作区含历史未提交改动，实施时禁止覆盖/回滚他人改动）。
 > 技术力文档命中：**1301-clipboard-history**（剪贴板历史，TS/L2，ZTools 外部实现：红线 = 延迟读取 180ms、hash 去重、写剪贴板前取消监听防自我触发、图片落盘限流；**功能想法 = 图片落盘 + 总量预算 + getLastCopiedContent 最近复制 API**）、**3101-global-hotkey**（RegisterHotKey 全局热键，C#/L2，红线：0x581 冲突、退出必须 Unregister）；**未命中**：C# 侧剪贴板监听实现文档（1301 关联段标注「C# 侧同类见 04-通知/剪贴板域（仓库暂无）」——检索关键词：剪贴板监听 C# / clipboard C# / AddClipboardFormatListener）。三方源码（master 探索版 / 原版官方 / ZTools）作为**源码级证据**。

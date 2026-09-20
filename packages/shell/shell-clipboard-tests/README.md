@@ -1,6 +1,6 @@
 # BetterDesktop.Shell.Clipboard.Tests
 
-剪贴板核心逻辑单元测试项目（85 例全绿）。
+剪贴板核心逻辑单元测试项目（85+ 例全绿，Theory 展开后总数略多）。
 
 ## 覆盖范围
 

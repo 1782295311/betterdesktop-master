@@ -15,9 +15,11 @@ public class RegistryMarkdownDownloaderTests
         var registry = new EngineRegistry()
             .Add(new FakeEngine(EngineKind.Soffice, available: false))
             .Add(new FakeEngine(EngineKind.ComPdf, available: true, name: "com"));
-        var pdf = ConversionMatrix.Find(".docx", "pdf")!;
+        // 2026-09-20 convert-lite 迁移：.docx→pdf 已改由 Lite 负责（无 fallback），这里换一条**仍保留
+        // Prefer→Fallback 链**的边来测候选链语义：.wps 是 lite 没有 reader 的老格式 ⇒ 仍是 soffice 主 + COM 兜底。
+        var pdf = ConversionMatrix.Find(".wps", "pdf")!;
 
-        var resolved = registry.Resolve(["C:\\x.docx"], pdf);
+        var resolved = registry.Resolve(["C:\\x.wps"], pdf);
 
         Assert.NotNull(resolved);
         Assert.Equal("com", resolved.Name);
@@ -127,5 +129,55 @@ public class RegistryMarkdownDownloaderTests
         // 无校验不下载（dependency-on-demand 红线 2）——直接抛异常且零网络行为
         await Assert.ThrowsAsync<InvalidOperationException>(
             () => EngineDownloader.Shared.DownloadAsync(EngineDownloader.PandocSpec, CancellationToken.None));
+    }
+
+    [Fact]
+    public void 同类引擎_注册序取第一个可用者_演示族两跳()
+    {
+        // 2026-09-10 收尾：ComPdfTwoHop 注册序在 TwoHopEngine 之前（演示族 png/jpg 两跳 COM 优先保真，
+        // TwoHop(soffice 中间态) 兜底——COM 缺失时"高亮=成功"契约仍成立）
+        // 2026-09-20 convert-lite 迁移：.pptx→png 已被 lite 收编（Lite 单条、无同类竞争）⇒ 换 .dps
+        // （WPS 演示，lite 没有 reader）才能继续测"同类多引擎按注册序取第一个可用者"。
+        var png = ConversionMatrix.Find(".dps", "png")!;
+        var registry = new EngineRegistry()
+            .Add(new FakeEngine(EngineKind.TwoHop, available: true, name: "com-two-hop"))
+            .Add(new FakeEngine(EngineKind.TwoHop, available: true, name: "two-hop"));
+        Assert.Equal("com-two-hop", registry.Resolve(["C:\\a.dps"], png)!.Name);
+
+        // COM 缺失（第一不可用）→ 第二个（soffice 两跳）兜底
+        var registry2 = new EngineRegistry()
+            .Add(new FakeEngine(EngineKind.TwoHop, available: false, name: "com-two-hop"))
+            .Add(new FakeEngine(EngineKind.TwoHop, available: true, name: "two-hop"));
+        Assert.Equal("two-hop", registry2.Resolve(["C:\\a.dps"], png)!.Name);
+    }
+
+    [Fact]
+    public void 菜单高亮_仅无损项高亮()
+    {
+        // 2026-09-10 高亮契约：只有可无损转换才高亮（加粗），有损项正常显示但不加粗
+        var registry = new EngineRegistry()
+            .Add(new FakeEngine(EngineKind.TwoHop, available: true, name: "two-hop"))
+            .Add(new FakeEngine(EngineKind.Pandoc, available: true, name: "pandoc"))
+            // 2026-09-20：.pptx→png 等边已改派 Lite ⇒ 注册表里必须有它，否则 IsEngineReady=false、
+            // 整项隐藏，菜单里就找不到 convertTopng（用真实 LiteEngine：它恒可用，不需要打桩）。
+            .Add(new LiteEngine());
+        var service = new ConvertMenuService(registry, new ConversionService(registry));
+        var dir = Path.Combine(Path.GetTempPath(), "bd-menu-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        try
+        {
+            var pptx = Path.Combine(dir, "a.pptx");
+            File.WriteAllBytes(pptx, [0x50, 0x4B]); // 占位（仅 File.Exists 判定）
+            var items = service.BuildMenuItems([pptx]);
+            Assert.True(items.Count > 0, $"items 为空（pptx 存在={File.Exists(pptx)}，targets={ConversionMatrix.GetTargets(".pptx").Count}）");
+            var sub = items.FirstOrDefault(i => i.Id == "convertTo");
+            Assert.NotNull(sub);
+            Assert.True(sub.Children!.First(c => c.Id == "convertTopng").Highlighted); // 无损 → 高亮
+            Assert.False(sub.Children!.First(c => c.Id == "convertTojpg").Highlighted); // 有损 → 不高亮
+        }
+        finally
+        {
+            Directory.Delete(dir, true);
+        }
     }
 }

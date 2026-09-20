@@ -149,7 +149,7 @@ internal sealed class MicrophonePanelWindow : MenuBarPopupWindow
         var wrap = new Border
         {
             Margin = new Thickness(0, 1, 0, 1),
-            Background = d.IsDefault ? new SolidColorBrush(Color.FromArgb(35, 10, 132, 255)) : Brushes.Transparent,
+            Background = d.IsDefault ? ThemeBrushes.AccentTint(0.14) : Brushes.Transparent,
             CornerRadius = new CornerRadius(8)
         };
         var row = new Grid();

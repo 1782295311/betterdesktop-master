@@ -1,0 +1,508 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>BetterDesktop 入口 ↔ 组件关系图</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: "Microsoft YaHei", "PingFang SC", -apple-system, sans-serif;
+            background: #f8f9fa;
+            padding: 20px;
+        }
+        .container {
+            max-width: 1600px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 2px 12px rgba(0,0,0,0.08);
+            padding: 30px;
+        }
+        h1 {
+            font-size: 24px;
+            color: #1a1a2e;
+            margin-bottom: 8px;
+            text-align: center;
+        }
+        .subtitle {
+            text-align: center;
+            color: #666;
+            font-size: 14px;
+            margin-bottom: 24px;
+        }
+        .legend {
+            display: flex;
+            justify-content: center;
+            gap: 20px;
+            margin-bottom: 20px;
+            flex-wrap: wrap;
+        }
+        .legend-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 13px;
+            color: #555;
+        }
+        .legend-color {
+            width: 24px;
+            height: 4px;
+            border-radius: 2px;
+        }
+        .legend-dash {
+            width: 24px;
+            height: 0;
+            border-top: 2px dashed;
+        }
+        svg {
+            width: 100%;
+            height: auto;
+            display: block;
+        }
+        .layer-label {
+            font-size: 15px;
+            font-weight: 600;
+            fill: #555;
+        }
+        .node-title {
+            font-size: 14px;
+            font-weight: 600;
+            fill: #fff;
+            text-anchor: middle;
+        }
+        .node-sub {
+            font-size: 10.5px;
+            fill: rgba(255,255,255,0.85);
+            text-anchor: middle;
+        }
+        .edge-label {
+            font-size: 11px;
+            fill: #555;
+            text-anchor: middle;
+            paint-order: stroke;
+            stroke: #fff;
+            stroke-width: 3px;
+            stroke-linejoin: round;
+        }
+        .section {
+            margin-top: 24px;
+            padding: 16px;
+            background: #f8f9fa;
+            border-radius: 8px;
+        }
+        .section h2 {
+            font-size: 16px;
+            margin-bottom: 12px;
+            color: #333;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 13px;
+        }
+        th, td {
+            padding: 8px 12px;
+            text-align: left;
+            border-bottom: 1px solid #e0e0e0;
+        }
+        th {
+            background: #f0f0f0;
+            font-weight: 600;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>BetterDesktop 入口 ↔ 组件/功能 关系图</h1>
+        <p class="subtitle">基线：2026-09-18 · 三层分层布局 · 曲线分流防重叠</p>
+
+        <div class="legend">
+            <div class="legend-item">
+                <div class="legend-color" style="background: #4a6cf7;"></div>
+                <span>入口层拉起</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color" style="background: #27ae60;"></div>
+                <span>常驻间 Ensure/菜单</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color" style="background: #e67e22;"></div>
+                <span>Watchdog 守护</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color" style="background: #f39c12;"></div>
+                <span>Host 装载按需件</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-dash" style="border-color: #95a5a6;"></div>
+                <span>CLI 管道转发</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color" style="background: #e74c3c;"></div>
+                <span>新增/自愈</span>
+            </div>
+        </div>
+
+        <svg viewBox="0 0 1400 880" xmlns="http://www.w3.org/2000/svg">
+            <defs>
+                <marker id="arr" markerWidth="9" markerHeight="6" refX="8" refY="3" orient="auto">
+                    <polygon points="0 0, 9 3, 0 6" fill="#666"/>
+                </marker>
+                <marker id="arr-blue" markerWidth="9" markerHeight="6" refX="8" refY="3" orient="auto">
+                    <polygon points="0 0, 9 3, 0 6" fill="#4a6cf7"/>
+                </marker>
+                <marker id="arr-green" markerWidth="9" markerHeight="6" refX="8" refY="3" orient="auto">
+                    <polygon points="0 0, 9 3, 0 6" fill="#27ae60"/>
+                </marker>
+                <marker id="arr-orange" markerWidth="9" markerHeight="6" refX="8" refY="3" orient="auto">
+                    <polygon points="0 0, 9 3, 0 6" fill="#e67e22"/>
+                </marker>
+                <marker id="arr-red" markerWidth="9" markerHeight="6" refX="8" refY="3" orient="auto">
+                    <polygon points="0 0, 9 3, 0 6" fill="#e74c3c"/>
+                </marker>
+                <marker id="arr-purple" markerWidth="9" markerHeight="6" refX="8" refY="3" orient="auto">
+                    <polygon points="0 0, 9 3, 0 6" fill="#9b59b6"/>
+                </marker>
+            </defs>
+
+            <!-- ===== 分层背景 ===== -->
+            <rect x="20" y="15" width="1360" height="140" rx="8" fill="#eef2ff" opacity="0.4"/>
+            <text x="40" y="38" class="layer-label">入口层（人可触达）</text>
+
+            <rect x="20" y="180" width="1360" height="340" rx="8" fill="#e8f8f0" opacity="0.4"/>
+            <text x="40" y="203" class="layer-label">常驻控制面</text>
+
+            <rect x="20" y="550" width="1360" height="310" rx="8" fill="#fef5e7" opacity="0.4"/>
+            <text x="40" y="573" class="layer-label">按需 / 一次性</text>
+
+            <!-- ===== 入口层节点 ===== -->
+            <g transform="translate(120, 60)">
+                <rect width="170" height="65" rx="8" fill="#4a6cf7"/>
+                <text x="85" y="28" class="node-title">BetterDesktop.exe</text>
+                <text x="85" y="48" class="node-sub">启动器 · 一次性</text>
+            </g>
+
+            <g transform="translate(360, 60)">
+                <rect width="170" height="65" rx="8" fill="#4a6cf7"/>
+                <text x="85" y="28" class="node-title">开机自启</text>
+                <text x="85" y="48" class="node-sub">HKCU\Run</text>
+            </g>
+
+            <g transform="translate(600, 60)">
+                <rect width="170" height="65" rx="8" fill="#4a6cf7"/>
+                <text x="85" y="28" class="node-title">系统右键 DLL</text>
+                <text x="85" y="48" class="node-sub">explorer 进程内</text>
+            </g>
+
+            <g transform="translate(840, 60)">
+                <rect width="170" height="65" rx="8" fill="#4a6cf7"/>
+                <text x="85" y="28" class="node-title">手动双击 exe</text>
+                <text x="85" y="48" class="node-sub">或原生菜单/CLI</text>
+            </g>
+
+            <!-- ===== 常驻控制面：上排 ===== -->
+            <g transform="translate(100, 240)">
+                <rect width="150" height="65" rx="8" fill="#2ecc71"/>
+                <text x="75" y="28" class="node-title">Tray.exe</text>
+                <text x="75" y="48" class="node-sub">托盘/菜单/状态</text>
+            </g>
+
+            <g transform="translate(525, 240)">
+                <rect width="150" height="65" rx="8" fill="#2ecc71"/>
+                <text x="75" y="28" class="node-title">Host.exe</text>
+                <text x="75" y="48" class="node-sub">外壳：菜单栏/Dock/搜索</text>
+            </g>
+
+            <g transform="translate(950, 240)">
+                <rect width="150" height="65" rx="8" fill="#2ecc71"/>
+                <text x="75" y="28" class="node-title">Watchdog.exe</text>
+                <text x="75" y="48" class="node-sub">组件消失即拉回</text>
+            </g>
+
+            <!-- ===== 常驻控制面：下排（错开） ===== -->
+            <g transform="translate(310, 400)">
+                <rect width="150" height="65" rx="8" fill="#2ecc71"/>
+                <text x="75" y="28" class="node-title">Agent.exe</text>
+                <text x="75" y="48" class="node-sub">截图热键/右键自愈</text>
+            </g>
+
+            <g transform="translate(740, 400)">
+                <rect width="160" height="65" rx="8" fill="#2ecc71"/>
+                <text x="80" y="28" class="node-title">DesktopControl.exe</text>
+                <text x="80" y="48" class="node-sub">自绘桌面 + 控制菜单</text>
+            </g>
+
+            <!-- ===== 按需/一次性节点 ===== -->
+            <g transform="translate(70, 610)">
+                <rect width="145" height="55" rx="8" fill="#f39c12"/>
+                <text x="72.5" y="26" class="node-title">Clipboard.Panel.exe</text>
+                <text x="72.5" y="43" class="node-sub">剪贴板面板</text>
+            </g>
+
+            <g transform="translate(250, 610)">
+                <rect width="145" height="55" rx="8" fill="#f39c12"/>
+                <text x="72.5" y="26" class="node-title">Clipboard.Engine.exe</text>
+                <text x="72.5" y="43" class="node-sub">剪贴板引擎</text>
+            </g>
+
+            <g transform="translate(430, 610)">
+                <rect width="135" height="55" rx="8" fill="#f39c12"/>
+                <text x="67.5" y="26" class="node-title">Capture.exe</text>
+                <text x="67.5" y="43" class="node-sub">截完即退</text>
+            </g>
+
+            <g transform="translate(595, 610)">
+                <rect width="135" height="55" rx="8" fill="#f39c12"/>
+                <text x="67.5" y="26" class="node-title">Index.Engine.exe</text>
+                <text x="67.5" y="43" class="node-sub">空闲自退</text>
+            </g>
+
+            <g transform="translate(760, 610)">
+                <rect width="135" height="55" rx="8" fill="#f39c12"/>
+                <text x="67.5" y="26" class="node-title">Settings.exe</text>
+                <text x="67.5" y="43" class="node-sub">设置中心</text>
+            </g>
+
+            <g transform="translate(925, 610)">
+                <rect width="135" height="55" rx="8" fill="#f39c12"/>
+                <text x="67.5" y="26" class="node-title">Cli.exe</text>
+                <text x="67.5" y="43" class="node-sub">命令行入口</text>
+            </g>
+
+            <!-- ========================================== -->
+            <!--                连 线 开 始                  -->
+            <!-- ========================================== -->
+
+            <!-- ===== 入口层 → 常驻层 ===== -->
+
+            <!-- LAUNCHER → TRAY -->
+            <path d="M 205 125 C 205 170, 175 200, 175 240" 
+                  stroke="#4a6cf7" stroke-width="2" fill="none" marker-end="url(#arr-blue)"/>
+            <text x="160" y="185" class="edge-label">①自检 ②清痕</text>
+
+            <!-- LAUNCHER → HOST -->
+            <path d="M 205 125 C 300 170, 550 190, 600 240" 
+                  stroke="#4a6cf7" stroke-width="2" fill="none" marker-end="url(#arr-blue)"/>
+            <text x="400" y="175" class="edge-label">⑤Host ⑥核对常驻</text>
+
+            <!-- LAUNCHER → WATCH -->
+            <path d="M 205 125 C 400 180, 900 190, 1025 240" 
+                  stroke="#4a6cf7" stroke-width="2" fill="none" marker-end="url(#arr-blue)"/>
+            <text x="650" y="165" class="edge-label">⑦Watchdog ⑧功能件</text>
+
+            <!-- LAUNCHER → CLI (开关落地，跨层虚线) -->
+            <path d="M 205 125 C 150 300, 950 500, 992 610" 
+                  stroke="#4a6cf7" stroke-width="1.5" fill="none" stroke-dasharray="6,4" marker-end="url(#arr-blue)"/>
+            <text x="500" y="400" class="edge-label">开关落地</text>
+
+            <!-- AUTORUN → TRAY -->
+            <path d="M 445 125 C 350 170, 220 200, 175 240" 
+                  stroke="#4a6cf7" stroke-width="2" fill="none" marker-end="url(#arr-blue)"/>
+            <text x="310" y="185" class="edge-label">BetterDesktop.Tray</text>
+
+            <!-- AUTORUN → WATCH -->
+            <path d="M 445 125 C 600 170, 950 190, 1025 240" 
+                  stroke="#4a6cf7" stroke-width="2" fill="none" marker-end="url(#arr-blue)"/>
+            <text x="750" y="180" class="edge-label">BetterDesktop.Watchdog</text>
+
+            <!-- AUTORUN → HOST (旧值，虚线) -->
+            <path d="M 445 125 C 500 150, 580 190, 600 240" 
+                  stroke="#4a6cf7" stroke-width="1.5" fill="none" stroke-dasharray="6,4" marker-end="url(#arr-blue)"/>
+            <text x="520" y="155" class="edge-label">旧值(可选)</text>
+
+            <!-- SHELLMENU → CLI -->
+            <path d="M 685 125 C 750 250, 950 450, 992 610" 
+                  stroke="#4a6cf7" stroke-width="2" fill="none" marker-end="url(#arr-blue)"/>
+            <text x="830" y="380" class="edge-label">--menu-batch (免宿主)</text>
+
+            <!-- ===== 常驻层内部连线 ===== -->
+
+            <!-- TRAY → HOST (菜单启停) -->
+            <path d="M 250 265 C 350 255, 450 255, 525 265" 
+                  stroke="#27ae60" stroke-width="2" fill="none" marker-end="url(#arr-green)"/>
+            <text x="387" y="250" class="edge-label">菜单启停主程序</text>
+
+            <!-- TRAY → WATCH (菜单启停看门狗) -->
+            <path d="M 250 280 C 500 290, 800 290, 950 280" 
+                  stroke="#27ae60" stroke-width="2" fill="none" marker-end="url(#arr-green)"/>
+            <text x="600" y="295" class="edge-label">菜单启停看门狗</text>
+
+            <!-- TRAY → AGENT (构造时 Ensure) -->
+            <path d="M 175 305 C 180 350, 350 370, 385 400" 
+                  stroke="#27ae60" stroke-width="2" fill="none" marker-end="url(#arr-green)"/>
+            <text x="250" y="360" class="edge-label">构造时 Ensure Agent</text>
+
+            <!-- TRAY → DESKCTL (构造时 Ensure) -->
+            <path d="M 175 305 C 200 380, 650 400, 780 430" 
+                  stroke="#27ae60" stroke-width="2" fill="none" marker-end="url(#arr-green)"/>
+            <text x="450" y="390" class="edge-label">构造时 Ensure 桌面服务</text>
+
+            <!-- TRAY → SETTINGS -->
+            <path d="M 175 305 C 100 400, 700 550, 827 610" 
+                  stroke="#27ae60" stroke-width="2" fill="none" marker-end="url(#arr-green)"/>
+            <text x="420" y="500" class="edge-label">「打开设置中心」</text>
+
+            <!-- TRAY → CLI (桥接命令，虚线) -->
+            <path d="M 175 305 C 150 450, 900 550, 992 610" 
+                  stroke="#27ae60" stroke-width="1.5" fill="none" stroke-dasharray="6,4" marker-end="url(#arr-green)"/>
+            <text x="550" y="530" class="edge-label">桥接命令</text>
+
+            <!-- HOST → TRAY (2026-09-18 新增，红色) -->
+            <path d="M 525 275 C 450 265, 320 265, 250 275" 
+                  stroke="#e74c3c" stroke-width="2.5" fill="none" marker-end="url(#arr-red)"/>
+            <text x="387" y="230" class="edge-label" style="fill: #e74c3c;">★ 新增! 启动时 Ensure Tray</text>
+
+            <!-- HOST → AGENT (启动时 Ensure) -->
+            <path d="M 580 305 C 550 350, 450 370, 400 400" 
+                  stroke="#27ae60" stroke-width="2" fill="none" marker-end="url(#arr-green)"/>
+            <text x="500" y="355" class="edge-label">启动时 Ensure (尊重 agent-stopped.flag)</text>
+
+            <!-- HOST → DESKCTL (启动时 Ensure) -->
+            <path d="M 650 305 C 680 350, 750 380, 800 400" 
+                  stroke="#27ae60" stroke-width="2" fill="none" marker-end="url(#arr-green)"/>
+            <text x="720" y="360" class="edge-label">启动时 Ensure (门控 components.desktop)</text>
+
+            <!-- HOST → CPANEL (插件装载) -->
+            <path d="M 550 305 C 400 400, 200 500, 142 610" 
+                  stroke="#f39c12" stroke-width="2" fill="none" marker-end="url(#arr)"/>
+            <text x="280" y="480" class="edge-label">插件装载: entry-style≠off</text>
+
+            <!-- HOST → CENGINE (插件装载) -->
+            <path d="M 580 305 C 500 400, 380 500, 322 610" 
+                  stroke="#f39c12" stroke-width="2" fill="none" marker-end="url(#arr)"/>
+            <text x="420" y="490" class="edge-label">插件装载: 剪贴板开启时</text>
+
+            <!-- HOST → INDEXE (搜索/应用源) -->
+            <path d="M 630 305 C 620 400, 670 500, 662 610" 
+                  stroke="#f39c12" stroke-width="2" fill="none" marker-end="url(#arr)"/>
+            <text x="650" y="490" class="edge-label">搜索/应用源插件</text>
+
+            <!-- HOST → CLI (自绘桌面按需，虚线) -->
+            <path d="M 675 305 C 750 400, 950 500, 992 610" 
+                  stroke="#f39c12" stroke-width="1.5" fill="none" stroke-dasharray="6,4" marker-end="url(#arr)"/>
+            <text x="850" y="480" class="edge-label">自绘桌面开启时按需拉起</text>
+
+            <!-- WATCH → HOST (守护) -->
+            <path d="M 950 265 C 850 255, 750 255, 675 265" 
+                  stroke="#e67e22" stroke-width="2" fill="none" marker-end="url(#arr-orange)"/>
+            <text x="812" y="250" class="edge-label">守护: 缺失即拉回</text>
+
+            <!-- WATCH → AGENT (守护) -->
+            <path d="M 970 305 C 850 350, 600 380, 420 410" 
+                  stroke="#e67e22" stroke-width="2" fill="none" marker-end="url(#arr-orange)"/>
+            <text x="700" y="360" class="edge-label">守护 Agent</text>
+
+            <!-- WATCH → DESKCTL (守护，管道判活) -->
+            <path d="M 1000 305 C 950 350, 880 380, 840 400" 
+                  stroke="#e67e22" stroke-width="2" fill="none" marker-end="url(#arr-orange)"/>
+            <text x="920" y="360" class="edge-label">守护 (命名管道判活)</text>
+
+            <!-- WATCH → CPANEL (守护+开关门控) -->
+            <path d="M 1025 305 C 800 420, 300 520, 142 610" 
+                  stroke="#e67e22" stroke-width="2" fill="none" marker-end="url(#arr-orange)"/>
+            <text x="500" y="540" class="edge-label">守护 + 开关门控</text>
+
+            <!-- WATCH → CENGINE (守护+开关门控) -->
+            <path d="M 1025 305 C 900 420, 500 520, 322 610" 
+                  stroke="#e67e22" stroke-width="2" fill="none" marker-end="url(#arr-orange)"/>
+            <text x="650" y="550" class="edge-label">守护 + 开关门控</text>
+
+            <!-- AGENT → CAPTURE (截图热键) -->
+            <path d="M 385 465 C 400 520, 470 570, 497 610" 
+                  stroke="#9b59b6" stroke-width="2" fill="none" marker-end="url(#arr-purple)"/>
+            <text x="440" y="540" class="edge-label">截图热键 → --capture-now</text>
+
+            <!-- AGENT → DESKCTL (桌面监护) -->
+            <path d="M 460 432 C 550 425, 680 425, 740 432" 
+                  stroke="#9b59b6" stroke-width="2" fill="none" marker-end="url(#arr-purple)"/>
+            <text x="600" y="420" class="edge-label">桌面服务监护</text>
+
+            <!-- ===== 按需层内部 + CLI 转发 ===== -->
+
+            <!-- CLI → HOST (管道转发，虚线) -->
+            <path d="M 992 610 C 950 500, 700 380, 650 305" 
+                  stroke="#95a5a6" stroke-width="1.5" fill="none" stroke-dasharray="8,4" marker-end="url(#arr)"/>
+            <text x="850" y="420" class="edge-label">需要宿主的动作: 管道转发</text>
+
+            <!-- CLI → DESKCTL (免宿主，虚线) -->
+            <path d="M 992 610 C 1000 520, 900 450, 850 430" 
+                  stroke="#95a5a6" stroke-width="1.5" fill="none" stroke-dasharray="8,4" marker-end="url(#arr)"/>
+            <text x="1000" y="500" class="edge-label">免宿主动作: 桌面控制菜单</text>
+
+            <!-- CLI → CPANEL (降级路径，虚线) -->
+            <path d="M 925 637 L 215 637" 
+                  stroke="#95a5a6" stroke-width="1.5" fill="none" stroke-dasharray="8,4" marker-end="url(#arr)"/>
+            <text x="570" y="630" class="edge-label">剪贴板面板降级路径</text>
+
+            <!-- CPANEL ↔ CENGINE (自愈互拉，红色) -->
+            <path d="M 215 620 L 250 620" 
+                  stroke="#e74c3c" stroke-width="2" fill="none" marker-end="url(#arr-red)"/>
+            <path d="M 250 640 L 215 640" 
+                  stroke="#e74c3c" stroke-width="2" fill="none" marker-end="url(#arr-red)"/>
+            <text x="232" y="665" class="edge-label" style="fill: #e74c3c;">自愈 / open_panel</text>
+
+        </svg>
+
+        <div class="section">
+            <h2>图例说明</h2>
+            <table>
+                <tr>
+                    <th>线型 / 颜色</th>
+                    <th>含义</th>
+                </tr>
+                <tr>
+                    <td><span style="color: #4a6cf7;">━━━</span> 蓝色实线</td>
+                    <td>入口层向下拉起组件（启动器/自启/右键DLL）</td>
+                </tr>
+                <tr>
+                    <td><span style="color: #27ae60;">━━━</span> 绿色实线</td>
+                    <td>常驻组件之间的 Ensure / 菜单启停操作</td>
+                </tr>
+                <tr>
+                    <td><span style="color: #e67e22;">━━━</span> 橙色实线</td>
+                    <td>Watchdog 守护关系（进程消失即拉回）</td>
+                </tr>
+                <tr>
+                    <td><span style="color: #f39c12;">━━━</span> 黄色实线</td>
+                    <td>Host 装载按需组件（插件/搜索/自绘桌面）</td>
+                </tr>
+                <tr>
+                    <td><span style="color: #95a5a6;">┄┄┄</span> 灰色虚线</td>
+                    <td>CLI 管道转发 / 降级路径</td>
+                </tr>
+                <tr>
+                    <td><span style="color: #e74c3c;">━━━</span> 红色</td>
+                    <td>2026-09-18 新增箭头 / 剪贴板自愈互拉</td>
+                </tr>
+            </table>
+        </div>
+
+        <div class="section">
+            <h2>关键要点</h2>
+            <table>
+                <tr>
+                    <th>要点</th>
+                    <th>说明</th>
+                </tr>
+                <tr>
+                    <td>三种"启动世界"</td>
+                    <td>① 双击启动器（全套拉齐）② 开机自启（由 Run 值决定）③ 单独双击某个 exe（只起来那一个+兄弟）</td>
+                </tr>
+                <tr>
+                    <td>谁不被守护</td>
+                    <td>Tray / Capture / Index.Engine — 有意设计，后者按需自退，守护会与退场打架</td>
+                </tr>
+                <tr>
+                    <td>Host 现在也拉起别人</td>
+                    <td>桌面服务（尊重留痕）、Agent（尊重留痕）、Tray（不留痕，无抑制）— 2026-09-18 新增</td>
+                </tr>
+                <tr>
+                    <td>开关 ≠ 拉起进程</td>
+                    <td>开关只改"下次要不要"或让正在跑的进程自己动，不直接拉进程</td>
+                </tr>
+            </table>
+        </div>
+    </div>
+</body>
+</html>

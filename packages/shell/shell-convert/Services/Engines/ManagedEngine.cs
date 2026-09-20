@@ -434,13 +434,21 @@ public sealed class ManagedEngine : IConversionEngine
 /// <summary>
 /// 两跳中转引擎（hub-spoke：矩阵显式登记 hop=2，禁止隐式超过两跳）：
 /// md→docx/pdf：md → 中转 html（相对图片转绝对 URI，红线 7）→ soffice；
-/// docx→md（pandoc 缺失离线兜底）：docx → soffice html → ReverseMarkdown（样式有损，菜单已标注）。
+/// docx→md（pandoc 缺失离线兜底）：docx → soffice html → ReverseMarkdown（样式有损，菜单已标注）；
+/// 演示族→png/jpg（2026-09-10 收尾）：soffice 出 pdf 中间态 → Poppler 渲染（ComPdfTwoHop 的 soffice 兜底位；
+/// 本引擎注册序在 ComPdfTwoHop 之后，COM 缺失时承接，保证"高亮=成功"契约无 Office 也成立）。
 /// </summary>
 public sealed class TwoHopEngine : IConversionEngine
 {
     public EngineKind Kind => EngineKind.TwoHop;
 
     public string Name => "two-hop";
+
+    /// <summary>演示族扩展集（与 ComPdfTwoHopEngine 同源；png/jpg 两跳目标）。</summary>
+    private static readonly HashSet<string> PresentationExts = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ".ppt", ".pptx", ".pps", ".dps", ".dpt",
+    };
 
     public bool CanHandle(IReadOnlyList<string> sources, ConversionTarget target) =>
         sources.Count == 1
@@ -471,6 +479,34 @@ public sealed class TwoHopEngine : IConversionEngine
                     body = MarkdownTransformer.ResolveRelativeImageSrcs(body, Path.GetDirectoryName(input)!);
                     await File.WriteAllTextAsync(htmlPath, MarkdownTransformer.BuildStandaloneHtml(name, body), ct);
                     var product = await SofficeEngine.ConvertAsync(soffice, htmlPath, format, job.TempDir, ct);
+                    IReadOnlyList<string> products = [product];
+                    return products;
+                }
+            case (".ppt", "png") or (".ppt", "jpg") or (".pptx", "png") or (".pptx", "jpg")
+                or (".pps", "png") or (".pps", "jpg") or (".dps", "png") or (".dps", "jpg")
+                or (".dpt", "png") or (".dpt", "jpg"):
+                {
+                    // 演示族 → PDF 中间态（TempDir）→ Poppler 渲染（无 Office/WPS 时 ComPdfTwoHop 的兜底位；
+                    // 中间态由 ConversionService finally 删除，用户不可见）
+                    var pdfPath = await SofficeEngine.ConvertAsync(soffice, input, "pdf", job.TempDir, ct);
+                    var pdfJob = new ConversionJob(
+                        [pdfPath],
+                        new ConversionTarget(job.Target.Format, job.Target.Label, null, 1, EngineKind.Poppler),
+                        job.TempDir);
+                    return await new PopplerEngine().RunAsync(pdfJob, ct);
+                }
+            case (".epub", "pdf"):
+                {
+                    // epub → html（pandoc 原生 reader）→ 完整 HTML 包装（soffice 需要 doctype/head）→ soffice pdf
+                    // 中间态写入 TempDir，ConversionService finally 删除，用户不可见
+                    var htmls = await new PandocEngine().RunAsync(
+                        new ConversionJob([input], new ConversionTarget("html", "HTML 中间态", null, 1, EngineKind.Pandoc), job.TempDir),
+                        ct);
+                    var rawHtml = await File.ReadAllTextAsync(htmls[0], ct);
+                    var htmlPath = Path.Combine(job.TempDir, name + "-epub.html");
+                    await File.WriteAllTextAsync(htmlPath,
+                        MarkdownTransformer.BuildStandaloneHtml(name, rawHtml), ct);
+                    var product = await SofficeEngine.ConvertAsync(soffice, htmlPath, "pdf", job.TempDir, ct);
                     IReadOnlyList<string> products = [product];
                     return products;
                 }

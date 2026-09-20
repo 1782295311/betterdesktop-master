@@ -321,48 +321,56 @@
       "betterdesktop.kernel.hmr": {
         "type": "Project",
         "dependencies": {
-          "BetterDesktop.Kernel": "[1.0.0, )"
+          "BetterDesktop.Kernel": "[1.3.0, )"
         }
       },
       "betterdesktop.kernel.timer": {
         "type": "Project",
         "dependencies": {
-          "BetterDesktop.Kernel": "[1.0.0, )"
+          "BetterDesktop.Kernel": "[1.3.0, )"
         }
       },
       "betterdesktop.shell.appsource": {
         "type": "Project",
         "dependencies": {
-          "BetterDesktop.Api": "[1.0.0, )",
-          "BetterDesktop.Kernel": "[1.0.0, )",
+          "BetterDesktop.Api": "[1.3.0, )",
+          "BetterDesktop.Kernel": "[1.3.0, )",
+          "BetterDesktop.Shell.IndexIpc": "[1.3.0, )",
           "ManagedShell": "[0.0.370, )"
         }
       },
       "betterdesktop.shell.calendar": {
         "type": "Project",
         "dependencies": {
-          "BetterDesktop.Api": "[1.0.0, )",
-          "BetterDesktop.Kernel": "[1.0.0, )",
-          "BetterDesktop.Shell.Settings": "[1.0.0, )"
+          "BetterDesktop.Api": "[1.3.0, )",
+          "BetterDesktop.Kernel": "[1.3.0, )",
+          "BetterDesktop.Shell.Settings": "[1.3.0, )"
+        }
+      },
+      "betterdesktop.shell.clipboard.ipc": {
+        "type": "Project",
+        "dependencies": {
+          "BetterDesktop.Api": "[1.3.0, )",
+          "BetterDesktop.Kernel": "[1.3.0, )"
         }
       },
       "betterdesktop.shell.contextmenu": {
         "type": "Project",
         "dependencies": {
-          "BetterDesktop.Api": "[1.0.0, )",
-          "BetterDesktop.Kernel": "[1.0.0, )",
-          "BetterDesktop.Shell.AppSource": "[1.0.0, )",
-          "BetterDesktop.Shell.Core": "[1.0.0, )",
-          "BetterDesktop.Shell.Settings": "[1.0.0, )"
+          "BetterDesktop.Api": "[1.3.0, )",
+          "BetterDesktop.Kernel": "[1.3.0, )",
+          "BetterDesktop.Shell.AppSource": "[1.3.0, )",
+          "BetterDesktop.Shell.Core": "[1.3.0, )",
+          "BetterDesktop.Shell.Settings": "[1.3.0, )"
         }
       },
       "betterdesktop.shell.convert": {
         "type": "Project",
         "dependencies": {
-          "BetterDesktop.Api": "[1.0.0, )",
-          "BetterDesktop.Kernel": "[1.0.0, )",
-          "BetterDesktop.Shell.ContextMenu": "[1.0.0, )",
-          "BetterDesktop.Shell.Settings": "[1.0.0, )",
+          "BetterDesktop.Api": "[1.3.0, )",
+          "BetterDesktop.Kernel": "[1.3.0, )",
+          "BetterDesktop.Shell.ContextMenu": "[1.3.0, )",
+          "BetterDesktop.Shell.Settings": "[1.3.0, )",
           "Markdig": "[0.37.0, )",
           "PDFsharp": "[6.2.4, )",
           "ReverseMarkdown": "[4.3.0, )",
@@ -374,38 +382,45 @@
       "betterdesktop.shell.core": {
         "type": "Project",
         "dependencies": {
-          "BetterDesktop.Api": "[1.0.0, )",
-          "BetterDesktop.Kernel": "[1.0.0, )"
+          "BetterDesktop.Api": "[1.3.0, )",
+          "BetterDesktop.Kernel": "[1.3.0, )",
+          "BetterDesktop.Shell.Clipboard.Ipc": "[1.3.0, )"
         }
       },
       "betterdesktop.shell.desktop": {
         "type": "Project",
         "dependencies": {
-          "BetterDesktop.Api": "[1.0.0, )",
-          "BetterDesktop.Kernel": "[1.0.0, )",
-          "BetterDesktop.Shell.AppSource": "[1.0.0, )",
-          "BetterDesktop.Shell.ContextMenu": "[1.0.0, )",
-          "BetterDesktop.Shell.Convert": "[1.0.0, )",
-          "BetterDesktop.Shell.Core": "[1.0.0, )",
-          "BetterDesktop.Shell.Settings": "[1.0.0, )",
+          "BetterDesktop.Api": "[1.3.0, )",
+          "BetterDesktop.Kernel": "[1.3.0, )",
+          "BetterDesktop.Shell.AppSource": "[1.3.0, )",
+          "BetterDesktop.Shell.ContextMenu": "[1.3.0, )",
+          "BetterDesktop.Shell.Convert": "[1.3.0, )",
+          "BetterDesktop.Shell.Core": "[1.3.0, )",
+          "BetterDesktop.Shell.Settings": "[1.3.0, )",
           "ManagedShell": "[0.0.370, )"
+        }
+      },
+      "betterdesktop.shell.indexipc": {
+        "type": "Project",
+        "dependencies": {
+          "BetterDesktop.Kernel": "[1.3.0, )"
         }
       },
       "betterdesktop.shell.menubar": {
         "type": "Project",
         "dependencies": {
-          "BetterDesktop.Api": "[1.0.0, )",
-          "BetterDesktop.Kernel": "[1.0.0, )",
-          "BetterDesktop.Shell.AppSource": "[1.0.0, )",
-          "BetterDesktop.Shell.Calendar": "[1.0.0, )",
-          "BetterDesktop.Shell.Core": "[1.0.0, )",
-          "BetterDesktop.Shell.Desktop": "[1.0.0, )",
-          "BetterDesktop.Shell.Pinning": "[1.0.0, )",
-          "BetterDesktop.Shell.Search": "[1.0.0, )",
-          "BetterDesktop.Shell.Settings": "[1.0.0, )",
-          "BetterDesktop.Shell.StartMenu": "[1.0.0, )",
-          "BetterDesktop.Shell.Status": "[1.0.0, )",
-          "BetterDesktop.Shell.WindowTracker": "[1.0.0, )",
+          "BetterDesktop.Api": "[1.3.0, )",
+          "BetterDesktop.Kernel": "[1.3.0, )",
+          "BetterDesktop.Shell.AppSource": "[1.3.0, )",
+          "BetterDesktop.Shell.Calendar": "[1.3.0, )",
+          "BetterDesktop.Shell.Core": "[1.3.0, )",
+          "BetterDesktop.Shell.Desktop": "[1.3.0, )",
+          "BetterDesktop.Shell.Pinning": "[1.3.0, )",
+          "BetterDesktop.Shell.Search": "[1.3.0, )",
+          "BetterDesktop.Shell.Settings": "[1.3.0, )",
+          "BetterDesktop.Shell.StartMenu": "[1.3.0, )",
+          "BetterDesktop.Shell.Status": "[1.3.0, )",
+          "BetterDesktop.Shell.WindowTracker": "[1.3.0, )",
           "LibreHardwareMonitorLib": "[0.9.6, )",
           "ManagedShell": "[0.0.370, )",
           "System.Drawing.Common": "[8.0.8, )"
@@ -414,67 +429,68 @@
       "betterdesktop.shell.pinning": {
         "type": "Project",
         "dependencies": {
-          "BetterDesktop.Kernel": "[1.0.0, )",
-          "BetterDesktop.Shell.AppSource": "[1.0.0, )"
+          "BetterDesktop.Kernel": "[1.3.0, )",
+          "BetterDesktop.Shell.AppSource": "[1.3.0, )"
         }
       },
       "betterdesktop.shell.recent": {
         "type": "Project",
         "dependencies": {
-          "BetterDesktop.Api": "[1.0.0, )",
-          "BetterDesktop.Kernel": "[1.0.0, )",
-          "BetterDesktop.Shell.AppSource": "[1.0.0, )",
-          "BetterDesktop.Shell.Core": "[1.0.0, )",
-          "BetterDesktop.Shell.WindowTracker": "[1.0.0, )"
+          "BetterDesktop.Api": "[1.3.0, )",
+          "BetterDesktop.Kernel": "[1.3.0, )",
+          "BetterDesktop.Shell.AppSource": "[1.3.0, )",
+          "BetterDesktop.Shell.Core": "[1.3.0, )",
+          "BetterDesktop.Shell.WindowTracker": "[1.3.0, )"
         }
       },
       "betterdesktop.shell.search": {
         "type": "Project",
         "dependencies": {
-          "BetterDesktop.Api": "[1.0.0, )",
-          "BetterDesktop.Kernel": "[1.0.0, )",
-          "BetterDesktop.Shell.AppSource": "[1.0.0, )"
+          "BetterDesktop.Api": "[1.3.0, )",
+          "BetterDesktop.Kernel": "[1.3.0, )",
+          "BetterDesktop.Shell.AppSource": "[1.3.0, )",
+          "BetterDesktop.Shell.IndexIpc": "[1.3.0, )"
         }
       },
       "betterdesktop.shell.settings": {
         "type": "Project",
         "dependencies": {
-          "BetterDesktop.Api": "[1.0.0, )",
-          "BetterDesktop.Kernel": "[1.0.0, )",
-          "BetterDesktop.Kernel.Hmr": "[1.0.0, )",
-          "BetterDesktop.Shell.Core": "[1.0.0, )"
+          "BetterDesktop.Api": "[1.3.0, )",
+          "BetterDesktop.Kernel": "[1.3.0, )",
+          "BetterDesktop.Kernel.Hmr": "[1.3.0, )",
+          "BetterDesktop.Shell.Core": "[1.3.0, )"
         }
       },
       "betterdesktop.shell.startmenu": {
         "type": "Project",
         "dependencies": {
-          "BetterDesktop.Api": "[1.0.0, )",
-          "BetterDesktop.Kernel": "[1.0.0, )",
-          "BetterDesktop.Shell.AppSource": "[1.0.0, )",
-          "BetterDesktop.Shell.ContextMenu": "[1.0.0, )",
-          "BetterDesktop.Shell.Core": "[1.0.0, )",
-          "BetterDesktop.Shell.Pinning": "[1.0.0, )",
-          "BetterDesktop.Shell.Recent": "[1.0.0, )",
-          "BetterDesktop.Shell.Search": "[1.0.0, )",
-          "BetterDesktop.Shell.Settings": "[1.0.0, )",
-          "BetterDesktop.Shell.WindowTracker": "[1.0.0, )"
+          "BetterDesktop.Api": "[1.3.0, )",
+          "BetterDesktop.Kernel": "[1.3.0, )",
+          "BetterDesktop.Shell.AppSource": "[1.3.0, )",
+          "BetterDesktop.Shell.ContextMenu": "[1.3.0, )",
+          "BetterDesktop.Shell.Core": "[1.3.0, )",
+          "BetterDesktop.Shell.Pinning": "[1.3.0, )",
+          "BetterDesktop.Shell.Recent": "[1.3.0, )",
+          "BetterDesktop.Shell.Search": "[1.3.0, )",
+          "BetterDesktop.Shell.Settings": "[1.3.0, )",
+          "BetterDesktop.Shell.WindowTracker": "[1.3.0, )"
         }
       },
       "betterdesktop.shell.status": {
         "type": "Project",
         "dependencies": {
-          "BetterDesktop.Api": "[1.0.0, )",
-          "BetterDesktop.Kernel": "[1.0.0, )",
-          "BetterDesktop.Shell.Core": "[1.0.0, )"
+          "BetterDesktop.Api": "[1.3.0, )",
+          "BetterDesktop.Kernel": "[1.3.0, )",
+          "BetterDesktop.Shell.Core": "[1.3.0, )"
         }
       },
       "betterdesktop.shell.windowtracker": {
         "type": "Project",
         "dependencies": {
-          "BetterDesktop.Api": "[1.0.0, )",
-          "BetterDesktop.Kernel": "[1.0.0, )",
-          "BetterDesktop.Shell.AppSource": "[1.0.0, )",
-          "BetterDesktop.Shell.Core": "[1.0.0, )"
+          "BetterDesktop.Api": "[1.3.0, )",
+          "BetterDesktop.Kernel": "[1.3.0, )",
+          "BetterDesktop.Shell.AppSource": "[1.3.0, )",
+          "BetterDesktop.Shell.Core": "[1.3.0, )"
         }
       }
     }

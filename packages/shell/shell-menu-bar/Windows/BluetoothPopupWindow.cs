@@ -300,7 +300,7 @@ internal sealed class BluetoothPopupWindow : MenuBarPopupWindow
         // 背景圆环
         grid.Children.Add(new Ellipse
         {
-            Stroke = new SolidColorBrush(Color.FromArgb(50, 255, 255, 255)),
+            Stroke = ThemeBrushes.Tint("ThemeForeground", 0.2),
             StrokeThickness = 2,
             Width = size - 2,
             Height = size - 2,
@@ -312,7 +312,7 @@ internal sealed class BluetoothPopupWindow : MenuBarPopupWindow
         var rotate = new RotateTransform { CenterX = cx, CenterY = cy };
         var arc = new System.Windows.Shapes.Path
         {
-            Stroke = new SolidColorBrush(Color.FromArgb(220, 140, 200, 255)),
+            Stroke = ThemeBrushes.AccentTint(0.86),
             StrokeThickness = 2,
             StrokeStartLineCap = PenLineCap.Round,
             StrokeEndLineCap = PenLineCap.Round,
@@ -368,7 +368,7 @@ internal sealed class BluetoothPopupWindow : MenuBarPopupWindow
 
         grid.Children.Add(new Ellipse
         {
-            Stroke = new SolidColorBrush(Color.FromArgb(50, 255, 200, 100)),
+            Stroke = ThemeBrushes.Tint("StatusWarning", 0.2),
             StrokeThickness = 2,
             Width = size - 2,
             Height = size - 2,
@@ -379,7 +379,7 @@ internal sealed class BluetoothPopupWindow : MenuBarPopupWindow
         var rotate = new RotateTransform { CenterX = cx, CenterY = cy };
         var arc = new System.Windows.Shapes.Path
         {
-            Stroke = new SolidColorBrush(Color.FromArgb(230, 255, 200, 100)),
+            Stroke = ThemeBrushes.Tint("StatusWarning", 0.9),
             StrokeThickness = 2,
             StrokeStartLineCap = PenLineCap.Round,
             StrokeEndLineCap = PenLineCap.Round,
@@ -887,7 +887,7 @@ internal sealed class BluetoothPopupWindow : MenuBarPopupWindow
             Height = 48,
             Margin = new Thickness(8, 0, 8, 0),
             Background = device.IsConnected
-                ? new SolidColorBrush(Color.FromArgb(40, 90, 163, 255))
+                ? ThemeBrushes.AccentTint(0.16)
                 : Brushes.Transparent
         };
         row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
@@ -962,10 +962,10 @@ internal sealed class BluetoothPopupWindow : MenuBarPopupWindow
         {
             Text = subText,
             Foreground = isPending
-                ? new SolidColorBrush(Color.FromArgb(200, 255, 200, 100))
+                ? ThemeBrushes.Tint("StatusWarning", 0.78)
                 : device.IsConnected
-                    ? new SolidColorBrush(Color.FromArgb(200, 140, 200, 255))
-                    : new SolidColorBrush(Color.FromArgb(140, 255, 255, 255)),
+                    ? ThemeBrushes.Tint("SkinAccentFromSkin", 0.78)
+                    : ThemeBrushes.Tint("ThemeForeground", 0.55),
             FontSize = 10,
             Margin = new Thickness(0, 1, 0, 0)
         };
@@ -987,11 +987,11 @@ internal sealed class BluetoothPopupWindow : MenuBarPopupWindow
                 Height = 12,
                 VerticalAlignment = VerticalAlignment.Center,
                 Stroke = device.IsConnected
-                    ? new SolidColorBrush(Color.FromArgb(255, 90, 163, 255))
-                    : new SolidColorBrush(Color.FromArgb(120, 255, 255, 255)),
+                    ? ThemeBrushes.Get("SkinAccentFromSkin")
+                    : ThemeBrushes.Tint("ThemeForeground", 0.47),
                 StrokeThickness = 2,
                 Fill = device.IsConnected
-                    ? new SolidColorBrush(Color.FromArgb(255, 90, 163, 255))
+                    ? ThemeBrushes.Get("SkinAccentFromSkin")
                     : Brushes.Transparent
             };
         }

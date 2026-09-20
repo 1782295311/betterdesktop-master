@@ -1,0 +1,35 @@
+{
+  "version": 1,
+  "extensionEnabled": true,
+  "items": [
+    {
+      "id": "desktopControls",
+      "title": "桌面控制",
+      "kind": "submenu",
+      "scenes": ["background"],
+      "children": [
+        { "id": "icons", "title": "桌面图标显隐", "kind": "toggle", "checked": true,
+          "action": "toggle-key", "args": ["icons"] },
+        { "id": "taskbar", "title": "隐藏任务栏", "kind": "toggle", "checked": false,
+          "action": "toggle-key", "args": ["taskbar"] },
+        { "id": "doubleclick", "title": "双击隐藏图标", "kind": "toggle", "checked": true,
+          "action": "toggle-key", "args": ["doubleclick"] }
+      ]
+    },
+    {
+      "id": "convert",
+      "title": "格式转换",
+      "kind": "submenu",
+      "scenes": ["files"],
+      "filter": { "extensions": [".docx", ".md", ".pdf"], "selection": "sameExtension" },
+      "children": [
+        { "id": "convert-to-pdf", "title": "转为 PDF", "action": "convert-to",
+          "args": ["pdf"], "highlight": true, "default": true },
+        { "id": "convert-to-md", "title": "转为 Markdown", "action": "convert-to",
+          "args": ["md"], "highlight": true },
+        { "id": "mergePdf", "title": "合并 PDF", "action": "convert-to", "args": ["pdf"],
+          "requiresAllExtIn": [".pdf"], "requiresCountMin": 2 }
+      ]
+    }
+  ]
+}

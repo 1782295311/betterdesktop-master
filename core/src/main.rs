@@ -17,12 +17,32 @@
 //!
 //! S1（本文件）：单实例 + 隐藏顶层窗口 + 托盘图标 + 组件菜单 + 拉起。
 //! S2 起：控制管道（`BetterDesktop.MenuCmd` 服务端 + `@ctl` 形态）、监护/reconcile、热键、ShellMenu 触发。
+//!
+//! # 两个启动期不变量（2026-09-20 真机补上）
+//!
+//! 1. **本进程必须是 GUI 子系统**（见下面的 `#![windows_subsystem]`）：console 子系统会让
+//!    任务计划 / `Start-Process` 每次启动都给用户弹一个黑窗口，而关掉那个窗口等于杀掉 core。
+//! 2. **兜底任务发起的启动必须尊重"用户主动停止"**：判据与两个方向见 `task` 模块头的「停止语义」，
+//!    本文件的 [`launched_by_fallback_task`] 与 `main` 里的两道闸门是它的落点。
+
+// GUI 子系统：core **没有窗口，也没有控制台**。
+//
+// 【2026-09-20 真机事故】此前产物是 console 子系统（实测 PE Subsystem=3）。任务计划与
+// `Start-Process` 都在没有控制台的上下文里启动它 ⇒ Windows 为**每次启动新分配一个黑色控制台
+// 窗口**（标题就是 exe 全路径，用户看得见）；而关掉那个窗口 = 给进程发 `CTRL_CLOSE_EVENT`
+// ⇒ 默认处理直接终止进程，于是"关掉黑窗口，core 也跟着死"。
+//
+// 改成 GUI 子系统不损失任何输出：core 从不写 stdout/stderr（`log.rs` 只落盘，全仓无
+// `println!`/`eprintln!`）。子进程侧也不会因此冒出新窗口 —— `process.rs` 两处 `CreateProcessW`
+// 都带 `CREATE_NO_WINDOW`，控制台程序（schtasks / CLI）不会因为父进程没有控制台而新开一个。
+#![windows_subsystem = "windows"]
 
 mod autostart;
 mod cli;
 mod components;
 mod hotkeys;
 mod log;
+mod ownership;
 mod pipe;
 mod power;
 mod process;
@@ -112,6 +132,43 @@ pub fn supervisor() -> Option<&'static supervisor::Supervisor> {
 fn main() -> ExitCode {
     log::init();
     log::info(format!("core starting, version {}", env!("CARGO_PKG_VERSION")));
+
+    // ── 闸门①：兜底任务发起的启动，若用户主动停止过 ⇒ 什么都不做就退出 ──
+    // 放在单实例互斥量**之前**：它是最便宜的一步（扫一次参数 + 一次文件存在性检查），
+    // 而任务每 5 分钟就来敲一次门 —— 停止态下不该为它付"创建一个实例"的代价。
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let from_task = launched_by_fallback_task(&args);
+    if from_task && task::is_stopped() {
+        log::info(format!(
+            "launched by the fallback task, but core is STOPPED by the user ('{}') — exiting \
+             without doing anything; start core explicitly (launcher / bdctl / installer) to arm \
+             the fallback again",
+            task::STOPPED_FLAG
+        ));
+        return ExitCode::SUCCESS;
+    }
+
+    // ── 闸门①的反面：**不是兜底发起** ⇒ 用户要它跑，解除停止态（幂等） ──
+    // 放在单实例互斥量**之前**是刻意的：清标记表达的是"用户要它跑"这个**意图**，
+    // 与"本次实例有没有抢到锁"无关。放在后面会留一个死角 —— 已有一份在跑时，
+    // 新实例会先抢锁失败退出，那个意图就丢了（2026-09-20 真机验证时正是这样被发现的）。
+    //
+    // 这里也是**唯一**的解除点：启动器 / CLI / 安装器 / 双击 exe 走的都是这条路，
+    // 所以它们都不需要知道这个标记存在 —— 一个写入者（`task::stop`）、一个读取者（本函数）。
+    if !from_task {
+        match task::resume() {
+            Ok(true) => log::info(format!(
+                "explicit start: cleared '{}' — the fallback task is armed again",
+                task::STOPPED_FLAG
+            )),
+            // 本来就没被停过：不记（每次启动都写一行是噪声，会把真问题淹掉）
+            Ok(false) => {}
+            Err(e) => log::error(format!(
+                "cannot clear '{}' ({e}) — the fallback will keep skipping this machine",
+                task::STOPPED_FLAG
+            )),
+        }
+    }
 
     // 每显示器 DPI 感知：托盘菜单坐标才不会被系统二次缩放（失败不致命，老系统没有此 API）。
     unsafe {
@@ -310,11 +367,13 @@ fn spawn_task_ensure() {
                     "scheduled task '{}': rebuilt (was stale: {reason})",
                     task::TASK_NAME
                 )),
-                // 拒绝注册**不是失败**（故 WARN 而不是 ERROR）：这是"这条兜底对当前部署形态不适用"
-                // 的如实结论 —— 把系统级任务指向一个会在 build/clean 中消失的目录，
-                // 只会留下一条每 5 分钟失败一次的记录，而那时 core 已经不在了、没人会报它。
+                // 没写**不是失败**（故 WARN 而不是 ERROR）：这是"本进程不是这份部署 /
+                // 位置不稳定"的如实结论 —— 把系统级任务指向一个会在 build/clean 中消失的目录、
+                // 或让一份副本把它抢走，只会留下一条每次触发都失败的记录，
+                // 而那时 core 已经不在了、没有任何地方会报它。
+                // 措辞不写死成 "NOT registered"：任务可能**存在且健康**，只是归别的那一份所有。
                 Ok(task::Ensured::Skipped(reason)) => log::warn(format!(
-                    "scheduled task '{}': NOT registered — {reason}",
+                    "scheduled task '{}': not written — {reason}",
                     task::TASK_NAME
                 )),
                 Err(e) => log::error(format!(
@@ -359,6 +418,47 @@ fn spawn_shellmenu_watch() {
     if let Err(e) = spawned {
         log::error(format!("cannot spawn the shellmenu watch thread: {e}"));
     }
+}
+
+/// 本次启动是否由**兜底任务**发起。
+///
+/// # 做什么
+/// 扫描命令行参数里是否出现 [`task::LAUNCH_MARKER`]（任务定义把它写在动作的 `<Arguments>` 里）。
+///
+/// # 为什么需要判它
+/// 兜底任务与"用户显式启动"跑的是同一个可执行体，命令行的其余部分也完全一样，唯一差别只有这个
+/// 标记；而两者的正确行为**相反**：兜底必须尊重 `core-stopped.flag`（用户说过不要），
+/// 显式启动必须清除它（用户现在要）。没有这个判据，"崩溃要拉回来、主动退出不许拉回来"
+/// 这两条不可能同时成立。
+///
+/// # 契约
+/// `args` = **去掉 argv[0]** 的参数表（调用方已 `skip(1)`）；`true` = 本次来自兜底。
+/// 纯函数：不读环境、不碰文件，因此"argv[0] 不算""相似串不算"这类边界可以被单测钉住。
+fn launched_by_fallback_task(args: &[String]) -> bool {
+    args.iter().any(|a| a == task::LAUNCH_MARKER)
+}
+
+/// 用户主动退出：**先把兜底撤掉，再退**。
+///
+/// # 为什么顺序不可颠倒
+/// 与 `stop_component` 同一条纪律（"先写标记、再停进程"）：万一撤兜底失败，至少"不再自动拉起"
+/// 这条已经成立；反过来（先退出再撤）会留下"刚退就被任务拉回来"的窗口 —— 那正是要防的。
+///
+/// # 失败不静默
+/// 撤兜底失败时**照样退出**（用户按了退出，程序就该退），但必须留一条 ERROR 并说清防线还剩几道，
+/// 因为那时用户看到的会是"我退了它又回来了"，而日志是唯一能解释原因的地方。
+fn disarm_fallback_then_quit(hwnd: HWND) {
+    match task::stop() {
+        Ok(()) => log::info(format!(
+            "explicit quit: wrote '{}' and removed the fallback task — core will NOT be revived \
+             until it is started explicitly",
+            task::STOPPED_FLAG
+        )),
+        Err(e) => log::error(format!(
+            "explicit quit: could not fully disarm the fallback: {e}"
+        )),
+    }
+    tray::request_quit(hwnd);
 }
 
 /// 抢占单实例 Mutex。`Ok` = 取得所有权（含接管前实例崩溃留下的 abandoned mutex）。
@@ -493,7 +593,7 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
                     match tray::show_menu(hwnd, table, &menu_settings, user_paused) {
                         Some(tray::MenuAction::Quit) => {
                             log::info("tray menu: quit requested");
-                            tray::request_quit(hwnd);
+                            disarm_fallback_then_quit(hwnd);
                         }
                         Some(tray::MenuAction::Start(idx)) => {
                             start_component(&table[idx]);
@@ -933,3 +1033,35 @@ fn shell_open(target: &str) -> bool {
 
 // exe 定位与拉起在 `process.rs`（原语层，无生命周期决策）；
 // **谁该被拉起/停掉**由 `supervisor.rs` 唯一决定，其单测随之迁移。
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn args(list: &[&str]) -> Vec<String> {
+        list.iter().map(|s| (*s).to_string()).collect()
+    }
+
+    /// 任务定义里那个标记是**唯一**的"来自兜底"信号。
+    #[test]
+    fn the_fallback_marker_is_recognized() {
+        assert!(launched_by_fallback_task(&args(&[task::LAUNCH_MARKER])));
+        // 与其它参数共存也算 —— 未来给任务加参数时不必改这个判定
+        assert!(launched_by_fallback_task(&args(&[
+            "--verbose",
+            task::LAUNCH_MARKER
+        ])));
+    }
+
+    /// 别的参数、空参数表、以及**相似但不同**的串都不算。
+    ///
+    /// 两个方向都危险：误判成"来自兜底"⇒ 显式启动被当成兜底 ⇒ 用户启动不了；
+    /// 漏判 ⇒ 兜底被当成显式启动 ⇒ 清了用户的停止标记 ⇒ 退了又被拉回来。
+    #[test]
+    fn anything_else_is_not_a_fallback_launch() {
+        assert!(!launched_by_fallback_task(&args(&[])));
+        assert!(!launched_by_fallback_task(&args(&["--core", "status"])));
+        assert!(!launched_by_fallback_task(&args(&["--from-task-x"])));
+        assert!(!launched_by_fallback_task(&args(&["from-task"])));
+    }
+}

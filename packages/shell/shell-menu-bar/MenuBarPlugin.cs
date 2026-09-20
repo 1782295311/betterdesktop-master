@@ -12,11 +12,11 @@ using BetterDesktop.Shell.Core.Contracts;
 using BetterDesktop.Shell.Core.Services;
 using BetterDesktop.Shell.Core.Surface;
 using BetterDesktop.Shell.Core.Vibrancy;
-using BetterDesktop.Shell.Desktop.Contracts;
 using BetterDesktop.Shell.MenuBar.Contracts;
 using BetterDesktop.Shell.MenuBar.Sections;
 using BetterDesktop.Shell.MenuBar.Services;
 using BetterDesktop.Shell.MenuBar.Windows;
+using BetterDesktop.Shell.Pinning.Contracts;
 using BetterDesktop.Shell.Search.Contracts;
 using BetterDesktop.Shell.Settings.Contracts;
 using BetterDesktop.Shell.Status.Contracts;
@@ -43,7 +43,17 @@ namespace BetterDesktop.Shell.MenuBar;
 public sealed class MenuBarPlugin : IPlugin
 {
     public string Name => "shell.menu-bar";
-    public IReadOnlyList<Type> Inject => Array.Empty<Type>();
+
+    /// <summary>
+    /// 依赖声明（内核据此调度：未满足时本插件停在 <c>Pending</c>，不静默降级）。
+    /// <para><see cref="IPinningService"/> 必须写在这里，而不是只靠可空 <c>Get</c> 采集：
+    /// 可空 Get 让「搜索结果右键的固定项」依赖装配顺序（历史坑：dock 先于 context-menu 激活
+    /// 导致 <c>Get</c> 恒 null，菜单项静默消失 —— 用户表现为「功能时有时无」）。
+    /// 声明后顺序由内核保证，缺失是显式 Pending 而不是少一个菜单项。</para>
+    /// <para>与 <c>StartMenuPlugin.Inject</c> 的既有做法一致（该插件同样声明本服务），
+    /// 故不引入新的装配约束。</para>
+    /// </summary>
+    public IReadOnlyList<Type> Inject => new[] { typeof(IPinningService) };
 
     private MenuBarWindow? _window;
     private StatusBarMenuBarExtension? _statusBar;
@@ -68,21 +78,24 @@ public sealed class MenuBarPlugin : IPlugin
         var settingsWindow = context.Get<ISettingsWindowService>();
         // 左区前台窗口标题：IWindowTrackerService（WinEvent 钩子事件驱动，Bootstrap 4.6 注册）。
         var windowTracker = context.Get<IWindowTrackerService>();
-        // 左区与自绘桌面联动：IDesktopBrowser（DesktopPlugin Provide；未加载时导航入口走 explorer 降级）。
-        var desktopBrowser = context.Get<IDesktopBrowser>();
+        // 【2026-09-17 用户拍板】不再消费 IDesktopBrowser：左区文件夹工具条整条移除（操作已在自绘桌面右键菜单）。
         // 搜索按钮复用 shell-search 聚合搜索服务（SearchPlugin 在 Bootstrap 4.7 注册，早于本插件）；
         // 未注册时为 null，SearchPopupWindow 内显示"搜索不可用"占位（M10 降级）。
         var search = context.Get<IStartMenuSearchService>();
         // 搜索结果图标：IAppIconService（AppSourcePlugin 提供，按 AppItem 提取真实应用图标）。
         var appIcon = context.Get<IAppIconService>();
+        // 搜索结果右键「固定到 Dock」的解析源：IAppSourceService.ResolveFromPath（LNK/URL/EXE → AppItem），
+        // 让引擎索引命中的程序文件（如 MAA.exe）也能固定到 Dock（2026-09-17）；缺失时该项不显示（M10）。
+        var appSource = context.Get<IAppSourceService>();
         // 日历（shell.calendar）：农历/节假日与调休/节气/节日/系统日程/天气；未注册时降级为纯农历月视图（M10）。
         var calendar = context.Get<BetterDesktop.Shell.Calendar.Contracts.ICalendarService>();
-        // 搜索结果右键菜单的「固定到 Dock」：IPinningService（PinningPlugin 在 Bootstrap 4.6.x 注册）；
-        // 未注册时右键菜单自动省略固定项（M10 降级）。
-        var pinning = context.Get<BetterDesktop.Shell.Pinning.Contracts.IPinningService>();
+        // 搜索结果右键菜单的「固定到 Dock」：IPinningService（PinningPlugin 在 Bootstrap 4.6.x 注册，
+        // 且已列入上方 Inject —— 到这里必定非 null）。此处保留可空取用只是外层兜底：
+        // 正常路径不再依赖它，装配顺序由内核保证（2026-09-14 由可空 Get 改为声明式依赖）。
+        var pinning = context.Get<IPinningService>();
 
-        // Vibrancy 必要：窗口需毛玻璃；降级为 NullVibrancy 保证不抛
-        vibrancy ??= new NullVibrancy();
+        // Vibrancy 必要：窗口需毛玻璃；降级为共享空实现保证不抛（shell-core NullVibrancyService）
+        vibrancy ??= NullVibrancyService.Instance;
 
         // 主题接线：菜单栏自绘图标此前 55 处硬编码 Brushes.White，切亮色主题会白字白底不可读。
         // MenuBarTheme 持有单一共享画刷，这里只需把外观服务的当前前景色同步进去并订阅变更，
@@ -102,7 +115,8 @@ public sealed class MenuBarPlugin : IPlugin
         }
 
         // 右区 = 紧凑状态条（系统托盘/FPS/CPU/内存/WiFi/网速/亮度/输入法/蓝牙/音量/麦克风/电池/通知/时间/桌面）
-        _statusBar = new StatusBarMenuBarExtension(vol, mic, bat, ime, brightness, net, mem, cpu, vibrancy, appearance, settings, search, appIcon, calendar, pinning);
+        var media = context.Get<BetterDesktop.Shell.Music.Contracts.IMediaPlaybackService>();
+        _statusBar = new StatusBarMenuBarExtension(vol, mic, bat, ime, brightness, net, mem, cpu, vibrancy, appearance, settings, search, appIcon, calendar, pinning, null, media, context.Events, appSource);
         var extensions = new List<IMenuBarExtension>(capacity: 1)
         {
             _statusBar
@@ -116,7 +130,7 @@ public sealed class MenuBarPlugin : IPlugin
 
         // 构造并显示菜单栏主窗口
         // events：Logo 菜单「应用提取器」等跨包入口经 IEventBus 契约（shell.appgrabber.show → shell.dock）。
-        _window = new MenuBarWindow(registry, vibrancy, appearance, context.Logger, settingsWindow, windowTracker, desktopBrowser, settings, context.Events);
+        _window = new MenuBarWindow(registry, vibrancy, appearance, context.Logger, settingsWindow, windowTracker, settings, context.Events);
         _window.Show();
 
         // 组件开关（2026-09-07 用户拍板）：components.menubar 即时启停——启动时按设置决定是否显示；
@@ -184,11 +198,4 @@ public sealed class MenuBarPlugin : IPlugin
         _statusBar = null;
         return Task.CompletedTask;
     }
-}
-
-/// <summary>兜底：IVibrancyService 不存在时，降级为空壳（窗口不变毛玻璃，但不崩溃）。</summary>
-internal sealed class NullVibrancy : IVibrancyService
-{
-    public void Apply(IntPtr hwnd, VibrancyStyle style, bool roundCorners, bool smallRadius) { }
-    public void Disable(IntPtr hwnd) { }
 }

@@ -13,7 +13,7 @@ namespace BetterDesktop.Shell.ContextMenus;
 //   "我想改右键菜单样式（Win10 / Win11 经典）"       → Services/MenuManagerStyle.cs（CLSID 样式开关）
 //   "我想按来源整体关掉一类菜单项"                 → Services/MenuManagerGroups.cs（BetterDesktop/ShellEx/系统 分组开关）
 //   "我想看/管理注册表里所有右键菜单项"             → Services/MenuManagerService.cs（枚举入口）+ Sections/MenuManagerSection.cs（设置 UI）
-//   "桌面图标/空白处右键不弹菜单"                   → Services/DesktopMenuDelegation.cs（图标→NativeMenuPopup；空白→explorer DefView 转发）
+//   "桌面图标/空白处右键"                           → 已回归 shell-desktop 自绘（DesktopIconsControl.ShowMenu → DesktopMenuPopup）；跨进程委托 2026-09-10 移除
 //   "开始菜单条目的右键菜单"                       → shell-start-menu/Services/AppItemActions.cs（AttachNative）
 //   "dock 图标/应用提取器的右键菜单"               → shell-dock/Services/DockMenuPopup.cs + Templates/DockItemTemplate.cs（dock 自管例外）
 //   "右键菜单里加压缩/解压/回收站还原/新建文件"    → ZipOps.cs / RecycleRestore.cs / ShellNewCatalog.cs
@@ -21,6 +21,7 @@ namespace BetterDesktop.Shell.ContextMenus;
 //   "菜单项图标/显示名/访问键"                     → MenuItemIconCache.cs / MenuText.cs / MenuAccessKeys.cs / ResourceRef.cs / GuidInfo.cs
 //   "注册表写前备份 / 系统项夺权"                  → RegTreeBackup.cs / RegTakeover.cs
 //   "系统原生菜单的渲染通道（HMENU→TrackPopupMenuEx）" → Services/NativeMenuPopup.cs + StaComWorker.cs
+//   "某个扩展把程序搞崩了 / 想不用人工去屏蔽它"          → Services/HandlerCrashGuard.cs（连续 3 次自动停用）
 // ============================================================
 
 /// <summary>
@@ -53,6 +54,12 @@ public sealed class ContextMenuPlugin : IPlugin
         // 设置分区（「右键菜单」：菜单来源总开关 + 样式 + 场景扩展 + 新建 + 备份；
         // 2026-09-05 更名合并——原 ContextMenuSection（功能状态+控制）并入本分区，分区名与「菜单栏」区分。
         context.Get<ISettingsSectionRegistry>()?.Register(new Sections.MenuManagerSection());
+
+        // 第三方 COM handler 崩溃熔断（4.1）：
+        //   ① Attach 设置服务（ambient）——运行中 broker 报回"某 handler 把 broker 搞死了"时也要能写可见状态；
+        //   ② ApplyPending 消费已记账的熔断，达阈值自动停用（走既有 Toggle 通道，写前备份、可逆）。
+        HandlerCrashBreaker.Attach(context.Get<ISettingsService>());
+        HandlerCrashBreaker.ApplyPending();
 
         return Task.CompletedTask;
     }

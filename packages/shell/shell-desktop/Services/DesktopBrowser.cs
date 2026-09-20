@@ -22,8 +22,8 @@ using Microsoft.Win32;
 
 namespace BetterDesktop.Shell.Desktop.Services;
 
-// ── 本文件方法级白话索引（桌面文件夹浏览器：导航 + 文件操作，白话 → 方法）──
-//   "前进/后退/上一级/跳到某目录"   → Navigate / Back / Forward / Up / LoadLocation
+// ── 本文件方法级白话索引（桌面图标层：枚举 + 文件操作，白话 → 方法）──
+//   "重新枚举桌面目录"               → Refresh / LoadLocation
 //   "监听文件系统变化并刷新"         → EnsureFileSystemWatch / OnFsChange / OnFsRename / ScheduleRefresh
 //   "此电脑/回收站等 CLSID 显示名"    → ResolveShellName
 //   "选中项管理"                     → SetSelection / ToggleSelection
@@ -32,14 +32,14 @@ namespace BetterDesktop.Shell.Desktop.Services;
 //   图标呈现层在 Controls/DesktopIconsControl.cs，宿主窗口在 Windows/DesktopWindow.cs。
 // ────────────────────────────────────
 
-/// <summary>桌面/文件夹浏览器（IDesktopBrowser 实现）。</summary>
+/// <summary>桌面图标层的数据/操作实现（IDesktopBrowser）。
+/// 【2026-09-17 用户拍板】历史导航（Navigate/Back/Forward/Up + 历史栈）已移除：桌面的文件夹由 explorer 打开，
+/// 自绘桌面不再站内导航，Location 恒为桌面目录 —— 保留它只为枚举/文件操作的落点基准。</summary>
 public sealed class DesktopBrowser : IDesktopBrowser
 {
     /// <summary>枚举结果上限（桌面图标过多时不至于卡死；超出按名称排序截断）。</summary>
     private const int MaxEntries = 500;
 
-    private readonly List<string> _back = new();
-    private readonly List<string> _forward = new();
     private readonly List<BrowserEntry> _items = new();
     private readonly HashSet<string> _selection = new(StringComparer.OrdinalIgnoreCase);
     private readonly SynchronizationContext? _sync;
@@ -75,60 +75,15 @@ public sealed class DesktopBrowser : IDesktopBrowser
 
     public bool CanPaste => FileClipboard.HasFiles;
 
-    public bool CanGoBack => _back.Count > 0;
-
-    public bool CanGoForward => _forward.Count > 0;
-
     /// <summary>当前条目快照（UI 网格在 ItemsChanged 后读取）。</summary>
     public IReadOnlyList<BrowserEntry> Items => _items;
 
     /// <summary>当前选中集快照。</summary>
     public IReadOnlyCollection<string> Selection => _selection;
 
-    public event EventHandler<string>? LocationChanged;
-
     public event EventHandler? SelectionChanged;
 
     public event EventHandler? ItemsChanged;
-
-    // ======== 导航 ========
-
-    public void Navigate(string path)
-    {
-        if (string.IsNullOrWhiteSpace(path) || !Directory.Exists(path)) return;
-        var full = Path.GetFullPath(path).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-        if (string.Equals(full, _location, StringComparison.OrdinalIgnoreCase)) { Refresh(); return; }
-
-        _back.Add(_location);
-        _forward.Clear();
-        LoadLocation(full);
-    }
-
-    public bool Back()
-    {
-        if (_back.Count == 0) return false;
-        _forward.Add(_location);
-        LoadLocation(_back[^1]);
-        _back.RemoveAt(_back.Count - 1);
-        return true;
-    }
-
-    public bool Forward()
-    {
-        if (_forward.Count == 0) return false;
-        _back.Add(_location);
-        LoadLocation(_forward[^1]);
-        _forward.RemoveAt(_forward.Count - 1);
-        return true;
-    }
-
-    public bool Up()
-    {
-        var parent = Directory.GetParent(_location)?.FullName;
-        if (parent is null || string.Equals(parent, _location, StringComparison.OrdinalIgnoreCase)) return false;
-        Navigate(parent);
-        return true;
-    }
 
     public void Refresh() => LoadLocation(_location);
 
@@ -183,6 +138,10 @@ public sealed class DesktopBrowser : IDesktopBrowser
         {
             return;
         }
+        if (IsOwnLogFile(e.Name))
+        {
+            return;
+        }
         ScheduleRefresh();
     }
 
@@ -192,8 +151,23 @@ public sealed class DesktopBrowser : IDesktopBrowser
         {
             return;
         }
+        if (IsOwnLogFile(e.Name))
+        {
+            return;
+        }
         ScheduleRefresh();
     }
+
+    /// <summary>
+    /// 自产日志文件（落在桌面根）不参与刷新（2026-09-17）：
+    /// window-tracker 的 DebugLog 每条同步追加写桌面 `BetterDesktop_debug.log`，dock 每秒都在写 →
+    /// 原来的 watcher 会让自绘桌面**每秒重枚举一次**（纯自噪声，还会与真实变化抢 500ms 防抖窗口）。
+    /// 注意：这不是"忽略桌面变化"，只忽略我们自己写的这两个日志文件。
+    /// </summary>
+    private static bool IsOwnLogFile(string? name)
+        => name is not null &&
+           (name.Equals("BetterDesktop_debug.log", StringComparison.OrdinalIgnoreCase) ||
+            name.Equals("BetterDesktop_crash.log", StringComparison.OrdinalIgnoreCase));
 
     /// <summary>500ms 防抖合并高频事件（复制大文件/批量操作时只刷一次）。</summary>
     private void ScheduleRefresh()
@@ -216,18 +190,6 @@ public sealed class DesktopBrowser : IDesktopBrowser
     private const uint ShgfiPidl = 0x0008;
     private const uint ShgfiDisplayname = 0x0200;
 
-    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
-    private struct SHFILEINFO
-    {
-        public IntPtr hIcon;
-        public int iIcon;
-        public uint dwAttributes;
-        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 260)]
-        public string szDisplayName;
-        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 80)]
-        public string szTypeName;
-    }
-
 
     /// <summary>解析 shell 项的本地化显示名（随系统语言，如"此电脑"）；失败用回落名。</summary>
     private static string ResolveShellName(string clsidPath, string fallback)
@@ -239,7 +201,7 @@ public sealed class DesktopBrowser : IDesktopBrowser
                 try
                 {
                     var info = new NativeMethods.SHFILEINFO();
-                    if (NativeMethods.SHGetFileInfo(pidl, 0, ref info, (uint)Marshal.SizeOf<SHFILEINFO>(), ShgfiDisplayname | ShgfiPidl) != IntPtr.Zero
+                    if (NativeMethods.SHGetFileInfo(pidl, 0, ref info, (uint)Marshal.SizeOf<NativeMethods.SHFILEINFO>(), ShgfiDisplayname | ShgfiPidl) != IntPtr.Zero
                         && !string.IsNullOrWhiteSpace(info.szDisplayName))
                     {
                         return info.szDisplayName;
@@ -263,10 +225,14 @@ public sealed class DesktopBrowser : IDesktopBrowser
         if (_busy) return; // 防重入：枚举中忽略新导航（桌面场景足够）
         _busy = true;
         _location = path;
-        _selection.Clear();
+        // 【2026-09-17 修复 · 用户实测"框选后左右键的整组操作都不见了"的根因】
+        // 原实现无条件 `_selection.Clear()`。而 Refresh 会被 FileSystemWatcher 触发——桌面目录里
+        // BetterDesktop_debug.log 被 dock 每秒写入一次（window-tracker 的 DebugLog 就落在桌面）→
+        // 500ms 防抖 → **约每秒一次 Refresh** → 框选后约 1 秒选中集就被清空（真机日志实证：
+        // `框选诊断 结束后 selCnt=6` 之后 0.9s 的按下已是 `selCnt=0`）→ 整组拖动/整组菜单全部退化成单项。
+        // 改为 explorer 语义：**保留选中集**，枚举完成后只剔除已不存在的路径（换目录时自然清空）。
+        var previousSelection = _selection.ToList();
         var gen = ++_generation;
-
-        LocationChanged?.Invoke(this, path);
 
         Task.Run(() =>
         {
@@ -381,9 +347,34 @@ public sealed class DesktopBrowser : IDesktopBrowser
                 _items.Clear();
                 _items.AddRange(entries);
                 _busy = false;
+
+                // 选中集收敛（2026-09-17）：只保留在新条目里仍然存在的路径——
+                // 同目录刷新（文件时间戳变化）→ 选中集原样保留；换目录 / 文件被删 → 自动丢弃。
+                var present = new HashSet<string>(entries.Count, StringComparer.OrdinalIgnoreCase);
+                foreach (var e in entries)
+                {
+                    present.Add(e.Path);
+                }
+
+                var survivors = previousSelection.Where(present.Contains).ToList();
+                var selectionChanged = survivors.Count != _selection.Count || !survivors.All(_selection.Contains);
+                if (selectionChanged)
+                {
+                    _selection.Clear();
+                    foreach (var p in survivors)
+                    {
+                        _selection.Add(p);
+                    }
+                }
+
                 if (!same)
                 {
                     ItemsChanged?.Invoke(this, EventArgs.Empty);
+                }
+
+                if (selectionChanged)
+                {
+                    SelectionChanged?.Invoke(this, EventArgs.Empty);
                 }
             });
         });
@@ -558,6 +549,15 @@ public sealed class DesktopBrowser : IDesktopBrowser
         while (true)
         {
             Thread.Sleep(SortBridgeIntervalMs);
+
+            // 【2026-09-18】功能关闭时不再每 1.5s 读一次注册表：原实现无任何门控，
+            // 用户关掉 desktop.sortBridge（甚至停用桌面组件）后，这个后台线程仍会整机生命周期地
+            // 读 HKCU\...\Bags\1\Desktop。读法与 ApplyExplorerSort 内保持一致（那里同样在后台线程读设置）。
+            if (!(_settings?.Get("desktop.sortBridge", true) ?? true))
+            {
+                continue;
+            }
+
             var cur = ReadExplorerSort();
             if (cur != last)
             {

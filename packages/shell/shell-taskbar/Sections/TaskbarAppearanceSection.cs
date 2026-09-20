@@ -189,7 +189,7 @@ public sealed class TaskbarAppearanceSection : ISettingsSection
             {
                 var c = (Color)s.Tag;
                 s.BorderBrush = (c.R == current.R && c.G == current.G && c.B == current.B)
-                    ? new SolidColorBrush(Color.FromRgb(0xFF, 0xC8, 0x00))
+                    ? tokens.Accent
                     : Brushes.Transparent;
             }
         }
@@ -286,7 +286,7 @@ public sealed class TaskbarAppearanceSection : ISettingsSection
             // 最小兜底：仅前景色，绝不碰 Template/ItemTemplate（Mac 模板统一负责外观）
             if (element is Control control)
             {
-                control.Foreground = new SolidColorBrush(Color.FromRgb(0xEC, 0xEC, 0xEC));
+                control.Foreground = ThemeBrushes.Get("ControlForeground");
             }
         }
         return element;

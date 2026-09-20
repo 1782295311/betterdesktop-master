@@ -513,9 +513,11 @@ public sealed class StartMenuService : IStartMenuService, IStartMenuDataService,
             {
                 UseShellExecute = false,
                 CreateNoWindow = true,
-                FileName = "cmd.exe",
-                Arguments = "/c " + app.UninstallCommand.Trim()
+                FileName = "cmd.exe"
             };
+            // C1：`/c` 与卸载命令分两个参数传（Command 来自注册表，含引号时拼接会破坏其边界）。
+            psi.ArgumentList.Add("/c");
+            psi.ArgumentList.Add(app.UninstallCommand.Trim());
             var proc = Process.Start(psi);
             if (proc is null)
             {
@@ -623,6 +625,7 @@ public sealed class StartMenuService : IStartMenuService, IStartMenuDataService,
 
         window.Show();
         window.Activate();
+        Core.Hotkeys.SurfaceScopeBridge.Report("Surface.StartMenu", active: true); // P5 P0-1：开始菜单表面活跃
         RaiseOpenStateChanged();
     }
 
@@ -631,6 +634,7 @@ public sealed class StartMenuService : IStartMenuService, IStartMenuDataService,
     {
         if (_window is { IsVisible: true })
         {
+            Core.Hotkeys.SurfaceScopeBridge.Report("Surface.StartMenu", active: false); // P5 P0-1：开始菜单表面收起
             _window.Hide();
             RaiseOpenStateChanged();
         }

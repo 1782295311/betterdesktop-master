@@ -25,7 +25,9 @@ public sealed class DockLayoutService : IDockLayoutService
     private double _bottomMargin;
     private readonly ISettingsService? _settings;
 
-    public DockLayoutService(double edgeHotZoneHeight = 4d, double bottomMargin = 10d, ISettingsService? settings = null)
+    /// <param name="edgeHotZoneHeight">底部唤出热区高度（px）。2026-09-12：4→2 收紧——屏幕底边缘更极端的条带，
+    /// 配合 DockWindow 的 600ms 持续停留判定，降低"鼠标操作窗口底部时误唤出"。</param>
+    public DockLayoutService(double edgeHotZoneHeight = 2d, double bottomMargin = 10d, ISettingsService? settings = null)
     {
         _edgeHotZoneHeight = edgeHotZoneHeight;
         _bottomMargin = bottomMargin;

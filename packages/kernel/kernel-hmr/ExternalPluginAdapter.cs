@@ -133,13 +133,19 @@ public sealed class ExternalPluginAdapter : IPlugin, IResourceSubject, IDisposab
             {
                 return;
             }
-            var psi = new ProcessStartInfo(_executable, string.Join(" ", _arguments))
+            var psi = new ProcessStartInfo(_executable)
             {
                 UseShellExecute = false,
                 CreateNoWindow = true,
                 RedirectStandardError = true,
                 RedirectStandardOutput = false
             };
+            // C1：参数**逐项**加入 —— 构造函数注释早已写明"禁 shell 拼接，数组直传"，
+            // 此处把实现补齐：拼接会让含空格的参数被拆成两个，且参数自身带引号时语义不可控。
+            foreach (var argument in _arguments)
+            {
+                psi.ArgumentList.Add(argument);
+            }
             try
             {
                 _process = Process.Start(psi);

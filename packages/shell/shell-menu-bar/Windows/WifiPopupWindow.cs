@@ -362,8 +362,8 @@ internal sealed class WifiPopupWindow : MenuBarPopupWindow
         var outer = new Border
         {
             CornerRadius = new CornerRadius(8),
-            // 已连接块：加深的蓝色（原 alpha 60 过淡，与毛玻璃背景对比弱）
-            Background = new SolidColorBrush(Color.FromArgb(150, 20, 110, 255)),
+            // 已连接块：加深的强调色（原 alpha 60 过淡，与毛玻璃背景对比弱）
+            Background = ThemeBrushes.Tint("SkinAccentFromSkin", 0.59),
             Margin = new Thickness(8, 4, 8, 4),
             Padding = new Thickness(10, 10, 10, 10)
         };
@@ -402,7 +402,7 @@ internal sealed class WifiPopupWindow : MenuBarPopupWindow
             Margin = new Thickness(8, 0, 0, 0),
             VerticalAlignment = VerticalAlignment.Center,
             Cursor = System.Windows.Input.Cursors.Hand,
-            Background = new SolidColorBrush(Color.FromArgb(120, 255, 255, 255)),
+            Background = ThemeBrushes.Tint("ThemeForeground", 0.47),
             BorderBrush = Brushes.Transparent,
             BorderThickness = new Thickness(0)
         };
@@ -514,7 +514,7 @@ internal sealed class WifiPopupWindow : MenuBarPopupWindow
             Margin = new Thickness(8, 0, 8, 0),
             Cursor = System.Windows.Input.Cursors.Hand,
             Background = isCurrent
-                ? new SolidColorBrush(Color.FromArgb(110, 20, 110, 255))
+                ? ThemeBrushes.Tint("SkinAccentFromSkin", 0.43)
                 : Brushes.Transparent
         };
         row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });

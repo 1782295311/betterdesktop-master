@@ -11,12 +11,14 @@
 ## 依赖
 
 - `BetterDesktop.Kernel`（IContext / IPlugin / IKernelLogger）
+- `BetterDesktop.Api`（Recent 域契约：IRecentItemsService / RecentItem）
 - `BetterDesktop.Shell.AppSource`（IAppSourceService / AppItem）
 - `BetterDesktop.Shell.WindowTracker`（IWindowTrackerService，前台变化追踪）
+- `BetterDesktop.Shell.Core`
 
 ## 对外扩展点
 
-- 消费方经 `Inject` 依赖 `IRecentItemsService` 即可读取最近程序/文档、读写跳转列表固定项。
+- 消费方经 `Inject` 依赖 `IRecentItemsService`（契约位于 BetterDesktop.Api，Recent 域）即可读取最近程序/文档、读写跳转列表固定项。
 - 前台追踪随服务构造自动开启（`RecentPlugin` 注入 `IWindowTrackerService` 后 Provide），卸载时退订。
 
 ## Known Limitations

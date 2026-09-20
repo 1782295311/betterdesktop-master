@@ -47,11 +47,15 @@ public static class ConvertEngineLocator
 
         var programFiles = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles);
         var programFilesX86 = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86);
-        candidates.Add(Path.Combine(programFiles, "LibreOffice", "program", "soffice.exe"));
-        candidates.Add(Path.Combine(programFilesX86, "LibreOffice", "program", "soffice.exe"));
+        // 2026-09-10 弹窗根因修复：soffice.exe PE 子系统=GUI，GUI 父进程（宿主）启动它执行 --version 时会
+        // 主动 AllocConsole 弹控制台窗（重定向拦不住）——统一改用 soffice.com（PE=Console，重定向后不建控制台）。
+        candidates.Add(Path.Combine(programFiles, "LibreOffice", "program", "soffice.com"));
+        candidates.Add(Path.Combine(programFilesX86, "LibreOffice", "program", "soffice.com"));
+        // 受管内置（2026-09-10：LibreOffice 26.8.0 MSI 管理安装点提取，标准结构；pandoc/poppler 同款三链内置）
+        candidates.Add(Path.Combine(AppContext.BaseDirectory, "engines", "libreoffice", "program", "soffice.com"));
         // 便携运行时（dependency-on-demand 约定的受管目录）
         candidates.Add(Path.Combine(AppContext.BaseDirectory, "engines", "libreoffice", "LibreOfficePortable",
-            "App", "libreoffice", "program", "soffice.exe"));
+            "App", "libreoffice", "program", "soffice.com"));
 
         _sofficePath = candidates.FirstOrDefault(File.Exists) ?? string.Empty;
         if (_sofficePath.Length == 0)

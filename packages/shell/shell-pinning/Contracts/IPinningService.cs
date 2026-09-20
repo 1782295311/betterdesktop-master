@@ -34,4 +34,14 @@ public interface IPinningService
 
     /// <summary>固定列表变更（新增 / 移除 / 排序）通知，携带变更发生的 zone 与新状态。</summary>
     event EventHandler<PinnedChangedEventArgs>? PinnedChanged;
+
+    /// <summary>
+    /// 静默回写固定项快照（路径自愈 / 手动重绑用）：按 <paramref name="appId"/> 定位，把快照的路径信息
+    /// 替换为 <paramref name="appItem"/> 的，**保持原主键不变**，且**不触发** <see cref="PinnedChanged"/>。
+    /// <para><b>为什么保持主键</b>：主键是「这次固定」的身份——分组归属（AppGroupStore）与排序都以它为键，
+    /// 换成新路径派生的主键会连带丢失分组。</para>
+    /// <para><b>为什么不发事件</b>：回写发生在「读取固定列表」过程中（显示层已用新路径渲染），
+    /// 再发事件会形成「事件 → 重绘 → 再读取 → 再回写」的重入。</para>
+    /// </summary>
+    void UpdateSnapshot(string zone, AppItemId appId, AppItem appItem);
 }

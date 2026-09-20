@@ -27,7 +27,7 @@ use crate::components::Component;
 /// 托盘回调消息（自定义区间起点）。
 pub const WM_TRAYICON: u32 = windows::Win32::UI::WindowsAndMessaging::WM_APP + 1;
 
-/// 菜单命令 id：退出。
+/// 菜单命令 id：退出（**正常退出** = 撤掉崩溃兜底 + 写停止标记，见 `main::disarm_fallback_then_quit`）。
 pub const CMD_QUIT: usize = 1;
 /// 菜单命令 id 基址：`CMD_START_BASE + index` = 启动组件表第 index 条。
 pub const CMD_START_BASE: usize = 1000;
@@ -279,7 +279,7 @@ pub enum MenuAction {
     About,
     /// 卸载（**不可逆**；会先停监护、再拉起脚本、最后退出 core）。
     Uninstall,
-    /// 退出 core。
+    /// 退出 core。**正常退出**（与崩溃相对）：撤掉兜底 + 写停止标记，此后不会被再拉回来。
     Quit,
 }
 
@@ -646,7 +646,9 @@ pub fn show_menu(
         let _ = AppendMenuW(menu, MF_STRING, CMD_UNINSTALL, PCWSTR(uninstall.as_ptr()));
 
         let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
-        let quit = to_wide("退出 BetterDesktop Core");
+        // 文案必须点明后果（与「停止 X」那组菜单同一纪律）：这条退出会**撤掉崩溃兜底**，
+        // 此后 core 不会被自动拉起，直到用户显式启动它。写"退出"两个字会让人以为"崩了还会回来"。
+        let quit = to_wide("退出 BetterDesktop Core（不再自动拉起）");
         let _ = AppendMenuW(menu, MF_STRING, CMD_QUIT, PCWSTR(quit.as_ptr()));
 
         let mut pt = POINT::default();

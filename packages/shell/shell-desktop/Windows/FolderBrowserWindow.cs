@@ -351,7 +351,7 @@ public sealed class FolderBrowserWindow : ShellWindow
             }),
             new MouseGesture(MouseAction.LeftDoubleClick));
         cell.InputBindings.Add(dbl);
-        cell.MouseEnter += (_, _) => cell.Background = new SolidColorBrush(Color.FromArgb(40, 0x80, 0x80, 0x80));
+        cell.MouseEnter += (_, _) => cell.Background = ThemeBrushes.Tint("ThemeForeground", 0.16);
         cell.MouseLeave += (_, _) => cell.Background = Brushes.Transparent;
 
         return cell;

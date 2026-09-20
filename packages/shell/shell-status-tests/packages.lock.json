@@ -107,19 +107,27 @@
       "betterdesktop.kernel": {
         "type": "Project"
       },
+      "betterdesktop.shell.clipboard.ipc": {
+        "type": "Project",
+        "dependencies": {
+          "BetterDesktop.Api": "[1.3.0, )",
+          "BetterDesktop.Kernel": "[1.3.0, )"
+        }
+      },
       "betterdesktop.shell.core": {
         "type": "Project",
         "dependencies": {
-          "BetterDesktop.Api": "[1.0.0, )",
-          "BetterDesktop.Kernel": "[1.0.0, )"
+          "BetterDesktop.Api": "[1.3.0, )",
+          "BetterDesktop.Kernel": "[1.3.0, )",
+          "BetterDesktop.Shell.Clipboard.Ipc": "[1.3.0, )"
         }
       },
       "betterdesktop.shell.status": {
         "type": "Project",
         "dependencies": {
-          "BetterDesktop.Api": "[1.0.0, )",
-          "BetterDesktop.Kernel": "[1.0.0, )",
-          "BetterDesktop.Shell.Core": "[1.0.0, )"
+          "BetterDesktop.Api": "[1.3.0, )",
+          "BetterDesktop.Kernel": "[1.3.0, )",
+          "BetterDesktop.Shell.Core": "[1.3.0, )"
         }
       }
     }

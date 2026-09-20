@@ -1,208 +1,131 @@
-# shell-dock（Dock 插件 · 深度设计稿）
-
-> 状态：**核心已实现**（见 §0 现状盘点），本文给出完整目标设计，标 ★ 为待办/修复项。
-
-## 0. 现状盘点（2026-08-22 实地核查）
-
-已实现（真实代码）：
+# shell-dock（Dock 插件 · 深度设计稿）
 
-- `DockPlugin`（`IPlugin`，`Name="shell.dock"`，`Inject=[IVibrancyService]`）：托管 DockWindow + **AppGrabberWindow（应用管理中心）+ LaunchpadWindow + NewAppsNotificationWindow**；启动即显示 Launchpad；新装应用 3s 首查 / 60s 轮询。
-- `DockAppsService`（门面）：消费 `IAppSourceService`，固定列表持久化 `dock-pinned.json`，去重/排序/`PinnedChanged`。
-- `DockIconService` + `Win32IconProvider`：真实图标异步加载/缓存/预取。
-- `DockLayoutService`：布局度量 / 底部边缘悬停 / 全屏隐藏判定。
-- `RunningAppDetector`：`EnumWindows` 枚举可见顶层窗口（过滤 TOOLWINDOW/cloaked/无标题/自身进程），`ActivateWindow`。
-- `DockService`：运行项单一事实来源。
-- 模型：`DockItemData`（含 `AppUserModelId`）/ `DockItemId` / `DockAppType` / `DockLayoutMetrics`。
-- `DwmThumbnail` + `DwmThumbnailInterop`：DWM 窗口缩略图雏形。
-- `FolderInputWindow` / `MinimalDockWindow` / `DockFlyoutWindow`。
-- **已统一（正面事实）**：全部 6 个窗口（Dock / AppGrabber / Launchpad / DockFlyout / MinimalDock / NewAppsNotification）均继承 `shell-core.Surface.ShellWindow` 统一基类（无边框/透明/置顶 + `ApplyWindowMaterial` 毛玻璃入口 + `OnLoadedCore` 钩子）。
-- 测试：`DockAppsServiceTests` / `DockIconServiceTests` / `DockLayoutServiceTests`。
-
-## 0.1 发现的问题（★ 修复项）
-
-| # | 问题 | 级别 | 处理 |
-|---|------|------|------|
-| P1 | `IDockPinnedService`/`DockPinnedService` 是**死代码**（无任何接线） | P1 | 复活为"固定列表"公共契约，供 AppGrabber/Launchpad 消费 |
-| P1 | `DockService.RemoveItem/ReorderItems/SetItemActive` 按 **Name** 操作，与 `AddItem/UpdateItem` 按 **Id** 不一致，与主键规则冲突 | P1 | 统一改为 `DockItemId` |
-| P2 | shell-dock README 声称"图标/自动隐藏仅定义接口"，实际已实现（文档脱节） | P2 | 更新 README |
-| P2 | `DockAppsServiceTests` 用单参构造 `new DockAppsService(storage)`，与现实现（2 参构造）不匹配，**实跑确认编译失败（CS7036 ×5）** | P2 | 更新测试为 2 参构造（或补单参便捷构造） |
-| P3 | AppGrabber / Launchpad 长在 DockPlugin 内，Dock 卸载会连带关闭所有 UI 表面 | P3 | 拆分（见 §12） |
-| P2 | **残留重复实现**：①`Services/ShellLinkResolver.cs` 与 app-source 版重复（8 处使用，返回 `DockAppType` 分叉）；②图标提取栈 `IIconProvider`/`Win32IconProvider`/`DockIconService` 本属 app-source 职责（README 声明的 `IAppIconService` 从未实现） | P2 | 上移合并至 shell-app-source（方案见 `shell-app-source/DESIGN.md §0.2`） |
-
-## 1. 目标与边界
-
-**做什么**：Dock 本体——固定应用展示、运行中应用呈现（运行检测/激活/缩略图）、布局/自动隐藏/全屏感知、固定项交互（点击启动/切换、拖拽排序、右键菜单调用 `IMenuService`）。 **不做什么**：不直接扫描应用（走 `IAppSourceService`）；不自绘右键菜单（走 `shell-context-menu`）；应用管理中心与 Launchpad 拆出独立插件（§12）；不替换系统 Shell（FrostedShell 教训）。
-
-## 2. 架构
-
-```
-shell-dock (IPlugin)
-├── DockPlugin            # 入口：Inject IVibrancyService + IAppSourceService；Provide Dock 服务
-├── DockWindow            # Dock 主窗口（固定区 + 运行区 + 缩略图）
-├── DockService           # 运行项单一事实来源（★ 修复主键）
-├── DockAppsService       # 固定列表门面（★ 改为 Inject 消费 IAppSourceService）
-├── DockPinnedService     # ★ 复活：公共"固定列表"契约实现（AppGrabber/Launchpad 消费）
-├── DockLayoutService     # 布局/边缘/全屏
-├── RunningAppDetector    # 运行窗口枚举 + 激活
-├── DwmThumbnail*         # DWM 窗口缩略图
-└── Controls/DockItem     # 单项控件（悬停放大/标签/角标）
-```
-
-依赖：`BetterDesktop.Kernel`、`shell-core`（Vibrancy/Animation/Surface）、`shell-app-source`（扫描/图标）；不再直接依赖 AppSource 实现类。
-
-## 2.1 落实跟踪（2026-08-22 复核）
-
-- ✅ `DockPlugin.Inject = [IVibrancyService, IAppSourceService, IAppIconService]`，`context.Get<>()` 消费，不再手动 new。
-- ✅ **`IDockPinnedService` 死代码复活**：`new DockPinnedService(...)` + `context.Provide<IDockPinnedService>`。
-- ✅ **`DockService` 主键统一 `DockItemId`**（RemoveItem/ReorderItems/SetItemActive 均按 Id）。
-- ✅ 图标去重：`DockIconService(IAppIconService)`，`IIconProvider`/`Win32IconProvider`/`ShellLinkResolver` 已删；新增 `AppSourceConverter`（AppSource→DockAppType 映射）。
-- ✅ 测试重写为 `FakeAppSource` mock（原 P2 编译失败已修复）；新增 `WindowCreationReproTests`。
-- ✅ 构建实证：0 警告 0 错误（连带 kernel/core/app-source 全过）。
-- ⏳ 仍待办（建议项，非阻塞）：AppGrabber / Launchpad 拆独立 `shell-app-center` 插件（当前仍在 `DockPlugin` 内，Dock 卸载会连带关闭）。
-
-## 3. 领域模型
-
-```csharp
-sealed record DockItemData   // 已存在，保持
-{
-    required DockItemId Id;          // 稳定主键
-    required string Name;
-    required string ShortcutPath;
-    required string TargetPath;
-    required DockAppType AppType;    // Win32 | Uwp | Url
-    string? AppUserModelId;
-    string? IconCacheKey;
-    bool IsRunning;
-    bool IsPinned = true;
-    int BadgeCount;
-}
-
-record RunningItem(DockItemId SourceId, IntPtr Hwnd, string ExePath, string Title);  // ★ 运行模型
-```
-
-## 4. 内核集成（真实契约 IPlugin）
-
-```csharp
-public sealed class DockPlugin : IPlugin
-{
-    public string Name => "shell.dock";
-    public IReadOnlyList<Type> Inject => new[]
-    {
-        typeof(IVibrancyService),        // 毛玻璃
-        typeof(IAppSourceService)        // 应用扫描/图标
-    };
-
-    public async Task LoadAsync(IContext context, CancellationToken ct = default)
-    {
-        var appSource = context.Get<IAppSourceService>()!;
-        var apps = new DockAppsService(appSource, /* dock-pinned.json */);
-        context.Provide<IDockAppsService>(apps);
-        context.Provide<IDockPinnedService>(new DockPinnedService(appSource, /* path */));  // ★ 复活
-        context.Provide<IDockIconService>(new DockIconService(/* IAppIconService */));      // ★ 图标来自 app-source
-        // 创建 DockWindow（不含 AppGrabber/Launchpad——它们已是独立插件）
-        _dockWindow = new DockWindow(..., this);
-        _dockWindow.Show();
-    }
-
-    public Task UnloadAsync(CancellationToken ct = default) { _dockWindow?.Close(); return Task.CompletedTask; }
-}
-```
-
-## 5. 公共契约（语义）
-
-```csharp
-interface IDockAppsService      // 固定列表门面（保留现状）
-{
-    IReadOnlyList<DockItemData> Pinned { get; }
-    void Load(); void Save();
-    void AddByPath(string path);
-    void RemoveById(DockItemId id);
-    void Reorder(IReadOnlyList<DockItemId> order);
-    event EventHandler? PinnedChanged;
-}
-
-interface IDockPinnedService    // ★ 复活：AppGrabber/Launchpad 只读消费
-{
-    IReadOnlyList<DockItemData> Pinned { get; }
-    event EventHandler? PinnedChanged;
-}
-
-interface IDockService          // 运行项单一事实来源（★ 统一主键）
-{
-    IReadOnlyList<DockItemData> Items { get; }
-    void SetRunning(IEnumerable<DockItemId> runningIds);   // 由运行检测结果驱动
-    event EventHandler? RunningChanged;
-}
-
-interface IDockLayoutService    // 保留现状
-{
-    DockLayoutMetrics Measure(int screenWidth, int screenHeight, int iconCount);
-    bool ShouldShowOnEdgeHover(Point cursorScreenPoint);
-    bool ShouldHideOnFullscreen();
-}
-```
-
-- `SetRunning` 应为**整体替换**语义（以检测结果为准），而非逐项 toggle，避免竞态。
-- 运行检测结果与固定列表的合并（固定项显示运行态、未固定运行项追加到运行区）在 DockWindow 内完成，`IDockService` 只存运行项。
-
-## 6. 配置
-
-- `dock.ini`：位置（底部居中）、图标尺寸（48 基线）、间距、自动隐藏开关、全屏隐藏开关、动画参数（悬停 1.2×/200ms、点击 0.95×/100ms）。
-- 持久化：`dock-pinned.json`（固定列表）+ 布局偏好。
-
-## 7. 数据流
-
-```
-运行检测（RunningAppDetector 周期/事件）
-  → IDockService.SetRunning(整体替换)
-  → DockWindow 合并固定+运行 → DockItem 渲染（运行态/角标）
-
-固定变更（AddByPath/RemoveById/Reorder）
-  → IDockAppsService.PinnedChanged
-  → DockWindow 重绘 + AppGrabber/Launchpad（经 IDockPinnedService）同步
-
-交互（点击/右键/拖拽）
-  → 启动：ShellLinkResolver 目标 / ActivateFirstWindowOf
-  → 右键：IMenuService.ShowAsync（shell-context-menu）
-```
-
-## 8. 跨插件协作
-
-- 消费 `IAppSourceService` / `IAppIconService`（shell-app-source）。
-- 窗口一律继承 `ShellWindow`（shell-core）；屏幕/DPI 几何用 `IDesktopSurface`（主窗 HWND 用 `IWindowHandleService`），Dock 布局不再自算屏幕边界。
-- 调用 `IMenuService`（shell-context-menu）渲染右键，不自绘。
-- 消费 ThemeCenter 令牌控制外观（★ 待接入）。
-- AppGrabber / Launchpad 拆为独立插件后经 `IDockPinnedService` 只读联动。
-
-## 9. 错误处理
-
-- 运行检测/图标加载失败：单项跳过，Dock 不崩（现状已满足）。
-- 持久化失败：保持内存状态，记录诊断（现状已满足）。
-- 全屏判定：无边框全屏窗口可能需要额外校准（已知限制保留）。
-
-## 10. 性能
-
-- 图标异步 + 缓存 + 预取（现状已满足）。
-- 运行检测节流（如 1-2s 周期），避免高频 EnumWindows。
-- 缩略图延迟生成，Dock 可见时才更新。
-
-## 11. 验收
-
-- [ ] Dock 显示固定应用 + 运行中应用，真实图标
-- [ ] 点击固定项：未运行→启动；运行→切换高亮（可激活首窗口）
-- [ ] 边缘悬停显示、全屏隐藏
-- [ ] 拖拽排序持久化
-- [ ] 右键菜单经 `IMenuService` 弹出（而非自绘）
-- [ ] `IDockPinnedService` 复活并被 AppGrabber/Launchpad 消费
-- [ ] 卸载 Dock 不连带关闭 AppGrabber/Launchpad（拆分后）
-
-## 12. 结构决策：AppGrabber / Launchpad 拆分（★ 建议）
-
-- **现状**：AppGrabber（应用管理中心）与 Launchpad 是独立 UI 表面，却长在 `DockPlugin` 内，Dock 卸载会连带关闭全部。
-- **建议**：拆为独立插件 `shell-app-center`（应用管理中心 + Launchpad），`Inject: [IAppSourceService, IDockPinnedService, IVibrancyService]`；Dock 只保留 Dock 本体。这符合"一切皆插件、按插件独立设计"原则，也让 AppGrabber 可被右键菜单"打开应用中心"等入口独立调用。
-- 若暂不拆分（小步快跑），至少把 AppGrabber/Launchpad 的窗口管理与生命周期从 `DockPlugin` 抽到独立 `AppCenterHost` 类，为拆分留缝。
-
-## 13. 开放问题
-
-- 运行检测用轮询还是 `WinEventHook` 事件驱动（性能/复杂度取舍）。
-- 缩略图浮层是否复用 `shell-context-menu` 的 MenuHost 弹层机制。
+> 状态：**现行实现态（v1.3，2026-09-10 重写同步）**。本文与代码逐一核对过：契约/文件/行为均为当前真实状态。
+> 文档时间序（早的在前）：第 1 节「版本沿革」按升序记录演进；与 2026-08-22 旧稿的差异已全部吸收进正文，旧稿可弃。
+> 交叉引用：应用来源/图标上游见 `shell-app-source/DESIGN.md`；契约见 `packages/api/Dock/`。
+
+## 1. 版本沿革（时间升序，早 → 新）
+
+| 时间 | 事件 | 要点 |
+|---|---|---|
+| 2026-08-22 | 初版设计稿 + 复核收口 | 独立 `IPlugin`（`shell.dock`） Inject 消费 app-source（不再手动 new）；`DockService` 主键统一 `DockItemId`；图标栈去重（删 `IIconProvider`/`Win32IconProvider`/分叉 ShellLinkResolver，`DockIconService` 改包装 `IAppIconService`）；测试改 `FakeAppSource` mock |
+| 2026-09-02 | AppBar 锚定重构 + 任务栏接管 | dock 底边锚定**屏幕底边**（非工作区底）：`DockAppBarReservation.GetMonitorBounds` 整屏矩形，AppBar 协商"抬升→再定位"免疫；Bootstrap 落定 `components.dock` 启用即隐藏原生任务栏（`NativeTaskbarManager`，退出恢复） |
+| 2026-09-05 | 菜单自管化（中央管线退役） | dock 菜单收归自管：`DockMenuPopup`（WPF ContextMenu）+ `DockItemTemplate`（DockWindow ctor 无条件创建，规避插件装配顺序取 null）；全项目自研右键仅存 dock 图标 + 应用提取器两处 |
+| 2026-09-06 | 交互修复 + 批量排序 + 跨包事件 | 拖拽重排"失灵"根因修复（容器 `CaptureMouse` + `FinishReorderDrag` 幂等收尾 + `LostMouseCapture` 兜底提交）；AppGrabber 恢复"批量排序"模式 + 分段控件重构；新增 IEventBus 事件 `shell.appgrabber.show`（菜单栏 Logo 菜单跨包打开应用提取器） |
+| 2026-09-07 | 组件开关热建 | `components.dock=false` 启动也完成依赖前置与事件订阅，运行中开→关热建窗口（BuildDockWindow 复用），无需重启宿主 |
+| 2026-09-10 | 文档重写 | 本 DESIGN.md 按当前代码全量重写（旧稿中 Launchpad/FolderInput/MinimalDock/通知/缩略图等已被拆分或合并，见 §3） |
+
+## 2. 目标与边界
+
+**做什么**：Dock 本体——底部条带（固定应用 + 运行中应用）、AppBar 屏幕底边预留、自动隐藏/贴边唤出、运行态/角标、缩略图交互、拖拽重排、右键菜单（自管）、点击启动/切换；附带**应用提取器**（AppGrabberWindow，已融合原 Launchpad 能力：全应用列表/搜索/分组/批量排序/固定管理）。
+
+**不做什么**：不直接扫描应用（走 `IAppSourceService`）；不做通用右键菜单服务（中央管线已退役，右键全项目收口为「桌面/文件系统→系统原生，dock+应用提取器→自研」）；不替换系统 Shell。
+
+## 3. 架构（当前真实文件清单）
+
+```
+packages/api/Dock/                        # 契约 + 模型（公共 API 包）
+├── IDockAppsService / IDockIconService / IDockService / IDockLayoutService
+└── DockItemData / DockItemId / DockAppType / DockLayoutMetrics
+
+packages/shell/shell-dock/                # 实现（引用：Kernel + Api + shell-core + shell-app-source）
+├── DockPlugin.cs                         # 入口：Inject 5 服务；Provide 3 门面；components.dock 热建
+├── DockTickPolicy.cs                     # 自适应节拍（快 60ms / 慢 250ms，纯函数裁决）
+├── DockWindow.xaml(.cs) + DockWindow.AppBar.cs   # 主窗口（124KB）+ AppBar 协商 partial
+├── Controls/DockItem.xaml(.cs)           # 单项控件（悬停放大/标签/角标/运行指示）
+├── Native/
+│   ├── DockAppBarReservation.cs          # AppBar 登记 + GetMonitorBounds（整屏，底边锚定基准）
+│   ├── MultitaskingViewVisibilityService.cs   # Win+Tab 任务视图可见性检测（隐藏配合）
+│   └── KeyboardInterop.cs
+├── Services/
+│   ├── DockAppsService.cs                # 固定列表门面（IPinningService("dock") + dock-pinned.json）
+│   ├── DockIconService.cs                # 图标门面（包装 IAppIconService + 视觉设置）
+│   ├── DockService.cs                    # 运行项单一事实来源（主键 DockItemId）
+│   ├── DockLayoutService.cs              # 布局度量（bottomMargin 随屏底边）
+│   ├── DockMenuPopup.cs                  # 自管右键弹层（WPF ContextMenu，光标/指定坐标）
+│   ├── DockItemTemplate.cs               # 条目模板（DockWindow ctor 无条件创建）
+│   ├── DockVisualSettings.cs             # 视觉设置（设置键订阅 + 事件广播）
+│   ├── AppSourceConverter.cs             # AppItem→DockItemData 映射
+│   ├── AppGroupStore.cs                  # 应用分组持久化（Groups{Name,Members}）
+│   ├── PinyinMatcher.cs                  # 搜索拼音匹配（AppGrabber）
+│   └── NullIconService.cs                # 未注入时的无操作实现
+└── Windows/AppGrabberWindow.cs           # 应用提取器（57KB；已融合 Launchpad；批量排序/分段控件/搜索）
+```
+
+**已不在本包**（旧稿读者注意）：`NewAppsNotificationWindow` → `shell-notification`；`DwmThumbnail` → `shell-window-tracker`；`RunningAppDetector` → `IWindowTrackerService`（window-tracker）；`LaunchpadWindow`/`FolderInputWindow`/`MinimalDockWindow` → 已删/被 AppGrabber 融合；`IDockPinnedService` → 由通用 `IPinningService`（shell.pinning）承载。
+
+## 4. 内核集成（当前真实接线）
+
+```csharp
+public IReadOnlyList<Type> Inject => new[]
+{
+    typeof(IVibrancyService),      // 毛玻璃
+    typeof(IAppSourceService),     // 应用扫描
+    typeof(IAppIconService),       // 图标
+    typeof(IWindowTrackerService), // 运行窗口检测
+    typeof(IPinningService),       // 固定列表（"dock" 作用域）
+};
+// 另经 context.Get 取用：ISettingsService / IEventBus / IAppearanceService / IFileClassifier（可空降级）
+// Provide：IDockAppsService / IDockIconService / DockVisualSettings
+```
+
+- `components.dock`（默认 true）关闭：LoadAsync 只做依赖前置与事件订阅，不建窗口；运行中切回开启经 `BuildDockWindow` 热建（服务/窗口全部重建，事件先退订再订阅防重）。
+- `components.dock` 启用 → Bootstrap 联动隐藏原生任务栏（`NativeTaskbarManager.SetTaskbarVisible`），Exit 无条件恢复；桌面图标避让基准 = Shell_TrayWnd 实际可见高度（desktop 侧联动，dock 不参与估算）。
+
+## 5. 公共契约（语义，与 api/Dock 逐字对齐）
+
+```csharp
+interface IDockAppsService     // 固定列表门面（经 IPinningService("dock") 持久化 dock-pinned.json）
+interface IDockIconService     // 图标门面（GetIconAsync / 缓存 / 预取，IAppIconService 包装）
+interface IDockService         // 运行项单一事实来源（SetRunning 整体替换语义，防竞态）
+interface IDockLayoutService   // 布局度量 / 边缘悬停 / 全屏隐藏判定
+```
+
+- 固定变更链：`PinnedChanged` → DockWindow 重绘 + AppGrabber 同步；运行合并（固定项显示运行态、未固定运行项追加）在 DockWindow 内完成。
+- 跨包 UI 事件：`shell.appgrabber.show`（IEventBus）——菜单栏 Logo 菜单 → DockPlugin 订阅 → 切 Dispatcher 打开 AppGrabberWindow；`components.dock` 关闭时订阅不挂，emit 无害 no-op。
+
+## 6. 菜单体系（自管，中央管线已退役）
+
+- 09-05 拍板：全项目自研右键菜单**仅存两处**——dock 图标、应用提取器；其余表面一律系统原生（桌面/文件系统右键转系统）。
+- 实现：`DockItemTemplate` 在 `DockWindow` ctor **无条件创建**（不依赖插件装配顺序，`IFileClassifier` 可空降级——"dock 菜单全失"根因即装配顺序，已根治）；弹层 = `DockMenuPopup`（WPF ContextMenu，光标/指定坐标两入口）；「固定到 Dock」中央贡献者随管线退役。
+
+## 7. AppBar / 隐藏 / 唤出
+
+- **底边锚定屏幕底边**：AppBar 缓存 `_appBarScreen`（`DockAppBarReservation.GetMonitorBounds` 整屏矩形，不受工作区抬升影响），纵向基准 = screen.Bottom − `dock.bottomMargin`；"协商→抬升→再定位"循环免疫。
+- **原生任务栏**：dock 启用即被 Bootstrap 隐藏（互斥共建底部条带）；桌面图标避让基准不依赖 dock。
+- **自动隐藏**：空闲阈值制（任何系统输入即不隐藏）；淡出完成后**先 `SetMaterialSuspended(true)`（清 DWM 背景）再 Hide + ReleaseAppBar**，唤出 Show 后恢复材质再淡入——防止隐藏后原地残留半透明玻璃带（DWM 材质不随 WPF Opacity 变化）。
+- **任务视图**：`MultitaskingViewVisibilityService`（QueryService Shell → IsViewVisible 轮询）配合 Win+Tab 期间的处理。
+- **节拍**：`DockTickPolicy.NextIntervalMs(statePending, cursorNearDock)` 快 60ms / 慢 250ms 自适应，纯函数可测。
+
+## 8. 交互红线（踩坑沉淀，勿回退）
+
+1. **拖拽重排**：进入拖拽（>6px 阈值）必须 `container.CaptureMouse()`；收尾统一 `FinishReorderDrag`（先清状态再 ReleaseMouseCapture，幂等）；`LostMouseCapture` 也要提交（防系统夺捕获丢排序）。
+2. **模板创建**：`DockItemTemplate` 必须在 DockWindow ctor 无条件创建（跨插件 Provide/Get 不可假设装配顺序）。
+3. **运行检测**：`IDockService.SetRunning` 整体替换语义；运行/固定合并在 DockWindow 内完成。
+4. **持久化失败**：保持内存状态，记录诊断，不崩。
+
+## 9. 配置
+
+- 设置键（经 `DockVisualSettings` 订阅实时生效）：`dock.bottomMargin`、视觉参数等；
+- 持久化：`dock-pinned.json`（固定列表，经 IPinningService）、应用分组（AppGroupStore）。
+
+## 10. 性能
+
+- 图标异步 + 缓存 + 预取（上游 IAppIconService）；
+- 运行检测节流 + DockTickPolicy 自适应拍；
+- 缩略图延迟生成（窗口可见才更新）；DWM 缩略图实现已上移 shell-window-tracker。
+
+## 11. 验收现状
+
+- ✅ 固定 + 运行应用呈现、真实图标（上游高清通道）
+- ✅ 点击启动/切换、拖拽重排（捕获修复后）持久化
+- ✅ 屏幕底边锚定 AppBar、空闲自动隐藏（材质挂起防残影）、全屏/任务视图配合
+- ✅ 右键自管菜单（DockMenuPopup）；AppGrabber 批量排序/搜索/分组
+- ✅ 原生任务栏联动隐藏/恢复；单测 11 例全绿（DockAppsService/FakeAppSource 等）
+- ⏳ 开放：运行检测轮询 vs WinEventHook 事件驱动；AppGrabber 拆独立插件（当前在 DockPlugin 内，dock 卸载连带关闭）
+
+## 12. 开放问题
+
+1. AppGrabber 拆分为独立 `shell-app-center` 插件（§11 待办，需先抽 AppCenterHost 生命周期）；
+2. 运行检测事件化取舍；
+3. 缩略图浮层与窗口预览的进一步交互（peek 语义已在 window-tracker 侧）。

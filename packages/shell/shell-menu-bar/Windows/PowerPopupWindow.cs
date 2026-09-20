@@ -232,7 +232,7 @@ internal sealed class PowerPopupWindow : MenuBarPopupWindow
         var text = new TextBlock
         {
             Text = _pendingConfirm is null ? "" : $"已切换至「{_pendingConfirm}」",
-            Foreground = new SolidColorBrush(Color.FromArgb(235, 96, 206, 152)),
+            Foreground = ThemeBrushes.Get("StatusSuccess"),
             FontSize = 12,
             FontWeight = FontWeights.Medium,
             Margin = new Thickness(12, 1, 12, 1),
@@ -284,10 +284,10 @@ internal sealed class PowerPopupWindow : MenuBarPopupWindow
         };
         _batFill.BeginAnimation(Rectangle.HeightProperty, heightAnim);
 
-        // 电量档位色：>=40 绿，>=15 橙，<15 红；无电池灰
-        Color color = clamp >= 40 ? Color.FromArgb(255, 76, 230, 154)
-            : clamp >= 15 ? Color.FromArgb(255, 247, 186, 58)
-            : Color.FromArgb(255, 247, 90, 90);
+        // 电量档位色：>=40 绿，>=15 橙，<15 红；无电池灰（语义状态色令牌）
+        Color color = clamp >= 40 ? ThemeBrushes.SuccessColor
+            : clamp >= 15 ? ThemeBrushes.WarningColor
+            : ThemeBrushes.DangerColor;
         if (_batFillBrush is not null)
         {
             _batFillBrush.BeginAnimation(SolidColorBrush.ColorProperty,
@@ -307,10 +307,10 @@ internal sealed class PowerPopupWindow : MenuBarPopupWindow
         // ===== 左侧：真实电池条（填充高度随电量，动画跟随） =====
         double pctValue = info.HasBattery && info.Percentage >= 0 ? info.Percentage : 0;
         double clamp = Math.Clamp(pctValue, 0, 100);
-        Color batColor = clamp >= 40 ? Color.FromArgb(255, 76, 230, 154)
-            : clamp >= 15 ? Color.FromArgb(255, 247, 186, 58)
-            : Color.FromArgb(255, 247, 90, 90);
-        if (!info.HasBattery) batColor = Color.FromArgb(255, 150, 150, 160);
+        Color batColor = clamp >= 40 ? ThemeBrushes.SuccessColor
+            : clamp >= 15 ? ThemeBrushes.WarningColor
+            : ThemeBrushes.DangerColor;
+        if (!info.HasBattery) batColor = Colors.Gray;
 
         // 外壳高度 16：给内腔留足 12，填充到 100% 也不会顶破描边。
         var batGrid = new Grid { Width = 30, Height = 16, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 12, 0) };
@@ -333,7 +333,7 @@ internal sealed class PowerPopupWindow : MenuBarPopupWindow
             Margin = new Thickness(0, 0, 3, 0),
             HorizontalAlignment = HorizontalAlignment.Stretch,
             CornerRadius = new CornerRadius(3),
-            Background = new SolidColorBrush(Color.FromArgb(55, 255, 255, 255)),
+            Background = ThemeBrushes.Tint("ThemeForeground", 0.2),
             BorderBrush = new SolidColorBrush(batColor),
             BorderThickness = new Thickness(1),
             Padding = new Thickness(1, 1, 1, 1),
@@ -364,7 +364,7 @@ internal sealed class PowerPopupWindow : MenuBarPopupWindow
             VerticalAlignment = VerticalAlignment.Center,
             Margin = new Thickness(0, 0, 3, 0), // 与外壳右留白对齐，避开尾部凸起
             IsHitTestVisible = false,
-            Child = PowerGlyph.CreateChargeBolt(new SolidColorBrush(Color.FromArgb(235, 26, 26, 30)))
+            Child = PowerGlyph.CreateChargeBolt(new SolidColorBrush(Colors.Black) { Opacity = 0.92 })
         };
         chargeBolt.Visibility = IsCharging(info) ? Visibility.Visible : Visibility.Collapsed;
         batGrid.Children.Add(chargeBolt);
@@ -426,8 +426,8 @@ internal sealed class PowerPopupWindow : MenuBarPopupWindow
         // 此前用 Segoe MDL2 Assets 字体码位，码位与语义对不上（用户反馈"图标与功能不符"），
         // 且字体缺失时会显示方块。
         var glyphCanvas = PowerGlyph.Create(plan.Kind, plan.IsActive
-            ? new SolidColorBrush(Color.FromRgb(255, 255, 255))
-            : (Brush)new SolidColorBrush(Color.FromArgb(255, 150, 158, 170)));
+            ? Brushes.White
+            : ThemeBrushes.Get("ThemeMutedForeground"));
         var icon = new Border
         {
             Width = 28,
@@ -476,7 +476,7 @@ internal sealed class PowerPopupWindow : MenuBarPopupWindow
         {
             CornerRadius = new CornerRadius(6),
             Background = plan.IsActive
-                ? new SolidColorBrush(Color.FromArgb(60, 90, 163, 255))
+                ? ThemeBrushes.AccentTint(0.24)
                 : Brushes.Transparent,
             Cursor = System.Windows.Input.Cursors.Hand,
             Child = row
@@ -494,13 +494,13 @@ internal sealed class PowerPopupWindow : MenuBarPopupWindow
         outer.MouseEnter += (_, _) =>
         {
             outer.Background = plan.IsActive
-                ? new SolidColorBrush(Color.FromArgb(80, 90, 163, 255))
-                : new SolidColorBrush(Color.FromArgb(40, 255, 255, 255));
+                ? ThemeBrushes.AccentTint(0.31)
+                : ThemeBrushes.Tint("ThemeForeground", 0.16);
         };
         outer.MouseLeave += (_, _) =>
         {
             outer.Background = plan.IsActive
-                ? new SolidColorBrush(Color.FromArgb(60, 90, 163, 255))
+                ? ThemeBrushes.AccentTint(0.24)
                 : Brushes.Transparent;
         };
 

@@ -25,12 +25,12 @@ function New-GoodTree {
 
     Write-TreeFile $root 'packages/kernel/kernel/Deployment/AutostartRegistrar.cs' 'class A { const string N = "BetterDesktop.Tray"; }'
     Write-TreeFile $root 'packages/kernel/kernel/Deployment/DeploymentInfo.cs' 'class D { const string F = "deployment.json"; const string K = "installRoot"; }'
-    Write-TreeFile $root 'tray/AppPaths.cs' 'class P { const string F = "deployment.json"; const string K = "installRoot"; }'
-    Write-TreeFile $root 'tray/SettingsBridge.cs' 'class S { const string N = "BetterDesktop.Tray"; }'
-    Write-TreeFile $root 'tray/TrayApplicationContext.cs' 'class T { const string V = "--system-integration"; }'
+    Write-TreeFile $root 'packages/entry/tray/AppPaths.cs' 'class P { const string F = "deployment.json"; const string K = "installRoot"; }'
+    Write-TreeFile $root 'packages/entry/tray/SettingsBridge.cs' 'class S { const string N = "BetterDesktop.Tray"; }'
+    Write-TreeFile $root 'packages/entry/tray/TrayApplicationContext.cs' 'class T { const string V = "--system-integration"; }'
     # 【S4-4（2026-09-20）】这里原有 `watchdog/Program.cs` 夹具：看门狗退役后它不再是"必需件"，
     # 门禁也不再读它（真树里那个文件已经删掉了）。少了它，本用例的其余契约不受影响。
-    Write-TreeFile $root 'BetterDesktop.Cli/Program.cs' @'
+    Write-TreeFile $root 'packages/entry/cli/Program.cs' @'
 class C {
   const string V = "--system-integration";
   switch (x) { case "status": case "register": case "repair": case "unregister": }
@@ -48,7 +48,7 @@ $required = @('a.exe', 'cordis.yml')
 # BetterDesktop Core Ensure
 '@
     Write-TreeFile $root 'core/src/task.rs' 'pub const TASK_NAME: &str = "BetterDesktop Core Ensure";'
-    Write-TreeFile $root 'recovery/Program.cs' 'class R { const string T = "BetterDesktop Core Ensure"; }'
+    Write-TreeFile $root 'packages/entry/recovery/Program.cs' 'class R { const string T = "BetterDesktop Core Ensure"; }'
     Write-TreeFile $root 'scripts/publish.ps1' @'
 $required = @('a.exe', 'cordis.yml')
 '@
@@ -151,7 +151,7 @@ $required = @('a.exe', 'cordis.yml')
                 # 夹具必须用**门禁确实会读**的必需件。原先用的是 `watchdog/Program.cs` ——
                 # S4-4 删掉那个文件、门禁也随之不再读它之后，这条用例就会"因为夹具消失"而误报失败
                 # （测试没坏，是它依附的东西被移走了）。
-                Remove-Item (Join-Path $root 'tray/SettingsBridge.cs') -Force
+                Remove-Item (Join-Path $root 'packages/entry/tray/SettingsBridge.cs') -Force
                 $output = & pwsh -NoProfile -ExecutionPolicy Bypass -File $scriptPath -RepoRoot $root 2>&1
                 $LASTEXITCODE | Should Be 1
                 ($output -join "`n") | Should Match 'SettingsBridge'

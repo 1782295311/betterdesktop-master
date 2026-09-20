@@ -174,6 +174,45 @@ public sealed class PinningService : IPinningService
     }
 
     /// <inheritdoc />
+    public void UpdateSnapshot(string zone, AppItemId appId, AppItem appItem)
+    {
+        if (appId.IsEmpty || appItem is null)
+        {
+            return;
+        }
+
+        var changed = false;
+        lock (_sync)
+        {
+            if (_zones.TryGetValue(zone, out var list) && list is not null)
+            {
+                var index = list.FindIndex(x => x.AppItem.Id == appId);
+                if (index >= 0)
+                {
+                    // 强制保留原主键：调用方给的新项可能带新路径派生的主键（那会丢分组归属）
+                    var normalized = appItem with { Id = list[index].AppItem.Id };
+                    if (!SnapshotEquals(list[index].AppItem, normalized))
+                    {
+                        list[index] = list[index] with { AppItem = normalized };
+                        changed = true;
+                    }
+                }
+            }
+        }
+
+        if (changed)
+        {
+            // 只落盘，**不发事件**（见接口注释：避免读取期重入）
+            Save();
+        }
+    }
+
+    private static bool SnapshotEquals(AppItem a, AppItem b)
+        => string.Equals(a.Name, b.Name, StringComparison.Ordinal)
+            && string.Equals(a.TargetPath, b.TargetPath, StringComparison.OrdinalIgnoreCase)
+            && string.Equals(a.ShortcutPath, b.ShortcutPath, StringComparison.OrdinalIgnoreCase);
+
+    /// <inheritdoc />
     public void Load()
     {
         try

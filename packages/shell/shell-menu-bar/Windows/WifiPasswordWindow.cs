@@ -140,7 +140,7 @@ internal sealed class WifiPasswordWindow : MenuBarPopupWindow
         _errorText = new TextBlock
         {
             FontSize = 11,
-            Foreground = new SolidColorBrush(Color.FromRgb(0xFF, 0x6A, 0x6A)),
+            Foreground = ThemeBrushes.Get("StatusDanger"),
             Margin = new Thickness(0, 0, 0, 8),
             Visibility = Visibility.Collapsed,
             TextWrapping = TextWrapping.Wrap

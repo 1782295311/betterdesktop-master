@@ -1,0 +1,130 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  BetterDesktopShellMenu — A 路稀疏包（sparse MSIX）清单
+
+  【为什么必须有它】
+  Windows 11 新版右键菜单第一层只显示「有包标识 + IExplorerCommand」的扩展。
+  传统 HKCR\...\ContextMenuHandlers 处理器（B 路）无论怎么写都只会落进
+  「显示更多选项」。要给 DLL 一个包标识，同时又不想把二进制复制进包里，
+  就用**稀疏包**：包里只有本清单 + 图标，真正的 DLL 留在「外部位置」
+  （host 输出目录的 native\ 下），用 Add-AppxPackage -ExternalLocation 关联。
+
+  【GUID 三处一致 + 两种书写形式】
+    代码/注册表（含花括号）          清单（必须无花括号）
+    kBClassic          {7B2E9C41-3D58-4F0A-9E6B-1A4C8D2F5E71}  B 路 IContextMenu，不进包
+    kExplorerFiles     {7B2E9C41-3D58-4F0A-9E6B-1A4C8D2F5E70}  A 路 Type="*"
+    kExplorerBg        {7B2E9C41-3D58-4F0A-9E6B-1A4C8D2F5E72}  A 路 Type="Directory\Background"
+    kExplorerDirectory {7B2E9C41-3D58-4F0A-9E6B-1A4C8D2F5E73}  A 路 Type="Directory"
+
+  ⚠️ 实测（2026-09-11，MakeAppx 10.0.26100，x64）：com:Class/@Id 与 desktop5:Verb/@Clsid
+     写成带花括号会直接失败：
+       error C00CE169: App manifest validation error ... Reason: '{...}' 不匹配
+       '[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}'
+     schema 的 GUID 模式不接受花括号。本文件正文一律无花括号；花括号只出现在上面注释里，
+     方便与 BdShell.h / dllmain.cpp 对照。
+
+  【Version】占位 0.0.0.0 由 scripts/pack-shellmenu-msix.ps1 在打包时替换成
+    1.3.<dayOfYear>.<HHmm>（四段各 <=65535）。同版本重复注册会报 0x80073CF9，
+    所以版本必须每次递增，源码里保持占位符、不在仓库里手改。
+
+  【Identity/@Publisher 必须等于签名证书 Subject】，否则注册直接失败。
+-->
+<Package
+    xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
+    xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
+    xmlns:uap10="http://schemas.microsoft.com/appx/manifest/uap/windows10/10"
+    xmlns:desktop4="http://schemas.microsoft.com/appx/manifest/desktop/windows10/4"
+    xmlns:desktop5="http://schemas.microsoft.com/appx/manifest/desktop/windows10/5"
+    xmlns:com="http://schemas.microsoft.com/appx/manifest/com/windows10"
+    xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
+    IgnorableNamespaces="uap uap10 desktop4 desktop5 com rescap">
+
+  <Identity
+      Name="BetterDesktop.ShellMenu"
+      Publisher="CN=BetterDesktop"
+      Version="0.0.0.0"
+      ProcessorArchitecture="neutral" />
+
+  <Properties>
+    <DisplayName>BetterDesktop 右键快捷功能</DisplayName>
+    <PublisherDisplayName>BetterDesktop</PublisherDisplayName>
+    <Logo>Assets\StoreLogo.png</Logo>
+    <!-- 允许清单之外的「外部位置」承载二进制（正是稀疏包的关键开关） -->
+    <uap10:AllowExternalContent>true</uap10:AllowExternalContent>
+  </Properties>
+
+  <Dependencies>
+    <TargetDeviceFamily Name="Windows.Desktop" MinVersion="10.0.19041.0" MaxVersionTested="10.0.26100.0" />
+  </Dependencies>
+
+  <Resources>
+    <Resource Language="zh-CN" />
+  </Resources>
+
+  <Applications>
+    <!--
+      Executable 相对「外部位置」根解析，只用于让包身份成立；
+      Cli.exe 本就是免宿主执行的入口，选它而不是新造一个壳。
+      AppListEntry="none" 保证它不出现在开始菜单里（我们只要右键菜单入口）。
+    -->
+    <Application Id="ShellMenu"
+        Executable="BetterDesktop.Cli.exe"
+        uap10:TrustLevel="mediumIL"
+        uap10:RuntimeBehavior="win32App">
+      <uap:VisualElements
+          AppListEntry="none"
+          DisplayName="BetterDesktop 右键快捷功能"
+          Description="BetterDesktop 免宿主右键快捷功能（桌面控制 / 格式转换）"
+          BackgroundColor="transparent"
+          Square150x150Logo="Assets\Square150x150Logo.png"
+          Square44x44Logo="Assets\Square44x44Logo.png" />
+      <Extensions>
+        <!--
+          SurrogateServer = 进程外（dllhost.exe）承载，ThreadingModel=STA。
+          菜单构建走 dllhost 而不是 explorer：即使我们代码崩了，也只崩 dllhost，
+          桌面不塌。这正是 B 路（in-proc，与 explorer 同生共死）最怕的事故形态。
+        -->
+        <com:Extension Category="windows.comServer">
+          <com:ComServer>
+            <com:SurrogateServer DisplayName="BetterDesktopShellMenu">
+              <com:Class Id="7B2E9C41-3D58-4F0A-9E6B-1A4C8D2F5E70"
+                         Path="native\BetterDesktopShellMenu.dll"
+                         ThreadingModel="STA" />
+              <com:Class Id="7B2E9C41-3D58-4F0A-9E6B-1A4C8D2F5E72"
+                         Path="native\BetterDesktopShellMenu.dll"
+                         ThreadingModel="STA" />
+              <com:Class Id="7B2E9C41-3D58-4F0A-9E6B-1A4C8D2F5E73"
+                         Path="native\BetterDesktopShellMenu.dll"
+                         ThreadingModel="STA" />
+            </com:SurrogateServer>
+          </com:ComServer>
+        </com:Extension>
+
+        <desktop4:Extension Category="windows.fileExplorerContextMenus">
+          <desktop4:FileExplorerContextMenus>
+            <!-- 选中文件 / 多选文件 -->
+            <desktop5:ItemType Type="*">
+              <desktop5:Verb Id="BetterDesktopConvert"
+                             Clsid="7B2E9C41-3D58-4F0A-9E6B-1A4C8D2F5E70" />
+            </desktop5:ItemType>
+            <!-- 选中文件夹 -->
+            <desktop5:ItemType Type="Directory">
+              <desktop5:Verb Id="BetterDesktopOnFolder"
+                             Clsid="7B2E9C41-3D58-4F0A-9E6B-1A4C8D2F5E73" />
+            </desktop5:ItemType>
+            <!-- 文件夹空白处 / 桌面空白处 -->
+            <desktop5:ItemType Type="Directory\Background">
+              <desktop5:Verb Id="BetterDesktopDesktopControls"
+                             Clsid="7B2E9C41-3D58-4F0A-9E6B-1A4C8D2F5E72" />
+            </desktop5:ItemType>
+          </desktop4:FileExplorerContextMenus>
+        </desktop4:Extension>
+      </Extensions>
+    </Application>
+  </Applications>
+
+  <Capabilities>
+    <rescap:Capability Name="runFullTrust" />
+    <rescap:Capability Name="unvirtualizedResources" />
+  </Capabilities>
+</Package>

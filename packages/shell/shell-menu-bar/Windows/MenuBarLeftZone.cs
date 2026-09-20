@@ -22,7 +22,6 @@ using BetterDesktop.Kernel.Contracts;
 using BetterDesktop.Shell.Core.Contracts;
 using BetterDesktop.Shell.Core.Surface;
 using BetterDesktop.Shell.Core.Vibrancy;
-using BetterDesktop.Shell.Desktop.Contracts;
 using BetterDesktop.Shell.Desktop.Windows;
 using BetterDesktop.Shell.MenuBar.Contracts;
 using BetterDesktop.Shell.MenuBar.Services;
@@ -31,7 +30,8 @@ using BetterDesktop.Shell.WindowTracker.Contracts;
 
 namespace BetterDesktop.Shell.MenuBar.Windows;
 
-/// <summary>菜单栏左区：Logo 快捷功能菜单按钮（三态动画）+ 前台窗口标题 + 常用位置（位置/下载/文档）。</summary>
+/// <summary>菜单栏左区：Logo 快捷功能菜单按钮（三态动画）+ 前台窗口标题 + 常用位置（位置/下载/文档）。
+/// （原文件夹工具条已移除，见构造函数末尾说明。）</summary>
 internal sealed class MenuBarLeftZone : StackPanel, IDisposable
 {
     /// <summary>左区按钮高度（与右区 MenuBarStatusStrip.CreateButton 一致，保持两区对齐）。</summary>
@@ -47,11 +47,9 @@ internal sealed class MenuBarLeftZone : StackPanel, IDisposable
     private readonly IAppearanceService? _appearance;
     private readonly ISettingsWindowService? _settingsWindow;
     private readonly IWindowTrackerService? _windowTracker;
-    private readonly IDesktopBrowser? _desktopBrowser;
     private readonly ISettingsService? _settings;
     private readonly IEventBus? _events;
     private readonly IMenuBarExtensionRegistry _registry;
-    private FolderToolbar? _folderToolbar;
     private TextBlock? _foregroundTitle;
 
     private LogoMenuWindow? _logoMenu;
@@ -72,7 +70,6 @@ internal sealed class MenuBarLeftZone : StackPanel, IDisposable
         ISettingsWindowService? settingsWindow,
         IMenuBarExtensionRegistry registry,
         IWindowTrackerService? windowTracker = null,
-        IDesktopBrowser? desktopBrowser = null,
         ISettingsService? settings = null,
         IEventBus? events = null)
     {
@@ -81,7 +78,6 @@ internal sealed class MenuBarLeftZone : StackPanel, IDisposable
         _settingsWindow = settingsWindow;
         _registry = registry;
         _windowTracker = windowTracker;
-        _desktopBrowser = desktopBrowser;
         _settings = settings;
         _events = events;
 
@@ -115,12 +111,9 @@ internal sealed class MenuBarLeftZone : StackPanel, IDisposable
         AddStacksButton("下载", "下载文件夹", ResolveDownloads(), GetKnownDir("Downloads"));
         AddStacksButton("文档", "文档文件夹", SafeGetFolderPath(Environment.SpecialFolder.Personal), SafeGetFolderPath(Environment.SpecialFolder.Personal));
 
-        // 4) 文件夹工具条（可折叠）：路径显示 + 导航 + 文件操作（自绘桌面启用时呈现）
-        if (_desktopBrowser is not null)
-        {
-            _folderToolbar = new FolderToolbar(_desktopBrowser, _vibrancy, _appearance);
-            Children.Add(_folderToolbar);
-        }
+        // 【2026-09-17 用户拍板】原 4)「文件夹工具条」（折叠钮 + 刷新 + 剪切/复制/粘贴/重命名/删除）整条移除：
+        //   这些操作在**自绘桌面右键菜单**里已经有了（图标菜单 = 剪切/复制/粘贴/重命名/删除/属性；
+        //   空白菜单 = 刷新/粘贴/新建/排序），工具条属重复入口；且桌面不再站内导航后路径/导航行也是死 UI。
     }
 
     private void OnForegroundChanged(object? sender, IntPtr hwnd)
@@ -145,7 +138,6 @@ internal sealed class MenuBarLeftZone : StackPanel, IDisposable
         {
             _windowTracker.ForegroundWindowChanged -= OnForegroundChanged;
         }
-        _folderToolbar?.Dispose();
     }
 
     // ======== Logo 按钮（三态动画） ========

@@ -10,7 +10,7 @@ namespace BetterDesktop.Shell.Convert;
 // 【白话导航 · 格式转换域】凭白话需求定位到精确文件：
 //   "支持哪些格式互转 / 转换矩阵"        → Services/ConversionMatrix.cs（格式→引擎映射）
 //   "PDF 转图片/文本、PDF 工具"          → Services/Engines/PopplerEngine.cs；合并/拆分 PdfComposeEngine.cs；加密 PdfSecurityEngine.cs；文本转 PDF TextPdfEngine.cs
-//   "Office 文档转 PDF"                 → Engines/SofficeEngine.cs（LibreOffice）、Engines/ComPdfEngine.cs（本机 Office/WPS COM）
+//   "Office 文档转 PDF"                 → Engines/SofficeEngine.cs（LibreOffice 26.8.0 内置）、Engines/ComPdfEngine.cs（本机 Office/WPS COM）、Engines/ComPdfTwoHopEngine.cs（COM→PDF 中间态→Poppler 渲染）
 //   "图片格式互转 / HEIC"               → Engines/ManagedImageEngine.cs、Engines/HeicEngine.cs、Engines/ImageTargetWriter.cs、RawDecodeEngine.cs
 //   "音视频转码"                        → Engines/FfmpegEngine.cs
 //   "电子书（epub/mobi）"               → Engines/CalibreEngine.cs
@@ -39,10 +39,14 @@ public sealed class ConvertPlugin : IPlugin
         var settings = context.Get<ISettingsService>();
 
         // 引擎注册表（同类按注册序取第一个可用者；Prefer→Fallback 候选链见 EngineRegistry）
+        // 2026-09-10 架构主线：pandoc 主 + soffice/COM 辅（LibreOffice 26.8.0 内置回归；ComPdfTwoHop 承接演示族 png/jpg 两跳）。
         var registry = new EngineRegistry()
             .Add(new Services.Engines.SofficeEngine())
             .Add(new Services.Engines.ComPdfEngine())
             .Add(new Services.Engines.ManagedEngine(settings))
+            // 2026-09-10 收尾：ComPdfTwoHop 注册序在 TwoHopEngine 之前（演示族 png/jpg 两跳 COM 优先保真，
+            // TwoHopEngine(soffice 中间态) 兜底——COM 缺失时保证"高亮=成功"契约成立）
+            .Add(new Services.Engines.ComPdfTwoHopEngine())
             .Add(new Services.Engines.TwoHopEngine())
             .Add(new Services.Engines.ManagedImageEngine())
             .Add(new Services.Engines.PdfComposeEngine())
@@ -53,7 +57,10 @@ public sealed class ConvertPlugin : IPlugin
             .Add(new Services.Engines.TesseractEngine())
             .Add(new Services.Engines.HeicEngine())
             .Add(new Services.Engines.RawDecodeEngine())
-            .Add(new Services.Engines.CalibreEngine());
+            .Add(new Services.Engines.CalibreEngine())
+            // 2026-09-20 convert-lite 迁移：进程内轻量引擎（零外部 exe、恒可用）。
+            // 放在最后只是因为它是最后加进来的 —— 解析按矩阵的 Prefer/Fallback 查 kind，与注册序无关。
+            .Add(new Services.Engines.LiteEngine());
         var convertService = new ConversionService(registry, events, settings);
         // 【2026-09-07 恢复转换挂点】菜单服务 Provide 给桌面右键 / 系统右键命令桥共用：
         // 矩阵全部目标列出（引擎缺失置灰），执行 + MessageBox 反馈闭环见 ConvertMenuService。

@@ -4,13 +4,13 @@
 
 ## 职责
 
-- 定义 `IKugouMusicApi` 契约：歌曲搜索、播放信息获取、播放链接解析（含签名 key = MD5(hash + SIGN_KEY + appid + mid + userid)）、歌词获取（krcs search → download 链）。
-- 实现 `KugouMusicApi`：基于 HttpClient 调用酷狗公开 API 端点，返回原始 JSON 字符串。
+- 实现 `IKugouMusicApi` 契约（位于 `packages/api/Music/`，BetterDesktop.Api）：歌曲搜索、播放信息获取、播放链接解析（含签名 key = MD5(hash + SIGN_KEY + appid + mid + userid)）、歌词获取（krcs search → download 链）。
+- `KugouMusicApi`：基于 HttpClient 调用酷狗公开 API 端点，返回原始 JSON 字符串。
 - 返回原始 JSON 而非固化 DTO：平台字段随版本漂移，提前固化 DTO 会随平台升级腐化；解析交由消费方按需处理（System.Text.Json）。
 
 ## 依赖
 
-- `BetterDesktop.Kernel`
+- `BetterDesktop.Kernel`、`BetterDesktop.Api`（Music 契约）
 
 ## 扩展点
 

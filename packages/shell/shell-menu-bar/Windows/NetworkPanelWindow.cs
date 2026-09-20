@@ -327,7 +327,7 @@ internal sealed class NetworkPanelWindow : MenuBarPopupWindow
         var cell = new Border
         {
             Margin = new Thickness(0, right ? 6 : 0, 0, 0),
-            Background = right ? new SolidColorBrush(Color.FromArgb(26, 0, 0, 0)) : Brushes.Transparent,
+            Background = right ? new SolidColorBrush(Colors.Black) { Opacity = 0.1 } : Brushes.Transparent,
             CornerRadius = new CornerRadius(8),
             Padding = new Thickness(8, 6, 8, 6)
         };

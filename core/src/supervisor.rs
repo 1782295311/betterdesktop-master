@@ -328,6 +328,27 @@ fn record_failure(st: &mut CompState, now: Instant) {
     }
 }
 
+/// 记一次失败，并把"**本轮新进入熔断**"这件事上报给 `report`（供 [`Report::log`] 记一行）。
+///
+/// # 为什么必须在这里判，而不是在 `Decision::Degraded` 分支里
+/// 熔断发生在**记失败的那一刻**（[`record_failure`] 里 `degraded = true`），而那一轮的 `decide`
+/// 早已返回 `Spawn` —— 于是"它刚刚熔断了"这件事在 `Degraded` 分支里**看不到**：那个分支只在
+/// 之后各轮成立，而那时相位已经变了（第一版就写在那里，结果是这一行永远不出现）。
+///
+/// # 为什么稳态必须静默
+/// 熔断之后每个 3 秒 tick 都会继续返回 `Degraded`；把它逐轮上报会把日志变成噪声。
+/// 真机依据（2026-09-20 开机后）：安装根缺 `Host.exe` ⇒ 8 次退避后退避到熔断 ⇒
+/// 此后 16 分钟里 `degraded (circuit open) shell` 记了 **265 行**，把同一次启动的
+/// 其余 37 条 ERROR 全淹掉 —— 正是本模块开头"只在有动作时记日志"要防的那件事。
+/// 与 `PAUSE_LOGGED` 同一条纪律：**稳态不逐轮记**。
+fn record_failure_reporting(st: &mut CompState, now: Instant, name: &str, report: &mut Report) {
+    let was_degraded = st.degraded;
+    record_failure(st, now);
+    if !was_degraded && st.degraded {
+        report.degraded.push(name.to_string());
+    }
+}
+
 /// 一次 reconcile 的产出（**仅供日志**，不构成对外契约）。
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct Report {
@@ -339,7 +360,7 @@ pub struct Report {
     pub failed: Vec<String>,
     /// 本轮因退避而等待的组件。
     pub waiting: Vec<String>,
-    /// 本轮因熔断而放弃的组件。
+    /// 本轮**新进入**熔断的组件（熔断是稳态：进入之后不再逐轮上报，以免淹掉别的信息）。
     pub degraded: Vec<String>,
 }
 
@@ -629,7 +650,7 @@ impl Supervisor {
                     st.next_attempt_at = None;
                     st.degraded = false;
                 } else {
-                    record_failure(st, now);
+                    record_failure_reporting(st, now, &c.name, &mut report);
                     report.failed.push(c.name.clone());
                     crate::log::warn(format!(
                         "'{}' died within one supervision round after being started ({} consecutive failures)",
@@ -642,7 +663,10 @@ impl Supervisor {
             match decide(c, gate_open, stop_flag, alive, st, now) {
                 Decision::Alive | Decision::Idle => {}
                 Decision::Wait => report.waiting.push(c.name.clone()),
-                Decision::Degraded => report.degraded.push(c.name.clone()),
+                // **刻意静默**：熔断是稳态，此后每个 3 秒 tick 都会走到这里。
+                // "刚进入熔断"那一行由 `record_failure_reporting` 在真正的转变点上记（只记一次）——
+                // 放在这里会让它永远不出现，因为转变发生在上一轮的 `Spawn` 分支里。
+                Decision::Degraded => {}
                 Decision::Stop => {
                     let killed = process::stop_by_exe_name(&c.exe);
                     if killed > 0 {
@@ -667,7 +691,7 @@ impl Supervisor {
                         ));
                     }
                     Err(e) => {
-                        record_failure(st, now);
+                        record_failure_reporting(st, now, &c.name, &mut report);
                         report.failed.push(c.name.clone());
                         crate::log::error(format!(
                             "supervisor({reason}): cannot start '{}': {e} (failure #{}, next attempt in {}s)",
@@ -1465,6 +1489,44 @@ mod tests {
             "退避期内不得重试：{second:?}"
         );
         assert_eq!(second.waiting, vec!["ghost".to_string()]);
+    }
+
+    /// **熔断只在进入的那一轮上报一次**，之后各轮必须静默。
+    ///
+    /// 真机依据（2026-09-20 开机后）：安装根缺 `Host.exe` ⇒ 8 次退避后熔断 ⇒ 此后每 3 秒
+    /// 重复记一行 `degraded (circuit open) shell`，16 分钟 **265 行**，把同一次启动的
+    /// 其余 37 条 ERROR 全淹掉。熔断是**稳态**，不是"有动作"。
+    #[test]
+    fn degraded_is_reported_once_per_circuit_not_every_tick() {
+        let sup = Supervisor::new(vec![comp("ghost", Desired::Running, Tier::Surface)]);
+
+        // 逐轮清掉退避截止点，模拟"时间到了、再试一次"：前两轮只记失败，
+        // 第 `FAILURES_TO_DEGRADE` 轮记失败**并进入熔断** —— 上报必须恰好落在那一轮。
+        let mut rounds_reporting_degraded = Vec::new();
+        for round in 1..=FAILURES_TO_DEGRADE {
+            {
+                let mut inner = sup.lock();
+                if let Some(st) = inner.state.get_mut("ghost") {
+                    st.next_attempt_at = None;
+                }
+            }
+            let r = sup.reconcile("test");
+            if !r.degraded.is_empty() {
+                rounds_reporting_degraded.push(round);
+            }
+        }
+        assert_eq!(
+            rounds_reporting_degraded,
+            vec![FAILURES_TO_DEGRADE],
+            "熔断必须恰好在进入的那一轮上报一次（早一轮=没到，晚一轮/多轮=噪声）"
+        );
+
+        // 熔断之后连跑若干轮：**必须完全静默**（这正是本次要钉住的行为）
+        for _ in 0..5 {
+            let r = sup.reconcile("test");
+            assert!(r.degraded.is_empty(), "稳态不得重复上报：{r:?}");
+            assert!(r.is_quiet(), "熔断稳态轮次应当完全静默：{r:?}");
+        }
     }
 
     /// 显式 stop 对"本来就没在跑"的组件是幂等成功（不是错误）。

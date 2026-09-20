@@ -1,5 +1,7 @@
 # Cairo 开发计划 · 剪贴板 Phase B（面板 UI + 热键 + 粘贴增强 + 消费板块 + 配置化）
 
+> **状态（2026-09-10 标注）**：✅ **已实施收口（v1.3 终态）**——面板 UI/热键/自动分段/按类写回/消费板块 I6-I10/按序粘贴/G6 配置化全部落地，单测 85 例全绿。两处实施拍板与本文的差异：① K5 热键改键降级为设置分区**只读展示**（组合键由 Manager 常量锁定，避免热键冲突面失控）；② I9 自绘右键入口随自绘菜单管线退役（2026-09-05），由 I10 系统右键覆盖同语义。终态核销见 `docs/audits/2026-09-10-clipboard-plan-completion-review.md`。
+
 > Task: 在 better-desktop-cordis 完成剪贴板 Phase B 全集并收口 v1.3。**用户确认**：「也做，我们都是 v1.3 版本了」——L 按序粘贴（原规划 v1.1）、I6-I10 消费板块（原规划 v1.1）、G6/K5 配置化（原规划 v1.1）**全部纳入本次 v1.3 实施**，不再推后。前置收口（Pause 单测 + D2 文件捕获真机）按「不留技术债」原则并入本计划。
 > 蓝图基线：`docs/plans/archive/2026-09-08-clipboard-history-extension.md`（功能全集 A-N 与版本归属、三方融合矩阵、生死线）；`docs/plans/2026-09-09-clipboard-public-api.md`（Phase A 已实施，契约/服务/接线现状 = 本计划实施起点）。
 > 证据基线：HEAD `dffd25e`（2026-09-09 Phase A 收口提交，工作区 clean，门禁 14 道全绿）。技术力命中：**3101-global-hotkey**（C#/L2：0x581/释放纪律）、**3603-菜单栏插入按钮弹窗模式**（L1：IMenuBarExtension/MenuBarPopupWindow 范式）、**windows-context-menu-registry-model**（C#/L2 复合：右键场景路径/命令格式/显示名规则）、**shell-menu-injection**（L1：注入避让/%1/%V/键名唯一）、**3401-windows-input-simulator**（C#/L2：SendInput 门面，粘贴模拟参考）。

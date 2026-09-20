@@ -75,10 +75,11 @@ public sealed class ProgramSearchProvider : ISearchResultProvider
             return Array.Empty<SearchResult>();
         }
 
+        // 全量返回（2026-09-17 分组展示改造）：不做 Take 截断——所有适配结果都交给
+        // 聚合层分组排序 + UI 筛选/折叠，由用户主动减少显示，而不是在这里概率截断。
         return results
             .OrderByDescending(x => x.Score)
             .ThenBy(x => x.Title, StringComparer.OrdinalIgnoreCase)
-            .Take(20)
             .ToList();
     }
 

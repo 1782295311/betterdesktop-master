@@ -9,6 +9,9 @@ using Xunit;
 
 namespace BetterDesktop.Shell.ContextMenu.Tests;
 
+// 与 HandlerCrashGuardTests / MenuBrokerClientTests 同属一个 Collection：本类含 ShellExMenuPreview 用例，
+// 会经 ShellMenuInterop → MenuBrokerClient 走到 broker，而那些类会改写 broker 的进程级测试缝。
+[Collection("shellmenu-static-seams")]
 public class MenuManagerServiceTests : IDisposable
 {
     private const string ScenePath = @"Software\Classes\BdTestScene";

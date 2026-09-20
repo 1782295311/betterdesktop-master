@@ -65,13 +65,26 @@ public sealed class FfmpegEngine : IConversionEngine, IDownloadableEngine
                 FileName = ffmpeg,
                 UseShellExecute = false,
                 CreateNoWindow = true,
+                // 红线 6：探测输出必须重定向——否则 ReadToEnd 抛 InvalidOperationException（内置前从未运行未暴露）
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
             };
-            process.StartInfo.ArgumentList.Add("-version");
             process.Start();
-            var exited = process.WaitForExitAsync().Wait(3_000);
+            // 探测超时：ffmpeg 静态构建 ~157MB exe 冷启动慢（内置后实测 3s 不够），放宽到 10s
+            var exited = process.WaitForExitAsync().Wait(10_000);
             var stdout = exited ? process.StandardOutput.ReadToEnd() : string.Empty;
-            var ok = exited && process.HasExited && stdout.Contains("ffmpeg version", StringComparison.Ordinal);
-            _probeCache = ok ? EngineAvailability.Ok(stdout.Split('\n')[0].Trim()) : EngineAvailability.Missing;
+            var stderr = exited ? process.StandardError.ReadToEnd() : string.Empty;
+            // BtbN 静态构建在宿主无控制台环境将 version 输出到 stderr 且退出码 1（实测），
+            // 判定放宽：任一流含版本标识即命中（stderr 尾部实测为 configure 行，非错误）。
+            var versionText = stdout + stderr;
+            var ok = exited && process.HasExited
+                && versionText.Contains("ffmpeg version", StringComparison.Ordinal);
+            if (!ok)
+            {
+                BetterDesktop.Kernel.Core.DiagnosticLog.Trace("shell-convert",
+                    $"ffmpeg 探测未通过: path={ffmpeg} exited={exited} code={(exited ? process.ExitCode : -1)} stdoutLen={stdout.Length} stderrLen={stderr.Length} errTail='{(stderr.Length > 500 ? stderr[^500..] : stderr)}'");
+            }
+            _probeCache = ok ? EngineAvailability.Ok(versionText.Split('\n')[0].Trim()) : EngineAvailability.Missing;
         }
         catch (Exception ex)
         {
@@ -162,33 +175,43 @@ public sealed class FfmpegEngine : IConversionEngine, IDownloadableEngine
         }
         else if (isVideo)
         {
-            // MP4 编码选择（2026-09-07 补全：H.264/H.265/AV1，Filter 承载 marker）；webm 显式 VP9
-            switch (marker)
+            // 2026-09-10：mkv/mov 目标 = 容器 remux（-c copy 不重编码，无损，级联可注册）；
+            // 其余走编码选择（Filter 承载 marker）；webm 显式 VP9
+            if (format is "mkv" or "mov")
             {
-                case ConversionTarget.VideoEncH265Marker:
-                    AddEncoder(process, "libx265", "28");
-                    break;
-                case ConversionTarget.VideoEncAv1Marker:
-                    AddEncoder(process, "libaom-av1", "30");
-                    process.StartInfo.ArgumentList.Add("-b:v");
-                    process.StartInfo.ArgumentList.Add("0");
-                    process.StartInfo.ArgumentList.Add("-cpu-used");
-                    process.StartInfo.ArgumentList.Add("6");
-                    break;
-                case ConversionTarget.VideoEncH264Marker:
-                    AddEncoder(process, "libx264", "23");
-                    break;
-                default:
-                    if (format == "webm")
-                    {
-                        process.StartInfo.ArgumentList.Add("-c:v");
-                        process.StartInfo.ArgumentList.Add("libvpx-vp9");
-                        process.StartInfo.ArgumentList.Add("-crf");
-                        process.StartInfo.ArgumentList.Add("32");
+                process.StartInfo.ArgumentList.Add("-c");
+                process.StartInfo.ArgumentList.Add("copy");
+            }
+            else
+            {
+                // MP4 编码选择（2026-09-07 补全：H.264/H.265/AV1，Filter 承载 marker）；webm 显式 VP9
+                switch (marker)
+                {
+                    case ConversionTarget.VideoEncH265Marker:
+                        AddEncoder(process, "libx265", "28");
+                        break;
+                    case ConversionTarget.VideoEncAv1Marker:
+                        AddEncoder(process, "libaom-av1", "30");
                         process.StartInfo.ArgumentList.Add("-b:v");
                         process.StartInfo.ArgumentList.Add("0");
-                    }
-                    break;
+                        process.StartInfo.ArgumentList.Add("-cpu-used");
+                        process.StartInfo.ArgumentList.Add("6");
+                        break;
+                    case ConversionTarget.VideoEncH264Marker:
+                        AddEncoder(process, "libx264", "23");
+                        break;
+                    default:
+                        if (format == "webm")
+                        {
+                            process.StartInfo.ArgumentList.Add("-c:v");
+                            process.StartInfo.ArgumentList.Add("libvpx-vp9");
+                            process.StartInfo.ArgumentList.Add("-crf");
+                            process.StartInfo.ArgumentList.Add("32");
+                            process.StartInfo.ArgumentList.Add("-b:v");
+                            process.StartInfo.ArgumentList.Add("0");
+                        }
+                        break;
+                }
             }
         }
         else if (format == "avif")

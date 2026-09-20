@@ -40,8 +40,8 @@ public sealed class DesktopSection : ISettingsSection
         // ---- 桌面开关 ----
         var enableCard = GroupCard();
         var enableBody = CardBody(enableCard);
-        enableBody.Children.Add(TitleBlock("自绘桌面", tokens));
-        enableBody.Children.Add(ToggleRow("启用自绘桌面（关闭则恢复 explorer 原生桌面）", settings, tokens,
+        enableBody.Children.Add(TitleBlock("桌面控制", tokens));
+        enableBody.Children.Add(ToggleRow("启用桌面控制（关闭则恢复 explorer 原生桌面）", settings, tokens,
             "components.desktop", true));
         enableBody.Children.Add(NoteBlock("开关即时生效，无需重启。", tokens));
         panel.Children.Add(enableCard);
@@ -93,16 +93,18 @@ public sealed class DesktopSection : ISettingsSection
         var arrangeCard = GroupCard();
         var arrangeBody = CardBody(arrangeCard);
         arrangeBody.Children.Add(TitleBlock("排列与拖动", tokens));
-        arrangeBody.Children.Add(ToggleRow("自动排列（开启后图标按瀑布列排布，不可拖动换位）", settings, tokens,
+        arrangeBody.Children.Add(ToggleRow("自动排列（开启后图标按瀑布列排布）", settings, tokens,
             "desktop.autoArrange", false));
-        arrangeBody.Children.Add(ToggleRow("拖动图标时自动退出自动排列（保持当前布局，转为自由排布）", settings, tokens,
+        arrangeBody.Children.Add(ToggleRow("右键长按自由摆放时自动退出自动排列（保持当前布局）", settings, tokens,
             "desktop.autoExitArrangeOnDrag", true));
-        arrangeBody.Children.Add(ToggleRow("拖动后对齐网格", settings, tokens,
+        arrangeBody.Children.Add(ToggleRow("自由摆放后对齐网格", settings, tokens,
             "desktop.snapToGrid", true));
         arrangeBody.Children.Add(ToggleRow("跟随系统排序（explorer 右键『排序方式』实时驱动自绘图标排序）", settings, tokens,
             "desktop.sortBridge", true));
-        arrangeBody.Children.Add(ToggleRow("隐藏桌面图标（也可在桌面空白处双击切换）", settings, tokens,
+        arrangeBody.Children.Add(ToggleRow("隐藏桌面图标（双击桌面空白处亦可切换）", settings, tokens,
             "desktop.iconsHidden", false));
+        arrangeBody.Children.Add(ToggleRow("双击桌面空白处切换隐藏/显示图标", settings, tokens,
+            "desktop.doubleClickHideIcons", true));
 
         var resetHint = NoteBlock("", tokens);
         var resetBtn = WithStyle(new Button
@@ -127,8 +129,11 @@ public sealed class DesktopSection : ISettingsSection
         arrangeBody.Children.Add(resetBtn);
         arrangeBody.Children.Add(resetHint);
         arrangeBody.Children.Add(NoteBlock(
-            "默认可自由拖动图标改变布局：按住左键拖动即可（拖动时图标会半透明放大并跟随鼠标），" +
-            "松手保存位置；从外部拖入文件会复制/移动到桌面。", tokens));
+            "手势：① 左键拖动 = 原生桌面式（选中整组一起跟随鼠标，其它图标让位）——拖到文件夹图标=移入（Ctrl=复制）、" +
+            "拖到程序图标=用该程序打开、**拖到空白处=整组就落在那里**、拖到资源管理器等外部程序=复制/移动过去、" +
+            "拖到回收站等虚拟项=无动作（落回原位）；" +
+            "② 右键**长按约 0.35 秒**后拖动 = 自由摆放（同样的跟随动画，但只看摆放、不看落点）；" +
+            "③ 右键短按 = 菜单。删除文件请用右键菜单「删除」或 Del 键；从外部拖入文件会复制/移动到桌面。", tokens));
         panel.Children.Add(arrangeCard);
 
         // ---- 系统快捷入口 ----

@@ -280,7 +280,19 @@ public static class ToolCatalog
 
     private const int OpenWithLimit = 8;
 
-    /// <summary>打开方式候选（上限 8）：系统真实关联匹配优先 + 类别匹配兜底。Args 含 %file%/%dir% 占位。</summary>
+    /// <summary>
+    /// 打开方式候选（上限 8）：系统真实关联匹配优先 + 类别匹配兜底。
+    /// <para>
+    /// <b>Args = 参数模板，占位符由唤起方替换</b>：来自注册表 shell\open\command 的候选保留**原始命令行尾部**
+    /// （如 Edge/Chrome 的 <c>--single-argument %1</c>、WPS 的 <c>/prometheus /pdf "%1"</c>、夸克的
+    /// <c>--brand-clouddrive "%1"</c>）；App Paths / 类别兜底候选为 <c>"%1"</c>。
+    /// </para>
+    /// <para>
+    /// 【2026-09-17 修复】此前一律写死 <c>"%file%"</c>（丢弃注册表里的真实参数）——用户实测点「Microsoft Edge」
+    /// 无反应：Edge 的注册命令是 <c>msedge.exe --single-argument %1</c>，丢掉 <c>--single-argument</c> 后
+    /// Windows 传给 Edge 的命令行不是它认得的形态，Edge 起来也是空窗口/直接退出。改成按注册表原样唤起。
+    /// </para>
+    /// </summary>
     public static IReadOnlyList<(string Name, string Path, string Args)> MatchOpenWith(string filePath)
     {
         var result = new List<(string Name, string Path, string Args)>();
@@ -330,7 +342,7 @@ public static class ToolCatalog
                     var resolved = Environment.ExpandEnvironmentVariables(raw);
                     if (File.Exists(resolved) && seen.Add(NormalizePath(resolved)))
                     {
-                        result.Add((Path.GetFileNameWithoutExtension(resolved), resolved, "\"%file%\""));
+                        result.Add((Path.GetFileNameWithoutExtension(resolved), resolved, "\"%1\""));
                     }
                 }
             }
@@ -463,12 +475,17 @@ public static class ToolCatalog
                 {
                     return;
                 }
-                var exe = ExtractExeFromCommand(cmd);
-                if (string.IsNullOrEmpty(exe) || !File.Exists(exe) || !seen.Add(Path.GetFileName(exe).ToLowerInvariant()))
+                var split = SplitCommandLine(cmd);
+                if (!split.HasValue)
                 {
                     return;
                 }
-                candidates.Add((DisplayNameFor(exe, progId), exe, "\"%file%\"", r));
+                var (exe, args) = split.Value;
+                if (!File.Exists(exe) || !seen.Add(Path.GetFileName(exe).ToLowerInvariant()))
+                {
+                    return;
+                }
+                candidates.Add((DisplayNameFor(exe, progId), exe, args, r));
             }
             catch
             {
@@ -494,7 +511,8 @@ public static class ToolCatalog
                 {
                     return;
                 }
-                candidates.Add((DisplayNameFor(expanded, appId), expanded, "\"%file%\"", r));
+                // MRUList / SupportedTypes 只登记了 exe 名，没有命令行 → 用 shell 默认形态（文件作唯一实参）
+                candidates.Add((DisplayNameFor(expanded, appId), expanded, "\"%1\"", r));
             }
             catch
             {
@@ -504,21 +522,117 @@ public static class ToolCatalog
     }
 
     /// <summary>命令模板 → exe 路径（带引号/空格分隔均支持；环境变量展开）。</summary>
-    private static string? ExtractExeFromCommand(string cmd)
+    /// <summary>
+    /// 参数模板 → 实际命令行（占位符替换）。**与 <see cref="SplitCommandLine"/> 成对**：
+    /// 前者产出模板、本方法消费模板，故同处一个类（模板语法只有一处权威定义）。
+    /// <para>
+    /// 支持 shell 占位符与本仓库占位符两套：<c>%1 / %L / %V / %* / %file%</c> → 文件全路径（带引号）；
+    /// <c>%w / %dir%</c> → 文件所在目录。
+    /// </para>
+    /// <para>
+    /// 【去重引号】注册表里普遍写成 <c>"%1"</c>（占位符自带引号）。替换时若再包一层引号会得到
+    /// <c>""C:\x.pdf""</c>——CommandLineToArgvW 虽能解析回原值，但脏命令行在部分应用的自研解析器里
+    /// 会多出一个空实参。故先把 <c>"%X"</c> 归一成 <c>%X</c> 再统一加引号。
+    /// </para>
+    /// </summary>
+    public static string BuildLaunchArgs(string? argsTemplate, string filePath)
+    {
+        var template = argsTemplate ?? string.Empty;
+        var quoted = "\"" + filePath + "\"";
+        var dir = Path.GetDirectoryName(filePath) ?? string.Empty;
+
+        // ① 去重引号："%X" → %X（注册表普遍写成带引号形态，再包一层会得到 ""path""）。
+        //    含 %dir%：目录实参同样要带引号，但绝不能被包两次。
+        //    不含 %w：shell 的 %w 本身不带引号，命令里若显式写了引号要保留。
+        foreach (var placeholder in QuotedPlaceholders)
+        {
+            template = template.Replace("\"" + placeholder + "\"", placeholder, StringComparison.OrdinalIgnoreCase);
+        }
+
+        // ② 目录类占位符（%w 保持原样替换；它按 shell 语义是无引号工作目录）
+        template = template
+            .Replace("%dir%", "\"" + dir + "\"", StringComparison.OrdinalIgnoreCase)
+            .Replace("%w", dir, StringComparison.Ordinal);
+
+        // ③ 文件实参替换（%file% 是本仓库既有写法，大小写不敏感；%1/%L/%V/%* 按 shell 原样）
+        foreach (var placeholder in FilePlaceholders)
+        {
+            template = string.Equals(placeholder, "%file%", StringComparison.OrdinalIgnoreCase)
+                ? template.Replace(placeholder, quoted, StringComparison.OrdinalIgnoreCase)
+                : template.Replace(placeholder, quoted, StringComparison.Ordinal);
+        }
+
+        return template.Trim();
+    }
+
+    /// <summary>文件实参占位符全集（shell 的 %1/%L/%V/%* + 本仓库既有写法 %file%）。</summary>
+    private static readonly string[] FilePlaceholders = ["%1", "%L", "%l", "%V", "%v", "%*", "%file%"];
+
+    /// <summary>需要"去重引号"的占位符 = 文件实参 + 目录实参（%dir%）；%w 不在内（shell 语义无引号）。</summary>
+    private static readonly string[] QuotedPlaceholders = ["%1", "%L", "%l", "%V", "%v", "%*", "%file%", "%dir%"];
+
+    /// <summary>
+    /// 注册表命令行 → (exe 路径, 参数模板)。
+    /// <para>
+    /// 【为什么要拆而不是只取 exe】shell\open\command 的真实形态常常**必须带参数**才认文件：
+    /// Edge/Chrome <c>--single-argument %1</c>、WPS <c>/prometheus /pdf "%1"</c>、
+    /// 夸克 <c>--brand-clouddrive "%1"</c>、Okular <c>-- "%1"</c>。只取 exe、自己拼一个裸文件路径，
+    /// 就会出现"点了没反应/起来是空窗口"（2026-09-17 用户实测）。
+    /// </para>
+    /// <para>
+    /// 模板里没有占位符时按 shell 语义补 <c>%1</c>（explorer 对无占位符的命令会把文件追加为末位实参）。
+    /// 解析失败返回 null（该项跳过）。
+    /// </para>
+    /// </summary>
+    internal static (string Exe, string Args)? SplitCommandLine(string cmd)
     {
         cmd = cmd.Trim();
+        if (cmd.Length == 0)
+        {
+            return null;
+        }
+
+        string exe;
+        string rest;
         if (cmd.StartsWith("\"", StringComparison.Ordinal))
         {
             var end = cmd.IndexOf('"', 1);
-            if (end > 0)
+            if (end <= 1)
             {
-                return Environment.ExpandEnvironmentVariables(cmd.Substring(1, end - 1));
+                return null;
             }
+            exe = cmd[1..end];
+            rest = cmd[(end + 1)..].Trim();
         }
-        var space = cmd.IndexOf(' ');
-        var first = space < 0 ? cmd : cmd[..space];
-        return Environment.ExpandEnvironmentVariables(first.Trim('"'));
+        else
+        {
+            var space = cmd.IndexOf(' ');
+            exe = space < 0 ? cmd : cmd[..space];
+            rest = space < 0 ? string.Empty : cmd[(space + 1)..].Trim();
+        }
+
+        exe = Environment.ExpandEnvironmentVariables(exe.Trim('"'));
+        if (exe.Length == 0)
+        {
+            return null;
+        }
+
+        if (!HasFilePlaceholder(rest))
+        {
+            rest = rest.Length == 0 ? "\"%1\"" : rest + " \"%1\"";
+        }
+        return (exe, rest);
     }
+
+    /// <summary>命令行模板是否已含文件占位符（shell 的 %1/%L/%V/%* 与本仓库的 %file%）。</summary>
+    private static bool HasFilePlaceholder(string template)
+        => template.Contains("%1", StringComparison.Ordinal)
+        || template.Contains("%L", StringComparison.Ordinal)
+        || template.Contains("%l", StringComparison.Ordinal)
+        || template.Contains("%V", StringComparison.Ordinal)
+        || template.Contains("%v", StringComparison.Ordinal)
+        || template.Contains("%*", StringComparison.Ordinal)
+        || template.Contains("%file%", StringComparison.OrdinalIgnoreCase);
 
     /// <summary>exe 名 → App Paths 注册路径（HKLM 优先，HKCU 兜底）。</summary>
     private static string? ResolveAppPath(string exeName)

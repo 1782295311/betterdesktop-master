@@ -69,4 +69,31 @@ public class NativeMethodsContractTests
         Assert.NotNull(attr);
         Assert.Equal(CharSet.Unicode, attr!.CharSet);
     }
+
+    [Fact]
+    public void SetWindowCompositionAttribute_ReturnType_IsBool_NotHresult()
+    {
+        // 【2026-09-14 回归守卫】该 API 返回 BOOL：**非零 = 成功**。
+        // 曾按 HRESULT 判（`hr != 0 → 失败`），结果每次成功都记一条失败日志并无条件叠加降级材质
+        //（日志实证：1000+ 条 "失败 hr=0x00000001"，连 Disable 也"失败"）。
+        // 本断言钉住声明本身：改成 int 就会红。
+        var method = typeof(NativeMethods).GetMethod(nameof(NativeMethods.SetWindowCompositionAttribute));
+        Assert.NotNull(method);
+        Assert.Equal(typeof(bool), method!.ReturnType);
+
+        var marshal = method.ReturnParameter.GetCustomAttributes(typeof(MarshalAsAttribute), false)
+            .Cast<MarshalAsAttribute>().FirstOrDefault();
+        Assert.NotNull(marshal);
+        Assert.Equal(UnmanagedType.Bool, marshal!.Value);
+    }
+
+    [Fact]
+    public void DwmSetWindowAttribute_ReturnType_IsHresult()
+    {
+        // 对照组：DWM 系列返回 HRESULT（0 = 成功），与上面那条 BOOL 语义**相反** ——
+        // 两族 API 用同一套判断逻辑必然错一边，本测试把两种语义一起钉住。
+        var method = typeof(NativeMethods).GetMethod(nameof(NativeMethods.DwmSetWindowAttribute));
+        Assert.NotNull(method);
+        Assert.Equal(typeof(int), method!.ReturnType);
+    }
 }

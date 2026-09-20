@@ -94,12 +94,18 @@ public sealed class PopplerEngine : IConversionEngine
         var format = job.Target.Format;
         var name = Path.GetFileNameWithoutExtension(input);
 
-        if (format is "png" or "jpg")
+        if (format is "png" or "jpg" or "tiff")
         {
             var outRoot = Path.Combine(job.TempDir, name);
-            var fmtArg = format == "png" ? "-png" : "-jpeg";
+            var fmtArg = format switch
+            {
+                "png" => "-png",
+                "jpg" => "-jpeg",
+                _ => "-tiff",
+            };
             var (code, _, stderr) = await RunCaptureAsync(pdftoppm, ["-r", "150", fmtArg, input, outRoot], ct);
-            var pattern = Path.GetFileNameWithoutExtension(outRoot) + "-*." + (format == "png" ? "png" : "jpg");
+            // tiff 产物扩展名为 .tif（Poppler 约定）；用 tif* 通配兼容 .tif/.tiff
+            var pattern = Path.GetFileNameWithoutExtension(outRoot) + "-*." + (format == "tiff" ? "tif*" : format);
             var products = Directory.Exists(job.TempDir)
                 ? Directory.GetFiles(job.TempDir, pattern).OrderBy(p => p, StringComparer.OrdinalIgnoreCase).ToList()
                 : [];
@@ -183,6 +189,8 @@ public sealed class PopplerEngine : IConversionEngine
             FileName = exe,
             UseShellExecute = false, // 红线 1：参数数组直传
             CreateNoWindow = true,
+            RedirectStandardOutput = true, // 2026-09-10：读流必须重定向（缺则 ReadToEndAsync 抛 InvalidOperationException，探测/转换全失败）
+            RedirectStandardError = true,
         };
         foreach (var arg in args)
         {

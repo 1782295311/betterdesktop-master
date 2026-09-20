@@ -33,6 +33,27 @@ public static class NativeTaskbarManager
     private const string PrimaryTrayClass = "Shell_TrayWnd";
     private const string SecondaryTrayClass = "Shell_SecondaryTrayWnd";
 
+    /// <summary>
+    /// 主任务栏此刻是否可见（<c>null</c> = 找不到任务栏窗口，无法判定）。
+    /// <para>
+    /// 【2026-09-17】用途：「桌面控制」里「隐藏任务栏」的勾选态必须反映**实际**，而不是只看
+    /// <c>components.wintaskbar</c> 这个"意图键"——dock 启用时我们会主动隐藏原生任务栏，
+    /// 只看意图键会显示"没隐藏"而实际是隐藏的（用户实测的错位）。
+    /// </para>
+    /// </summary>
+    public static bool? IsTaskbarVisible()
+    {
+        try
+        {
+            var tray = NativeMethods.FindWindowEx(IntPtr.Zero, IntPtr.Zero, PrimaryTrayClass, null);
+            return tray == IntPtr.Zero ? null : NativeMethods.IsWindowVisible(tray);
+        }
+        catch (Exception)
+        {
+            return null;
+        }
+    }
+
     /// <summary>设置 Explorer 原生任务栏的可见性（true=显示，false=隐藏）。失败时静默忽略。</summary>
     public static void SetTaskbarVisible(bool visible)
     {

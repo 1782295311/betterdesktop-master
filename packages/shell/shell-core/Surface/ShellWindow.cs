@@ -11,8 +11,10 @@ using System.Windows.Media;
 using System.Windows.Threading;
 using BetterDesktop.Kernel.Contracts;
 using BetterDesktop.Shell.Core;
+using BetterDesktop.Shell.Core.Hotkeys;
 using BetterDesktop.Shell.Core.Native;
 using BetterDesktop.Shell.Core.Vibrancy;
+using BetterDesktop.Shell.Core.Windowing;
 using Point = System.Windows.Point;
 
 namespace BetterDesktop.Shell.Core.Surface;
@@ -28,34 +30,44 @@ public abstract class ShellWindow : Window
     protected IEventBus? Events { get; set; }
     private IDisposable? _appearanceSub;
 
+    /// <summary>是否已回退订阅进程内外观广播（<see cref="AppearanceHub"/>；无事件总线时使用）。</summary>
+    private bool _hubSubscribed;
+
     /// <summary>
     /// 统一基类构造函数：注入双服务，并在句柄创建前应用窗口基础样式（由虚属性提供配置值）。
     /// 子类通过重写对应虚属性定制行为，无需自己赋值、无需关心生效时机。
     /// </summary>
     protected ShellWindow(IAppearanceService? appearance = null, IVibrancyService? vibrancy = null)
     {
+        // 注入必须早于窗口属性：AllowsTransparency 取决于外观服务里的"非分层玻璃窗"开关
+        // （见 UseGlassBackdrop；该开关是"分层窗口吃不到 accent 模糊"时的结构解法）。
+        AppearanceService = appearance;
+        VibrancyService = vibrancy;
+
         // === 窗口行为配置：基类统一在构造期（句柄创建前）应用，子类只重写虚属性提供值 ===
         // 每个属性经 CanSetProperty 白名单校验（默认 true；PluginHostWindow 按权限裁决）。
         if (CanSetProperty("WindowStyle")) WindowStyle = DefaultWindowStyle;
         if (CanSetProperty("ResizeMode")) ResizeMode = DefaultResizeMode;
-        if (CanSetProperty("AllowsTransparency")) AllowsTransparency = AllowsTransparencyDefault;
+        if (CanSetProperty("AllowsTransparency")) AllowsTransparency = AllowsTransparencyDefault && !UseGlassBackdrop;
         if (CanSetProperty("ShowInTaskbar")) ShowInTaskbar = ShowInTaskbarDefault;
         if (CanSetProperty("Topmost")) Topmost = DefaultTopmost;
         if (CanSetProperty("ShowActivated")) ShowActivated = DefaultShowActivated;
         WindowStartupLocation = WindowStartupLocation.Manual;
-        // 使用几乎透明的背景而不是完全透明，防止鼠标穿透（ApplyAppearance 会按主题覆盖）。
-        Background = new SolidColorBrush(Color.FromArgb(1, 0, 0, 0));
 
-        // 保留原有注入逻辑
-        AppearanceService = appearance;
-        VibrancyService = vibrancy;
+        // 窗口层背景：
+        //  · 非分层玻璃窗 → 必须**真透明**（alpha=0），否则 DWM 没有"透明像素"可用来填模糊；
+        //    该路径下不存在鼠标穿透问题（非分层窗口的命中不受 alpha 影响）。
+        //  · 分层窗口 → 用 argb(1,0,0,0) 的近乎透明背景而不是完全透明：完全透明会让鼠标穿透。
+        Background = UseGlassBackdrop
+            ? Brushes.Transparent
+            : new SolidColorBrush(Color.FromArgb(1, 0, 0, 0));
 
         Loaded += OnShellWindowLoaded;
-        // HWND 创建后挂上 HwndSource hook（WM_NCHITTEST 自建 resize 命中区）。
+        // HWND 创建后由 OnSourceInitialized 统一挂 HwndSource hook（WM_NCHITTEST 自建 resize 命中区）
+        // 并按需补 Win32 层"浮动不抢焦点"扩展样式（见 UseNoActivateWindowStyle）。
         // 窗口圆角走 FrostedGlassDemo 实证基准：DWM 系统默认圆角（DWMWA_WINDOW_CORNER_PREFERENCE），
         // 由 VibrancyService.Apply(roundCorners:true) → DwmHelper 在应用毛玻璃时一并设置，
         // 与根 Border 的 XAML CornerRadius 重合。无需 SetWindowRgn 手动裁切。
-        SourceInitialized += OnSourceInitialized;
         // 窗口关闭时清空字号基值字典，避免长会话下 Dictionary 持有已卸载的可视树元素引用。
         Closed += (_, _) => _baseFontSizes.Clear();
     }
@@ -76,15 +88,50 @@ public abstract class ShellWindow : Window
     protected virtual ResizeMode DefaultResizeMode => ResizeMode.CanResize;
     /// <summary>分层透明。壳面默认 true（毛玻璃必需）。</summary>
     protected virtual bool AllowsTransparencyDefault => true;
+
+    /// <summary>
+    /// 是否走"非分层玻璃窗"路径（<see cref="AllowsTransparency"/> 置 false + DWM 玻璃区）。
+    /// <para>
+    /// 【为什么需要】accent 模糊（WCA_ACCENT_POLICY）画在**常规 DWM 重定向位图**的透明像素后面；
+    /// 分层窗口（WPF <c>AllowsTransparency=true</c>，per-pixel alpha 自绘）走的是另一条合成路径，
+    /// 模糊不被支持/不稳定——这是"配方没错、模糊就是不出现"的结构性原因。
+    /// </para>
+    /// <para>
+    /// 代价：非分层窗口没有 per-pixel alpha，内容层必须自己保证可读性；故由设置项
+    /// <c>appearance.material.glass</c> 显式开启（默认 false = 现行分层行为，**零回归**），
+    /// 待真机 A/B（tools/BlurProbe + VM 实测）确认后再决定是否改为默认。
+    /// 注意：本开关在**构造期**读取，改动后需重开窗口（WPF 不允许运行时切换 AllowsTransparency）。
+    /// </para>
+    /// </summary>
+    protected bool UseGlassBackdrop => AllowsTransparencyDefault && AppearanceService?.GlassBackdrop == true;
     /// <summary>标题栏拖拽高度（逻辑像素）。默认 0 表示整窗可拖（无显式标题栏区域）。</summary>
     protected virtual double CaptionHeight => 0;
 
     /// <summary>
-    /// HWND 创建完成时：挂上 HwndSource hook（WM_NCHITTEST 自建 resize 命中区）。
+    /// 是否套用 Win32 层 WS_EX_NOACTIVATE + WS_EX_TOOLWINDOW（浮动且不抢焦点）。
+    /// 默认 false —— 普通壳面窗口行为不变；弹出面板（<c>PopupWindowBase</c>）与常驻浮窗
+    /// （如剪贴板侧边栏手柄 <c>EdgeHandleWindow</c>）重写为 true。
+    /// 【602 纪律】含键盘输入的窗口必须为 false——NOACTIVATE 会让窗口点击后仍不获焦，键盘落不进 TextBox。
+    /// </summary>
+    protected virtual bool UseNoActivateWindowStyle => false;
+
+    /// <summary>
+    /// 本窗口对应的热键表面作用域 Id（如 <c>Surface.Settings</c>）；null = 不上报。
+    /// 基类在窗口源创建（首次显示）与关闭时经 <see cref="SurfaceScopeBridge"/> 上报，
+    /// 使热键侧板"此刻可用"列表随表面起落实时切换（P5 P0-1）。<see cref="PopupWindowBase"/> 叠加
+    /// ShowAt/HidePopup 上报（单例复用窗口每次显示/收起都上报，幂等）。
+    /// </summary>
+    protected virtual string? SurfaceScopeId => null;
+
+    /// <summary>
+    /// HWND 创建完成时：挂上 HwndSource hook（WM_NCHITTEST 自建 resize 命中区），并按需补 Win32 层
+    /// "浮动不抢焦点"扩展样式（全库 <c>MakeFloatingNoActivate</c> 唯一消费点，子类只改虚属性）。
     /// 圆角由 DWM 系统默认圆角提供（毛玻璃应用时经 DwmHelper 设置），无需在此裁 region。
     /// </summary>
-    private void OnSourceInitialized(object? sender, EventArgs e)
+    protected override void OnSourceInitialized(EventArgs e)
     {
+        base.OnSourceInitialized(e);
+
         var hwnd = new WindowInteropHelper(this).Handle;
         if (hwnd == IntPtr.Zero)
         {
@@ -95,6 +142,24 @@ public abstract class ShellWindow : Window
         {
             src.AddHook(WndProcHook);
         }
+
+        if (UseNoActivateWindowStyle)
+        {
+            // Win32 层与 WPF 层 ShowActivated=false「双层缺一不可」（602 纪律）
+            WindowStyleHelper.MakeFloatingNoActivate(hwnd);
+        }
+
+        Hotkeys.SurfaceScopeBridge.Report(SurfaceScopeId, active: true); // 窗口源创建 = 首次显示
+    }
+
+    /// <summary>窗口关闭时退表面作用域（PopupWindowBase 另在 HidePopup 提前退；幂等）。</summary>
+    protected override void OnClosed(EventArgs e)
+    {
+        Hotkeys.SurfaceScopeBridge.Report(SurfaceScopeId, active: false);
+        // 【2026-09-18】此前 DetachWindow 只被 PluginHostWindow 调用 → 普通窗口的外观订阅**永不释放**
+        //（事件总线 / 静态广播会一直强引用已关闭的窗口）。统一在关闭时收口；DetachWindow 幂等。
+        DetachWindow();
+        base.OnClosed(e);
     }
 
     /// <summary>
@@ -114,6 +179,17 @@ public abstract class ShellWindow : Window
     private IntPtr WndProcHook(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
     {
         const int WM_NCHITTEST = 0x0084;
+
+        // 【2026-09-18】DWM 合成状态变化（系统「透明效果」被开关、显卡驱动重载、远程会话切换、
+        // Win11 从最小化恢复/切虚拟桌面回来）会让 accent 模糊**静默消失且不会自己回来**。
+        // 这里作废能力结论并重新应用一次材质；不补这一步，一次丢失就是永久丢失（表现为"昨天还好好的"）。
+        if (msg == NativeMethods.WM_DWMCOMPOSITIONCHANGED && !handled)
+        {
+            BlurCapability.Invalidate();
+            Dispatcher.BeginInvoke(new Action(ApplyWindowMaterial), DispatcherPriority.Background);
+            return IntPtr.Zero;
+        }
+
         if (msg == WM_NCHITTEST && !handled)
         {
             // 仅当窗口可 resize 且未挂 WindowChrome 时，自建命中区。
@@ -235,12 +311,23 @@ public abstract class ShellWindow : Window
     protected virtual void DetachWindow()
     {
         _appearanceSub?.Dispose();
+        _appearanceSub = null;
+
+        // 静态事件会强引用订阅者 → 必须成对退订，否则广播一直持有已关闭的窗口（内存泄漏）。
+        if (_hubSubscribed)
+        {
+            AppearanceHub.Changed -= OnHubAppearanceChanged;
+            _hubSubscribed = false;
+        }
     }
+
+    /// <summary>子类可重写：是否应用窗口材质（DWM 毛玻璃/亚克力）。全透明浮层（热键侧板）重写为 false——用户要求"窗口属性全透明"，文字直接悬浮桌面。</summary>
+    protected virtual bool UseWindowMaterial => true;
 
     /// <summary>子类可重写：窗口材质应用策略。</summary>
     protected virtual void ApplyWindowMaterial()
     {
-        if (VibrancyService is null)
+        if (!UseWindowMaterial || VibrancyService is null)
         {
             return;
         }
@@ -314,6 +401,15 @@ public abstract class ShellWindow : Window
                         return Task.CompletedTask;
                     });
             }
+            else
+            {
+                // 【2026-09-18】兜底：子类构造期漏传 event bus（MenuBarWindow / PopupWindowBase 都漏过）时，
+                // 窗口此前会**只在首帧应用一次外观**，之后切主题永不跟随——真机表现"切到透白菜单栏还是黑的"。
+                // 走进程内广播可保证任何 ShellWindow 子类都能跟随主题。
+                AppearanceHub.Changed += OnHubAppearanceChanged;
+                _hubSubscribed = true;
+            }
+
             ApplyAppearance(AppearanceChangedArgs.All);
         }
 
@@ -329,6 +425,18 @@ public abstract class ShellWindow : Window
         System.Diagnostics.Debug.Assert(ChromeBorder is not null,
             $"{GetType().Name} 未设置 ChromeBorder，窗口外观（背景/描边/圆角）将失效");
 #endif
+    }
+
+    /// <summary>兜底广播回调（无事件总线时使用）：确保在 UI 线程执行。</summary>
+    private void OnHubAppearanceChanged(AppearanceChangedArgs e)
+    {
+        if (!Dispatcher.CheckAccess())
+        {
+            Dispatcher.BeginInvoke(new Action(() => OnHubAppearanceChanged(e)));
+            return;
+        }
+
+        OnAppearanceChanged(e);
     }
 
     private void OnAppearanceChanged(AppearanceChangedArgs e)
@@ -615,7 +723,7 @@ public abstract class ShellWindow : Window
         // 2) DWM 材质：仅在 MaterialChanged 时重新应用毛玻璃（避免无关事件反复调 DWM）。
         //    隐藏态（_materialSuspended）下**不重新应用**：否则主题一变就把已淡出的窗口毛玻璃
         //    又点亮，原地冒出一块背景（SetMaterialSuspended(false) 时统一按最新材质恢复）。
-        if (e.MaterialChanged && VibrancyService is not null && !_materialSuspended)
+        if (e.MaterialChanged && VibrancyService is not null && !_materialSuspended && UseWindowMaterial)
         {
             var hwnd = new WindowInteropHelper(this).Handle;
             VibrancyService.Apply(hwnd, AppearanceService.Material, roundCorners: true);

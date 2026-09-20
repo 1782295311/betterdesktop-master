@@ -1,35 +1,42 @@
 using System;
 using System.IO;
-using System.Linq;
 using System.Reflection;
-using System.Runtime.InteropServices;
 using BetterDesktop.Shell.Clipboard.Contracts;
+using BetterDesktop.Shell.Clipboard.Ipc;
 using Xunit;
 
 namespace BetterDesktop.Shell.Clipboard.Tests;
 
-/// <summary>公共契约：接口成员被实现满足；契约零实现依赖（无 P/Invoke、无 kernel/shell 引用）；关键语义。</summary>
+/// <summary>
+/// 公共契约守卫：契约被唯一实现（引擎 IPC 代理）完整实现；契约层零实现依赖。
+/// <para>
+/// 【2026-09-14】原文件里的行为断言（Pin/Delete/ClearAllUnpinned/ImportEntries 语义）随宿主内
+/// legacy 实现（<c>ClipboardManager</c>）一起删除 —— 那些语义现在是引擎的职责，由 Rust 侧单测覆盖；
+/// 本文件只保留与实现无关的两条结构断言。
+/// </para>
+/// </summary>
 public class ClipboardServiceContractTests
 {
     [Fact]
-    public void InterfaceMembers_AllImplemented()
+    public void InterfaceMembers_AllImplementedByIpcProxy()
     {
-        var manager = new TestClipboardManager(SnapshotFactory.Empty());
+        Assert.True(typeof(IClipboardService).IsAssignableFrom(typeof(ClipboardIpcClient)));
+
+        // 接口成员均可正常调用（无 NotImplementedException 路径）。
         foreach (MethodInfo method in typeof(IClipboardService).GetMethods())
         {
-            // 接口方法均可正常调用（无 NotImplementedException 路径）。
-            Assert.NotNull(manager.GetType().GetMethod(method.Name));
+            Assert.NotNull(typeof(ClipboardIpcClient).GetMethod(method.Name));
         }
 
         foreach (PropertyInfo property in typeof(IClipboardService).GetProperties())
         {
-            Assert.NotNull(manager.GetType().GetProperty(property.Name));
+            Assert.NotNull(typeof(ClipboardIpcClient).GetProperty(property.Name));
         }
 
         // 事件成员。
         foreach (EventInfo ev in typeof(IClipboardService).GetEvents())
         {
-            Assert.NotNull(manager.GetType().GetEvent(ev.Name));
+            Assert.NotNull(typeof(ClipboardIpcClient).GetEvent(ev.Name));
         }
     }
 
@@ -56,67 +63,5 @@ public class ClipboardServiceContractTests
             Assert.DoesNotContain("System.Windows", content);
             // 只允许自身契约命名空间与 System 基础库。
         }
-    }
-
-    [Fact]
-    public void Pin_Unpin_Delete_Semantics()
-    {
-        var manager = new TestClipboardManager(SnapshotFactory.Text("pin-target"));
-        manager.OnClipboardUpdate();
-        ClipboardEntry entry = Assert.Single(manager.GetFilteredEntries());
-
-        manager.PinEntry(entry);
-        Assert.True(manager.GetFilteredEntries()[0].IsPinned);
-
-        manager.TogglePin(entry);
-        Assert.False(manager.GetFilteredEntries()[0].IsPinned);
-
-        manager.DeleteEntry(entry);
-        Assert.Empty(manager.GetFilteredEntries());
-    }
-
-    [Fact]
-    public void ClearAllUnpinned_KeepsPinned()
-    {
-        var manager = new TestClipboardManager(SnapshotFactory.Text("a"));
-        manager.OnClipboardUpdate();
-        manager.NextSnapshot = SnapshotFactory.Text("b");
-        manager.OnClipboardUpdate();
-
-        manager.PinEntry(manager.GetFilteredEntries()[0]);
-        manager.ClearAllUnpinned();
-
-        var entries = manager.GetFilteredEntries();
-        Assert.Single(entries);
-        Assert.True(entries[0].IsPinned);
-    }
-
-    [Fact]
-    public void ImportEntries_ReusesPipeline_ReturnsAddedCount()
-    {
-        var manager = new TestClipboardManager(SnapshotFactory.Empty());
-        int added = manager.ImportEntries(new[]
-        {
-            new ClipboardImportItem(ClipboardItemKind.Text, "import-1"),
-            new ClipboardImportItem(ClipboardItemKind.Text, "import-2"),
-            new ClipboardImportItem(ClipboardItemKind.Text, "import-1"),
-        });
-
-        // 同内容去重：3 条录入仅 2 条新增。
-        Assert.Equal(2, added);
-        Assert.Equal(2, manager.GetFilteredEntries().Count);
-    }
-
-    [Fact]
-    public void LastCopiedContent_TimeLimit_Expired_ReturnsNull()
-    {
-        var manager = new TestClipboardManager(SnapshotFactory.Text("old"));
-        manager.OnClipboardUpdate();
-
-        ClipboardEntry entry = manager.GetFilteredEntries()[0];
-        entry.Timestamp = DateTime.Now.AddMinutes(-10);
-
-        Assert.Null(manager.GetLastCopiedContent(TimeSpan.FromSeconds(30)));
-        Assert.NotNull(manager.GetLastCopiedContent());
     }
 }

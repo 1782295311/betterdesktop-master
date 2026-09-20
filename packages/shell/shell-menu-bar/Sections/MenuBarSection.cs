@@ -77,7 +77,9 @@ internal sealed class MenuBarSection : ISettingsSection
         var index = 0;
         foreach (var feature in ExtensionCatalog.SystemFeatures)
         {
-            var row = ToggleRow(feature.Name, settings, tokens, feature.SettingsKey, true,
+            // 默认值取自目录的 DefaultEnabled（此前写死 true）：写死会让设置页把"帧率"显示成开启，
+            // 而实际默认是关（帧率组件是唯一订阅每帧渲染的地方，默认关是电源红线），两边必须同一真相源。
+            var row = ToggleRow(feature.Name, settings, tokens, feature.SettingsKey, feature.DefaultEnabled,
                 on =>
                 {
                     // 先落盘，再应用到运行中的状态条（顺序不能反：应用失败也不该丢用户意图）

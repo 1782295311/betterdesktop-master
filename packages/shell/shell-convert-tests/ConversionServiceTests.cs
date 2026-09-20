@@ -2,11 +2,13 @@ using System.IO;
 using BetterDesktop.Kernel.Contracts;
 using BetterDesktop.Shell.Convert.Contracts;
 using BetterDesktop.Shell.Convert.Services;
-using BetterDesktop.Shell.Convert.Services.Engines;
 
 namespace BetterDesktop.Shell.Convert.Tests;
 
-/// <summary>服务层批量/事件/InFlight/回读验证（mock 引擎，不起真进程）。</summary>
+/// <summary>
+/// 服务层测试：S9 后执行核心全在 Rust 侧，本套测试用 FakeRustRunner 打桩 IRustConvertRunner，
+/// 只测 ConversionService 的 C# 侧行为（InFlight 去重 / 批量事件 / 错误分类 / 输入校验）。
+/// </summary>
 public class ConversionServiceTests : IDisposable
 {
     private readonly string _dir = Path.Combine(Path.GetTempPath(), "bd-conv-test-" + Guid.NewGuid().ToString("N"));
@@ -19,16 +21,6 @@ public class ConversionServiceTests : IDisposable
         try { Directory.Delete(_dir, true); } catch { /* 清理失败不阻断 */ }
     }
 
-    private ConversionService CreateService(params IConversionEngine[] engines)
-    {
-        var registry = new EngineRegistry();
-        foreach (var engine in engines)
-        {
-            registry.Add(engine);
-        }
-        return new ConversionService(registry, _events);
-    }
-
     private string WriteInput(string name, string content = "x")
     {
         var path = Path.Combine(_dir, name);
@@ -36,23 +28,41 @@ public class ConversionServiceTests : IDisposable
         return path;
     }
 
+    /// <summary>打桩 Rust 侧：RunAsync 返回预设结果，记录调用次数。</summary>
+    private sealed class FakeRustRunner : IRustConvertRunner
+    {
+        public int Calls;
+        public Func<IReadOnlyList<string>, ConversionResult>? Handler;
+        public int DelayMs; // 模拟耗时，用于 InFlight 去重测试
+
+        public async Task<ConversionResult> RunAsync(
+            IReadOnlyList<string> paths, string targetFormat, string? password,
+            string fallbackEngine, long startedAt, CancellationToken ct)
+        {
+            Calls++;
+            if (DelayMs > 0)
+            {
+                await Task.Delay(DelayMs, ct);
+            }
+            var result = Handler?.Invoke(paths)
+                ?? new ConversionResult(paths[0], true, Path.Combine(Path.GetDirectoryName(paths[0])!, "output.pdf"),
+                    ConvertError.None, "fake", 1);
+            return result;
+        }
+    }
+
     [Fact]
-    public async Task 单文件成功_发布到源目录并发出finished事件()
+    public async Task 单文件成功_发出finished事件()
     {
         var input = WriteInput("doc.docx");
-
-        var service = CreateService(new FakeEngine(EngineKind.Soffice, name: "fake-soffice")
-        {
-            Runner = job => WriteProduct(job, "doc.pdf"),
-        });
+        var runner = new FakeRustRunner();
+        var service = new ConversionService(new EngineRegistry(), _events, rustRunner: runner);
 
         var results = await service.ConvertAsync([input], "pdf");
 
         var result = Assert.Single(results);
         Assert.True(result.Success, result.Message);
-        Assert.True(File.Exists(result.Output));
-        Assert.Equal(Path.Combine(_dir, "doc.pdf"), result.Output);
-        Assert.Contains(_events.Emitted, e => e.Name == "convert/finished");
+        Assert.Equal(1, runner.Calls);
         Assert.Contains(_events.Emitted, e => e.Name == "convert/batch-finished");
         var batch = Assert.IsType<ConvertBatchEventPayload>(_events.Emitted.First(e => e.Name == "convert/batch-finished").Payload);
         Assert.Equal(1, batch.Succeeded);
@@ -64,13 +74,13 @@ public class ConversionServiceTests : IDisposable
     {
         var good = WriteInput("good.docx");
         var bad = WriteInput("bad.docx");
-        var service = CreateService(new FakeEngine(EngineKind.Soffice, name: "fake")
+        var runner = new FakeRustRunner
         {
-            Runner = job =>
-                job.PrimarySource.Contains("good")
-                    ? WriteProduct(job, "good.pdf")
-                    : throw new ConvertException(ConvertError.ConversionFailed, "模拟引擎失败"),
-        });
+            Handler = paths => paths[0].Contains("good")
+                ? new ConversionResult(paths[0], true, "good.pdf", ConvertError.None, "fake", 1)
+                : new ConversionResult(paths[0], false, null, ConvertError.ConversionFailed, "fake", 1, "模拟失败"),
+        };
+        var service = new ConversionService(new EngineRegistry(), _events, rustRunner: runner);
 
         var results = await service.ConvertAsync([good, bad], "pdf");
 
@@ -81,27 +91,15 @@ public class ConversionServiceTests : IDisposable
         var batch = Assert.IsType<ConvertBatchEventPayload>(_events.Emitted.First(e => e.Name == "convert/batch-finished").Payload);
         Assert.Equal(2, batch.Total);
         Assert.Equal(1, batch.Succeeded);
-        Assert.Equal(1, batch.Failed); // 部分成功不当全成功（红线 13）
-    }
-
-    [Fact]
-    public async Task 无引擎_按EngineMissing分类不伪装成文件错误()
-    {
-        var input = WriteInput("doc.docx");
-        var service = CreateService(new FakeEngine(EngineKind.Soffice, available: false));
-
-        var result = Assert.Single(await service.ConvertAsync([input], "pdf"));
-
-        Assert.False(result.Success);
-        Assert.Equal(ConvertError.EngineMissing, result.Error);
-        Assert.Contains(_events.Emitted, e => e.Name == "convert/failed");
+        Assert.Equal(1, batch.Failed);
     }
 
     [Fact]
     public async Task 不支持的类型_InputInvalid()
     {
         var input = WriteInput("a.exe");
-        var service = CreateService(new FakeEngine(EngineKind.Soffice));
+        var runner = new FakeRustRunner();
+        var service = new ConversionService(new EngineRegistry(), _events, rustRunner: runner);
 
         var result = Assert.Single(await service.ConvertAsync([input], "pdf"));
 
@@ -113,85 +111,15 @@ public class ConversionServiceTests : IDisposable
     public async Task 并发同文件同目标_InFlight去重()
     {
         var input = WriteInput("doc.docx");
-        var service = CreateService(new FakeEngine(EngineKind.Soffice, name: "fake")
-        {
-            RunnerAsync = async job =>
-            {
-                await Task.Delay(100);
-                var product = Path.Combine(job.TempDir, Path.GetFileNameWithoutExtension(job.PrimarySource) + ".pdf");
-                await File.WriteAllTextAsync(product, "x");
-                IReadOnlyList<string> products = [product];
-                return products;
-            },
-        });
+        var runner = new FakeRustRunner { DelayMs = 100 };
+        var service = new ConversionService(new EngineRegistry(), _events, rustRunner: runner);
 
         var first = service.ConvertAsync([input], "pdf");
         var second = service.ConvertAsync([input], "pdf");
         var results = await Task.WhenAll(first, second);
 
         Assert.True(results[0][0].Success || results[1][0].Success);
-        Assert.False(results[0][0].Success && results[1][0].Success); // 恰有一个执行
+        Assert.False(results[0][0].Success && results[1][0].Success);
         Assert.Equal("已在转换中", (results[0][0].Success ? results[1] : results[0])[0].Message);
-    }
-
-    [Fact]
-    public async Task 已有目标文件_自动序号不覆盖()
-    {
-        var input = WriteInput("doc.docx");
-        File.WriteAllText(Path.Combine(_dir, "doc.pdf"), "旧文件"); // 预占目标
-        var service = CreateService(new FakeEngine(EngineKind.Soffice)
-        {
-            Runner = job => WriteProduct(job, "doc.pdf"),
-        });
-
-        var result = Assert.Single(await service.ConvertAsync([input], "pdf"));
-
-        Assert.True(result.Success);
-        Assert.Equal(Path.Combine(_dir, "doc (2).pdf"), result.Output); // (2) 序号，绝不覆盖
-        Assert.Equal("旧文件", File.ReadAllText(Path.Combine(_dir, "doc.pdf")));
-    }
-
-    [Fact]
-    public async Task 多PDF合并_单输出单事件()
-    {
-        var a = WriteInput("a.pdf");
-        var b = WriteInput("b.pdf");
-        var service = CreateService(new FakeEngine(EngineKind.PdfCompose)
-        {
-            Runner = job => WriteProduct(job, "merged.pdf"),
-        });
-
-        var result = Assert.Single(await service.ConvertAsync([a, b], "pdf"));
-
-        Assert.True(result.Success);
-        Assert.EndsWith("a（合并）.pdf", result.Output);
-    }
-
-    [Fact]
-    public async Task 产物验证失败_恰好重试一次后报ConversionFailed()
-    {
-        var input = WriteInput("doc.docx");
-        var attempts = 0;
-        var service = CreateService(new FakeEngine(EngineKind.Soffice)
-        {
-            Runner = _ =>
-            {
-                attempts++;
-                return []; // 始终无产物
-            },
-        });
-
-        var result = Assert.Single(await service.ConvertAsync([input], "pdf"));
-
-        Assert.False(result.Success);
-        Assert.Equal(ConvertError.ConversionFailed, result.Error);
-        Assert.Equal(2, attempts); // 恰好重试一次（红线 12）
-    }
-
-    private static IReadOnlyList<string> WriteProduct(ConversionJob job, string fileName)
-    {
-        var path = Path.Combine(job.TempDir, fileName);
-        File.WriteAllText(path, "product");
-        return [path];
     }
 }

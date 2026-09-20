@@ -1,0 +1,366 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Better Desktop Cordis · 架构审查与关系图</title>
+<script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
+<style>
+  :root{ --ink:#1a2332; --sub:#5a6b7d; --line:#e3e9f0; --card:#ffffff; --bg:#f4f6f9; --acc:#0f6fde; }
+  *{ box-sizing:border-box; margin:0; padding:0; }
+  body{ font-family:"Segoe UI","Microsoft YaHei",system-ui,sans-serif; background:var(--bg); color:var(--ink); line-height:1.65; }
+  .wrap{ max-width:1180px; margin:0 auto; padding:28px 20px 60px; }
+  header.hd{ padding:26px 28px; background:linear-gradient(135deg,#0f2a4d,#14417a 70%); color:#fff; border-radius:14px; margin-bottom:22px; }
+  header.hd h1{ font-size:26px; letter-spacing:.5px; }
+  header.hd .sub{ margin-top:8px; font-size:13px; color:#c9d9ee; }
+  header.hd .badges{ margin-top:14px; display:flex; flex-wrap:wrap; gap:8px; }
+  header.hd .badge{ background:rgba(255,255,255,.14); border:1px solid rgba(255,255,255,.25); padding:4px 12px; border-radius:20px; font-size:12px; }
+  section{ background:var(--card); border:1px solid var(--line); border-radius:12px; padding:22px 26px; margin-bottom:20px; }
+  section h2{ font-size:18px; margin-bottom:14px; padding-left:11px; border-left:4px solid var(--acc); line-height:1.3; }
+  section h3{ font-size:15px; margin:16px 0 8px; }
+  .verdict{ display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:12px; margin-bottom:8px; }
+  .vcard{ border:1px solid var(--line); border-radius:10px; padding:14px 16px; background:#fafbfd; }
+  .vcard .t{ font-size:12px; color:var(--sub); }
+  .vcard .v{ font-size:20px; font-weight:600; margin-top:4px; }
+  .ok{ color:#0b9a5b; } .warn{ color:#d97706; } .bad{ color:#d64541; }
+  .note{ font-size:13px; color:var(--sub); background:#f7f9fc; border-left:3px solid #b8c8dc; padding:8px 12px; border-radius:0 8px 8px 0; margin:10px 0; }
+  table{ width:100%; border-collapse:collapse; font-size:13px; margin:10px 0; }
+  th,td{ border:1px solid var(--line); padding:7px 10px; text-align:left; vertical-align:top; }
+  th{ background:#eef3f9; font-weight:600; white-space:nowrap; }
+  tr:nth-child(even) td{ background:#fafbfd; }
+  .chart{ width:100%; }
+  #archChart{ height:660px; } #funcChart{ height:700px; }
+  ul.tight{ margin:6px 0 6px 20px; } li{ margin:3px 0; }
+  .tag{ display:inline-block; font-size:11px; padding:1px 8px; border-radius:10px; margin-right:6px; }
+  .p0{ background:#fdecea; color:#c0392b; border:1px solid #f5c6c2; }
+  .b{ background:#fef3e2; color:#b45309; border:1px solid #f6ddb0; }
+  .m{ background:#eaf3fd; color:#1d4ed8; border:1px solid #c5dcf8; }
+  footer{ font-size:12px; color:var(--sub); margin-top:8px; }
+  code{ background:#eef2f7; padding:1px 5px; border-radius:4px; font-size:12px; font-family:Consolas,monospace; }
+  @media (max-width:760px){ .wrap{ padding:14px 10px 40px; } section{ padding:16px 14px; } header.hd h1{ font-size:20px; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="hd">
+  <h1>Better Desktop Cordis · 架构审查与关系图</h1>
+  <div class="sub">Windows 桌面外壳从零重写 · Cordis 插件内核 + Rust 常驻地基 · 审查基线 2026-09-20</div>
+  <div class="badges">
+    <span class="badge">67 工程 / 228 依赖边 / 0 环 / 0 反向依赖（实测）</span>
+    <span class="badge">18 道门禁 · 16 绿 2 红（红属 B1 症状）</span>
+    <span class="badge">六层架构迁移中（S0.5–S3.5 ✅ / S4–S5 进行 / S6–S8 ⬜）</span>
+    <span class="badge">core = 唯一常驻（Rust）</span>
+  </div>
+</header>
+
+<section>
+  <h2>一、审查结论摘要</h2>
+  <div class="verdict">
+    <div class="vcard"><div class="t">依赖结构（67 工程 / 228 边）</div><div class="v ok">0 环 · 0 反向</div></div>
+    <div class="vcard"><div class="t">门禁状态</div><div class="v ok">16/18 绿</div></div>
+    <div class="vcard"><div class="t">常驻者唯一性（真机）</div><div class="v ok">1 × core</div></div>
+    <div class="vcard"><div class="t">core 长跑内存（D2）</div><div class="v bad">失守 36.8MB</div></div>
+    <div class="vcard"><div class="t">发布通道（B1–B4）</div><div class="v bad">阻塞</div></div>
+    <div class="vcard"><div class="t">真机组件健康</div><div class="v warn">shell degraded</div></div>
+  </div>
+  <p style="font-size:14px; margin-top:8px;">
+    <b>一句话结论：结构与边界健康，长跑资源与发布通道不健康。</b>
+    这是一套工程纪律极强的项目——依赖图零环零反向、门禁带棘轮与物证、六层架构与所有权矩阵已制度化；但项目正处
+    「8 进程网状互拉 → core 唯一常驻」的迁移中途（S4–S8 未完），发布路径被 B1 阻塞，今晚（09-20）体检新抓到
+    两个 P0：core 私有工作集单调增长、一条真实的「第二生命周期所有者」越权。
+  </p>
+</section>
+
+<section>
+  <h2>二、架构关系图 · 六层进程拓扑（过渡期现状）</h2>
+  <p style="font-size:13px; color:var(--sub); margin-bottom:10px;">
+    依据：六层模型（现行骨架）、runtime-facts（09-20 真机）、entry-point-map（过渡期，S6 后需重画）。
+    虚线 = 迁移中/已删；箭头 = 拉起/依赖/通信方向。
+  </p>
+  <div id="archChart" class="chart"></div>
+  <div class="note">
+    设计要点：<b>core（Rust）是唯一常驻</b>，只做九件事（托盘 / 热键 / 控制管道 / 监护 / 电源 / 安全 /
+    GPU 仲裁 / 独占能力 / ShellMenu 快照触发），禁止加载 UI、渲染、持业务状态、读业务数据、引用 C#；
+    数据面引擎（剪贴板 / 索引）由 core 拉起并按需自退；表面层经 core 控制管道协作而非互相拉起。
+    右下「退役区」：Tray / Watchdog / Agent 已被 core 取代（S4–S5），安装根残留旧 exe 请勿双击。
+  </div>
+</section>
+
+<section>
+  <h2>三、功能关系图 · 功能模块依赖（csproj 实测）</h2>
+  <p style="font-size:13px; color:var(--sub); margin-bottom:10px;">
+    节点 = 功能模块（33 个，聚合自 67 个工程，排除测试与调试工具）；边 = ProjectReference 依赖（161 条，方向 = 引用方 → 被引用方）。
+    节点大小 ∝ 出入度；颜色 = 架构层。
+  </p>
+  <div id="funcChart" class="chart"></div>
+  <div class="note">本图由本次实测生成：解析主项目全部 csproj 的 ProjectReference 得到 67 工程 / 228 边，与项目自身 09-20 体检报告完全一致（可复核）。</div>
+</section>
+
+<section>
+  <h2>四、功能间的关系 · 说明</h2>
+
+  <h3>4.1 三层公共底座（几乎所有表面/入口功能都站在其上）</h3>
+  <table>
+    <tr><th>底座</th><th>被依赖数</th><th>职责</th><th>说明</th></tr>
+    <tr><td><b>内核 Kernel</b></td><td>30（全仓最大入度）</td><td>插件内核：Context 服务图 / Plugin 生命周期 / Fiber 状态机 / Effect 清理 / HMR 热重载 / Loader</td><td>Cordis 复刻，一切皆插件；loader 不做拓扑排序，依赖顺序由 inject 解决</td></tr>
+    <tr><td><b>契约层 Api</b></td><td>26</td><td>各能力域接口与模型</td><td>零依赖契约层，层序最底</td></tr>
+    <tr><td><b>表面基础 Shell.Core</b></td><td>22</td><td>表面层公共：窗口 / 设置读写 / 插件公共设施</td><td>所有 shell 插件的公共基座</td></tr>
+  </table>
+
+  <h3>4.2 两个横向服务（被多方消费的能力供应方）</h3>
+  <table>
+    <tr><th>服务</th><th>被依赖数</th><th>消费方</th><th>角色</th></tr>
+    <tr><td><b>设置服务 Shell.Settings</b></td><td>14</td><td>菜单栏 / Dock / 开始菜单 / 自绘桌面 / 任务栏 / 右键菜单 / 剪贴板 / 剪贴板面板 / 热键面板 / 快速笔记 / 日历 / 桌面控制 / 格式转换 / 设置中心</td><td>配置真相源（settings.json）的读写服务，几乎所有功能都读它</td></tr>
+    <tr><td><b>应用源 AppSource</b></td><td>12</td><td>Dock / 菜单栏 / 开始菜单 / 搜索 / 最近文件 / 窗口追踪 / 右键菜单 / 通知中心 / 自绘桌面 / 固定 / 宿主 / 设置中心</td><td>应用清单与图标来源，表面各面板共用的数据供应方</td></tr>
+  </table>
+
+  <h3>4.3 聚合面（出边多：向上聚合各功能）</h3>
+  <table>
+    <tr><th>聚合模块</th><th>出边</th><th>聚合了什么</th></tr>
+    <tr><td><b>宿主 Host</b></td><td>22</td><td>薄壳 exe：装载全部插件（菜单栏/Dock/桌面/搜索/剪贴板/通知/灵动岛…）；过渡期还 Ensure 桌面服务/Agent/Tray（S6 后删除）</td></tr>
+    <tr><td><b>设置中心 Settings</b></td><td>13</td><td>独立进程（关窗即退），可配置所有表面模块的开关与行为</td></tr>
+    <tr><td><b>菜单栏 MenuBar</b></td><td>12</td><td>顶部栏：状态栏 / 搜索 / 开始菜单 / 日历 / 窗口追踪 / 自绘桌面 / 固定 / 应用源 / 设置服务</td></tr>
+    <tr><td><b>开始菜单 StartMenu</b></td><td>10</td><td>应用入口：搜索 / 最近文件 / 窗口追踪 / 固定 / 右键菜单 / 应用源 / 设置服务</td></tr>
+    <tr><td><b>Dock</b></td><td>8</td><td>任务栏：窗口追踪 / 固定 / 右键菜单 / 应用源 / 设置服务</td></tr>
+    <tr><td><b>自绘桌面</b></td><td>7</td><td>桌面：右键菜单 / 应用源 / 格式转换 / 设置服务；桌面控制服务（DesktopControl）另挂剪贴板</td></tr>
+  </table>
+
+  <h3>4.4 数据面桥（表面功能 ↔ Rust 引擎的通信带）</h3>
+  <table>
+    <tr><th>桥</th><th>被依赖数</th><th>使用方</th><th>对端引擎</th></tr>
+    <tr><td><b>剪贴板IPC</b></td><td>6</td><td>剪贴板 / 剪贴板面板 / 桌面控制 / 截图 / 热键面板 / 表面基础</td><td>engine（Rust 剪贴板历史引擎，core 拉起、空闲自退）</td></tr>
+    <tr><td><b>索引IPC</b></td><td>2</td><td>搜索 / 应用源（直接拉起引擎——即今晚被真机抓到的越权点，已登记 S6 收敛）</td><td>engine-index（Rust 索引引擎）</td></tr>
+  </table>
+
+  <h3>4.5 功能间直接协作（非底座依赖，最能说明「谁在帮谁干活」）</h3>
+  <table>
+    <tr><th>协作</th><th>说明</th></tr>
+    <tr><td>剪贴板三件套</td><td>剪贴板（插件）→ 剪贴板IPC → 剪贴板面板；面板还会自愈探活引擎（入口图 §3）</td></tr>
+    <tr><td>搜索 ← 应用源 + 索引IPC</td><td>搜索靠应用源供数据、索引引擎供全文检索；菜单栏/开始菜单都嵌搜索</td></tr>
+    <tr><td>最近文件 ← 窗口追踪 + 应用源</td><td>最近文件基于窗口追踪记录 + 应用源解析图标</td></tr>
+    <tr><td>截图 → 剪贴板IPC</td><td>截图结果直入剪贴板历史</td></tr>
+    <tr><td>格式转换 ← 右键菜单</td><td>转换入口挂在系统右键（Convert 经 CLI 免宿主直做）</td></tr>
+    <tr><td>通知中心 ← 固定 + 应用源</td><td>通知与固定应用、应用源联动</td></tr>
+    <tr><td>桌面控制 → 自绘桌面</td><td>DesktopControl 是自绘桌面的独立服务进程（shellmenu.json 快照唯一写入者）</td></tr>
+    <tr><td>Dock/菜单栏/开始菜单 ← 窗口追踪 + 固定 + 应用源</td><td>三大表面面板共用「窗口/固定/应用」三条数据流</td></tr>
+  </table>
+
+  <h3>4.6 一条主线（数据流）</h3>
+  <p style="font-size:14px;">
+    应用生态（应用源 + 窗口追踪 + 固定）→ 三个聚合面板（Dock / 菜单栏 / 开始菜单）→ 用户；
+    剪贴板与索引（Rust 引擎，core 唯一拉起）→ IPC 桥 → 剪贴板面板 / 搜索；
+    一切配置经设置服务 → 设置中心统一入口；一切进程生命周期归 core（reconcile + 按需 + 电源策略）。
+  </p>
+</section>
+
+<section>
+  <h2>五、审查发现 · 问题清单</h2>
+
+  <h3>5.1 P0（今晚体检新增，真机实证）</h3>
+  <ul class="tight">
+    <li><span class="tag p0">P0</span><b>core 私有工作集单调增长，D2（&lt;8MB）长跑失守</b>：同一 PID 75 分钟内 0.53 → 14.29 → 36.83 MB，句柄 510，稳定不回落。候选根因：<code>supervisor.rs:579</code> 每 3 秒 <code>Settings::load()</code>（读文件+解析 JSON）。可执行下一步：改用 <code>start_config_watch</code> 文件变更通知驱动失效，替代轮询读盘。项目已推翻「D2 达标」旧读数。</li>
+    <li><span class="tag p0">P0</span><b>一条真实的「第二生命周期所有者」</b>：<code>packages/shell/shell-index-ipc/IndexEngineLauncher.cs</code> 的 <code>EnsureEngine/StartDetached</code> 被 <code>shell-search</code> 与 <code>shell-app-source</code> 直接调用（壳插件自己拉起进程）。真机抓到：Index.Engine.exe 父进程不是 core。门禁旧正则只匹配两段 exe 名而漏三段名——<b>已修正则、补登记棘轮（removeBy: S6）、加回归钉子</b>，但收敛未做（登记 ≠ 修复）。</li>
+  </ul>
+
+  <h3>5.2 发布 / 迁移阻塞 B1–B4</h3>
+  <ul class="tight">
+    <li><span class="tag b">B1</span><b>发布路径阻塞</b>：<code>packages/</code> + <code>host/</code> 未提交工作区 ⇒ 构建/测试不可信；门禁两红（dotnet-format 5532 处 / test-coverage 退出码 1）均为其下游症状（证据：本次改动未触碰 C# 工程）。</li>
+    <li><span class="tag b">B2</span><b>Kernel.dll 多副本偏斜</b>：4 份拷贝版本不一致，曾搞坏过面板。红线：只允许单拷 core，绝不手工拷 Kernel.dll / 任何 C# 程序集。</li>
+    <li><span class="tag b">B3</span><b>部署的 CLI 是 09-18 旧构建</b>：<code>--core</code> 返回 Usage=2（不认识新参数）。</li>
+    <li><span class="tag b">B4</span><b>S4-4/5 未完成</b>：Agent/Watchdog 源码已删，但安装根残留 Tray/Watchdog/Agent 旧 exe——<b>勿双击</b>，会与 core 打架。</li>
+  </ul>
+
+  <h3>5.3 其他（中等 / 待决）</h3>
+  <ul class="tight">
+    <li><span class="tag m">中</span><b>shell 组件真机 degraded</b>：<code>desired=running</code> 但 <code>actual=False</code>；desktop 在 1154s 内重启 6 次——需查 core 日志拉起失败原因。</li>
+    <li><span class="tag m">中</span><b>安全档位不一致</b>：<code>engine/src/ipc.rs</code>、<code>engine-index/src/ipc.rs</code> 的 CreateNamedPipeW 传 <code>None</code>（默认 DACL），与 core 显式 ACL 不在同一档——需显式决策（补 ACL 或登记 known-exceptions）。</li>
+    <li><span class="tag m">中</span><b>文档-实现偏差 3 处</b>：core 实际 exe 名 <code>betterdesktop-core.exe</code>（小写连字符）vs 文档表 <code>BetterDesktop.Core.exe</code>；launcher 终态描述待更新；<code>STATUS.md</code>（09-14）已过期仍自称第一入口。</li>
+    <li><span class="tag m">中</span><b>命名漂移 4 组</b>：<code>CreateEngine/EnsureEngine/StartEngine</code>（≥3，漂移）、<code>CreateFile/LaunchFile/StartFile</code>、<code>LaunchDesktopService/StartDesktopService</code>、<code>LaunchHost/StartHost</code>（=2，候选）。</li>
+    <li><span class="tag m">好</span><b>门禁自我加固已完成</b>：18 道 16 绿 2 红；新增 B5（组件名双向对账：components.json 9 = C# 9）；防「静默通过」三防线（枚举防空、单测反例、JSON 解析失败即判定无效）；收敛后 <code>lifecycle-owner</code> 16 → 13 命中。</li>
+  </ul>
+
+  <h3>5.4 待决（需用户拍板，来自项目自身体检）</h3>
+  <ul class="tight">
+    <li>是否接受 engine/engine-index 管道默认 DACL（登记）还是补齐 ACL；</li>
+    <li>数据面引擎的命名管道算不算「命令通道」（决定管道服务端归属门禁口径）；</li>
+    <li>命名漂移是否统一（术语变更需先落决策记录）；</li>
+    <li>「整理 = git 提交」类动作是否执行（当前 packages/ 380 项 + docs/ 未提交，git 提交属敏感操作，未动）。</li>
+  </ul>
+</section>
+
+<section>
+  <h2>六、本次整理动作</h2>
+  <table>
+    <tr><th>动作</th><th>内容</th><th>证据</th></tr>
+    <tr><td>删除</td><td>主项目根目录 4 个可再生日志：<code>build-tmp.log</code>（55KB）、<code>gates-run.log</code>、<code>gates-run-2.log</code>、<code>gates.log</code></td><td>9/15–9/16 旧门禁/构建日志；docs 内唯一提及为 gates-run-3.log（门禁自动产物），无引用</td></tr>
+    <tr><td>保留</td><td><code>backups/rollback-20260909/</code>（回滚备份，含整套 csproj 拷贝）、<code>Temp/</code>（含 simplify_candidates.md 等调研候选）、docs 全部、两个 .git</td><td>备份与调研候选无删除依据；Temp 内 24KB 简化候选文档可能是进行中工作</td></tr>
+    <tr><td>产出</td><td>本文档（审查 + 双图 + 关系说明）</td><td>数据来源见下节</td></tr>
+  </table>
+</section>
+
+<section>
+  <h2>七、数据来源与验证</h2>
+  <ul class="tight" style="font-size:13px;">
+    <li><b>依赖图（图二）</b>：本次实测——解析主项目全部 67 个 csproj 的 ProjectReference（排除 backups/dist/Temp），得 67 工程 / 228 边；聚合到 33 功能模块 / 161 边。与项目 09-20 体检报告「67 节点 / 228 边，0 环、0 反向依赖」完全一致。</li>
+    <li><b>架构（图一）</b>：六层模型与未来扩展点.md（现行）、2026-09-20-current-architecture.md、2026-09-20-runtime-facts.md、2026-09-20-project-health-check.md、ADR-001（宪法）、entry-point-map.md（过渡期）、TERMINOLOGY.md、ownership 矩阵。</li>
+    <li><b>边界</b>：本次为只读审查（未运行 full-audit / 未启停进程 / 未动 git）；真机读数引用项目 09-20 探针快照；「整理」物理动作仅删除 4 个无引用可再生日志，其余按用户既有偏好（删有证据、大件留用户定）留待确认。</li>
+  </ul>
+  <footer>生成于 2026-09-20 · 主项目 better-desktop-cordis · 关联：docs/audits/2026-09-20-project-health-check.md · docs/architecture/六层模型与未来扩展点.md</footer>
+</section>
+
+</div>
+
+<script>
+var COL = { 'e':'#e07b39', 's':'#2f9e6e', 'c':'#5b7db1', 'k':'#1f4e79', 'ret':'#b0b8c4' };
+
+// ---------- 图一：架构关系图（六层进程拓扑，layout none） ----------
+var archNodes = [
+  { name:'命令行 CLI', x:0.12, y:0.06, category:'入口层', itemStyle:{color:COL.e}, symbolSize:46 },
+  { name:'启动器', x:0.34, y:0.06, category:'入口层', itemStyle:{color:COL.e}, symbolSize:36 },
+  { name:'系统右键 DLL', x:0.56, y:0.06, category:'入口层', itemStyle:{color:COL.e}, symbolSize:36 },
+  { name:'设置中心', x:0.78, y:0.06, category:'入口层', itemStyle:{color:COL.e}, symbolSize:40 },
+  { name:'截图 Capture', x:0.16, y:0.22, category:'扩展层', itemStyle:{color:'#8a6bbf'}, symbolSize:34 },
+  { name:'格式转换', x:0.42, y:0.22, category:'扩展层', itemStyle:{color:'#8a6bbf'}, symbolSize:34 },
+  { name:'更新器', x:0.66, y:0.22, category:'扩展层', itemStyle:{color:'#8a6bbf'}, symbolSize:30 },
+  { name:'宿主 Host', x:0.13, y:0.39, category:'表面层', itemStyle:{color:COL.s}, symbolSize:52 },
+  { name:'表面 UI 模块群', x:0.44, y:0.39, category:'表面层', itemStyle:{color:COL.s}, symbolSize:60,
+    label:{formatter:'表面 UI 模块\n菜单栏/Dock/桌面/开始/搜索/通知/灵动岛/快速笔记…'} },
+  { name:'剪贴板面板', x:0.78, y:0.39, category:'表面层', itemStyle:{color:COL.s}, symbolSize:34 },
+  { name:'剪贴板引擎', x:0.24, y:0.56, category:'数据面', itemStyle:{color:'#2b6cb0'}, symbolSize:40 },
+  { name:'索引引擎', x:0.52, y:0.56, category:'数据面', itemStyle:{color:'#2b6cb0'}, symbolSize:40 },
+  { name:'转换引擎 native', x:0.8, y:0.56, category:'数据面', itemStyle:{color:'#2b6cb0'}, symbolSize:34 },
+  { name:'bd-infer（留位）', x:0.52, y:0.73, category:'基础设施', itemStyle:{color:'#9aa7b5'}, symbolSize:34 },
+  { name:'core（唯一常驻）', x:0.52, y:0.9, category:'地基', itemStyle:{color:'#c0392b'}, symbolSize:66,
+    label:{formatter:'core · Rust 唯一常驻\n托盘/热键/管道/监护/电源/安全/GPU/独占'} },
+  { name:'托盘 Tray（退役中）', x:0.9, y:0.06, category:'退役', itemStyle:{color:COL.ret}, symbolType:'diamond', symbolSize:30 },
+  { name:'Watchdog/Agent（已删）', x:0.9, y:0.22, category:'退役', itemStyle:{color:COL.ret}, symbolType:'diamond', symbolSize:30 }
+];
+var archLinks = [
+  {source:'命令行 CLI', target:'core（唯一常驻）', label:'控制管道 MenuCmd'},
+  {source:'命令行 CLI', target:'宿主 Host', label:'管道转发'},
+  {source:'命令行 CLI', target:'格式转换', label:'免宿主直做'},
+  {source:'系统右键 DLL', target:'命令行 CLI', label:'--menu-batch'},
+  {source:'启动器', target:'宿主 Host', label:'启动世界'},
+  {source:'设置中心', target:'表面 UI 模块群', label:'配置下发'},
+  {source:'宿主 Host', target:'表面 UI 模块群', label:'插件装载'},
+  {source:'宿主 Host', target:'core（唯一常驻）', label:'CoreControlClient'},
+  {source:'表面 UI 模块群', target:'剪贴板引擎', label:'Clipboard.Ipc'},
+  {source:'表面 UI 模块群', target:'索引引擎', label:'IndexIpc'},
+  {source:'剪贴板面板', target:'剪贴板引擎', label:'自愈探活'},
+  {source:'core（唯一常驻）', target:'剪贴板引擎', label:'监护拉起'},
+  {source:'core（唯一常驻）', target:'索引引擎', label:'监护拉起'},
+  {source:'core（唯一常驻）', target:'剪贴板面板', label:'监护拉起'},
+  {source:'core（唯一常驻）', target:'表面 UI 模块群', label:'reconcile'},
+  {source:'core（唯一常驻）', target:'宿主 Host', label:'reconcile'},
+  {source:'core（唯一常驻）', target:'截图 Capture', label:'按需拉起'},
+  {source:'core（唯一常驻）', target:'bd-infer（留位）', label:'未来扩展·留位', lineStyle:{type:'dashed', color:'#c3ccd6'}},
+  {source:'托盘 Tray（退役中）', target:'core（唯一常驻）', label:'S5 取代中', lineStyle:{type:'dashed', color:'#c3ccd6'}},
+  {source:'Watchdog/Agent（已删）', target:'core（唯一常驻）', label:'S4-4 已删', lineStyle:{type:'dashed', color:'#c3ccd6'}}
+];
+var archChart = echarts.init(document.getElementById('archChart'));
+archChart.setOption({
+  tooltip:{ formatter:function(p){ if(p.dataType==='edge') return p.data.label||''; return p.data.name; } },
+  legend:[{ data:['入口层','扩展层','表面层','数据面','基础设施','地基','退役'], orient:'vertical', right:6, top:10, textStyle:{fontSize:11} }],
+  series:[{
+    type:'graph', layout:'none', roam:true,
+    label:{ show:true, position:'bottom', fontSize:11, color:'#334', lineHeight:15 },
+    edgeSymbol:['none','arrow'], edgeSymbolSize:[0,9],
+    data: archNodes,
+    links: archLinks,
+    lineStyle:{ color:'#8b99a8', width:1.2, curveness:0.18 },
+    edgeLabel:{ show:true, fontSize:10, color:'#5a6b7d', formatter:function(p){ return p.data.label||''; } },
+    emphasis:{ focus:'adjacency', lineStyle:{width:2.4} },
+    categories:[{name:'入口层'},{name:'扩展层'},{name:'表面层'},{name:'数据面'},{name:'基础设施'},{name:'地基'},{name:'退役'}]
+  }]
+});
+
+// ---------- 图二：功能关系图（force） ----------
+var funcData = {
+ nodes:[
+  {name:'命令行',symbolSize:34,layer:'e'},{name:'内核',symbolSize:48,layer:'k'},{name:'格式转换',symbolSize:40,layer:'s'},
+  {name:'表面基础',symbolSize:48,layer:'s'},{name:'契约层',symbolSize:48,layer:'c'},{name:'宿主',symbolSize:48,layer:'e'},
+  {name:'热键面板',symbolSize:39,layer:'s'},{name:'Dock',symbolSize:48,layer:'s'},{name:'通知中心',symbolSize:39,layer:'s'},
+  {name:'最近文件',symbolSize:41,layer:'s'},{name:'搜索',symbolSize:40,layer:'s'},{name:'设置服务',symbolSize:48,layer:'s'},
+  {name:'状态栏',symbolSize:35,layer:'s'},{name:'菜单栏',symbolSize:48,layer:'s'},{name:'快速笔记',symbolSize:33,layer:'s'},
+  {name:'剪贴板',symbolSize:43,layer:'s'},{name:'应用源',symbolSize:48,layer:'s'},{name:'窗口追踪',symbolSize:44,layer:'s'},
+  {name:'固定',symbolSize:38,layer:'s'},{name:'日历',symbolSize:35,layer:'s'},{name:'任务栏',symbolSize:38,layer:'s'},
+  {name:'开始菜单',symbolSize:48,layer:'s'},{name:'自绘桌面',symbolSize:48,layer:'s'},{name:'右键菜单',symbolSize:48,layer:'s'},
+  {name:'灵动岛',symbolSize:35,layer:'s'},{name:'启动器',symbolSize:28,layer:'e'},{name:'索引IPC',symbolSize:29,layer:'s'},
+  {name:'截图',symbolSize:31,layer:'s'},{name:'剪贴板IPC',symbolSize:40,layer:'s'},{name:'剪贴板面板',symbolSize:34,layer:'s'},
+  {name:'桌面控制',symbolSize:43,layer:'s'},{name:'音乐',symbolSize:28,layer:'s'},{name:'设置中心',symbolSize:48,layer:'s'}
+ ],
+ links:[
+  {source:'Dock',target:'内核'},{source:'Dock',target:'右键菜单'},{source:'Dock',target:'固定'},{source:'Dock',target:'契约层'},
+  {source:'Dock',target:'应用源'},{source:'Dock',target:'窗口追踪'},{source:'Dock',target:'表面基础'},{source:'Dock',target:'设置服务'},
+  {source:'任务栏',target:'内核'},{source:'任务栏',target:'契约层'},{source:'任务栏',target:'表面基础'},{source:'任务栏',target:'设置服务'},
+  {source:'剪贴板',target:'内核'},{source:'剪贴板',target:'剪贴板IPC'},{source:'剪贴板',target:'契约层'},{source:'剪贴板',target:'表面基础'},
+  {source:'剪贴板',target:'设置服务'},{source:'剪贴板IPC',target:'内核'},{source:'剪贴板IPC',target:'契约层'},
+  {source:'剪贴板面板',target:'内核'},{source:'剪贴板面板',target:'剪贴板IPC'},{source:'剪贴板面板',target:'契约层'},{source:'剪贴板面板',target:'表面基础'},
+  {source:'右键菜单',target:'内核'},{source:'右键菜单',target:'契约层'},{source:'右键菜单',target:'应用源'},{source:'右键菜单',target:'表面基础'},
+  {source:'右键菜单',target:'设置服务'},{source:'启动器',target:'内核'},{source:'启动器',target:'表面基础'},
+  {source:'命令行',target:'内核'},{source:'命令行',target:'契约层'},{source:'命令行',target:'格式转换'},{source:'命令行',target:'表面基础'},
+  {source:'固定',target:'内核'},{source:'固定',target:'应用源'},
+  {source:'宿主',target:'Dock'},{source:'宿主',target:'任务栏'},{source:'宿主',target:'内核'},{source:'宿主',target:'剪贴板'},
+  {source:'宿主',target:'右键菜单'},{source:'宿主',target:'固定'},{source:'宿主',target:'应用源'},{source:'宿主',target:'开始菜单'},
+  {source:'宿主',target:'快速笔记'},{source:'宿主',target:'搜索'},{source:'宿主',target:'日历'},{source:'宿主',target:'最近文件'},
+  {source:'宿主',target:'格式转换'},{source:'宿主',target:'灵动岛'},{source:'宿主',target:'热键面板'},{source:'宿主',target:'状态栏'},
+  {source:'宿主',target:'窗口追踪'},{source:'宿主',target:'自绘桌面'},{source:'宿主',target:'菜单栏'},{source:'宿主',target:'表面基础'},
+  {source:'宿主',target:'设置服务'},{source:'宿主',target:'通知中心'},
+  {source:'应用源',target:'内核'},{source:'应用源',target:'契约层'},{source:'应用源',target:'索引IPC'},
+  {source:'开始菜单',target:'内核'},{source:'开始菜单',target:'右键菜单'},{source:'开始菜单',target:'固定'},{source:'开始菜单',target:'契约层'},
+  {source:'开始菜单',target:'应用源'},{source:'开始菜单',target:'搜索'},{source:'开始菜单',target:'最近文件'},{source:'开始菜单',target:'窗口追踪'},
+  {source:'开始菜单',target:'表面基础'},{source:'开始菜单',target:'设置服务'},
+  {source:'快速笔记',target:'内核'},{source:'快速笔记',target:'表面基础'},{source:'快速笔记',target:'设置服务'},
+  {source:'截图',target:'剪贴板IPC'},{source:'截图',target:'契约层'},{source:'截图',target:'表面基础'},
+  {source:'搜索',target:'内核'},{source:'搜索',target:'契约层'},{source:'搜索',target:'应用源'},{source:'搜索',target:'索引IPC'},
+  {source:'日历',target:'内核'},{source:'日历',target:'契约层'},{source:'日历',target:'设置服务'},
+  {source:'最近文件',target:'内核'},{source:'最近文件',target:'契约层'},{source:'最近文件',target:'应用源'},{source:'最近文件',target:'窗口追踪'},
+  {source:'最近文件',target:'表面基础'},
+  {source:'格式转换',target:'内核'},{source:'格式转换',target:'右键菜单'},{source:'格式转换',target:'契约层'},{source:'格式转换',target:'设置服务'},
+  {source:'桌面控制',target:'内核'},{source:'桌面控制',target:'剪贴板'},{source:'桌面控制',target:'剪贴板IPC'},{source:'桌面控制',target:'契约层'},
+  {source:'桌面控制',target:'自绘桌面'},{source:'桌面控制',target:'表面基础'},{source:'桌面控制',target:'设置服务'},
+  {source:'灵动岛',target:'内核'},{source:'灵动岛',target:'契约层'},{source:'灵动岛',target:'表面基础'},
+  {source:'热键面板',target:'内核'},{source:'热键面板',target:'剪贴板IPC'},{source:'热键面板',target:'契约层'},{source:'热键面板',target:'表面基础'},
+  {source:'热键面板',target:'设置服务'},
+  {source:'状态栏',target:'内核'},{source:'状态栏',target:'契约层'},{source:'状态栏',target:'表面基础'},
+  {source:'窗口追踪',target:'内核'},{source:'窗口追踪',target:'契约层'},{source:'窗口追踪',target:'应用源'},{source:'窗口追踪',target:'表面基础'},
+  {source:'索引IPC',target:'内核'},
+  {source:'自绘桌面',target:'内核'},{source:'自绘桌面',target:'右键菜单'},{source:'自绘桌面',target:'契约层'},{source:'自绘桌面',target:'应用源'},
+  {source:'自绘桌面',target:'格式转换'},{source:'自绘桌面',target:'表面基础'},{source:'自绘桌面',target:'设置服务'},
+  {source:'菜单栏',target:'内核'},{source:'菜单栏',target:'固定'},{source:'菜单栏',target:'契约层'},{source:'菜单栏',target:'应用源'},
+  {source:'菜单栏',target:'开始菜单'},{source:'菜单栏',target:'搜索'},{source:'菜单栏',target:'日历'},{source:'菜单栏',target:'状态栏'},
+  {source:'菜单栏',target:'窗口追踪'},{source:'菜单栏',target:'自绘桌面'},{source:'菜单栏',target:'表面基础'},{source:'菜单栏',target:'设置服务'},
+  {source:'表面基础',target:'内核'},{source:'表面基础',target:'剪贴板IPC'},{source:'表面基础',target:'契约层'},
+  {source:'设置中心',target:'Dock'},{source:'设置中心',target:'任务栏'},{source:'设置中心',target:'内核'},{source:'设置中心',target:'剪贴板'},
+  {source:'设置中心',target:'右键菜单'},{source:'设置中心',target:'契约层'},{source:'设置中心',target:'应用源'},{source:'设置中心',target:'开始菜单'},
+  {source:'设置中心',target:'灵动岛'},{source:'设置中心',target:'自绘桌面'},{source:'设置中心',target:'菜单栏'},{source:'设置中心',target:'表面基础'},
+  {source:'设置中心',target:'设置服务'},
+  {source:'设置服务',target:'内核'},{source:'设置服务',target:'契约层'},{source:'设置服务',target:'表面基础'},
+  {source:'通知中心',target:'内核'},{source:'通知中心',target:'固定'},{source:'通知中心',target:'契约层'},{source:'通知中心',target:'应用源'},
+  {source:'通知中心',target:'表面基础'},
+  {source:'音乐',target:'内核'},{source:'音乐',target:'契约层'}
+ ]
+};
+funcData.nodes.forEach(function(n){ n.itemStyle={color:COL[n.layer]}; n.label={show:true,fontSize:10,color:'#334'}; });
+var funcChart = echarts.init(document.getElementById('funcChart'));
+funcChart.setOption({
+  tooltip:{ formatter:function(p){ if(p.dataType==='edge') return p.source+' → '+p.target; return p.data.name; } },
+  legend:[{ data:['入口层 (e)','表面层 (s)','契约层 (c)','内核底座 (k)'], orient:'vertical', right:6, top:10, textStyle:{fontSize:11} }],
+  series:[{
+    type:'graph', layout:'force', roam:true,
+    force:{ repulsion:420, gravity:0.08, edgeLength:[60,140], layoutAnimation:false },
+    label:{ show:true, position:'bottom', fontSize:10, color:'#334' },
+    edgeSymbol:['none','arrow'], edgeSymbolSize:[0,7],
+    data: funcData.nodes,
+    links: funcData.links,
+    lineStyle:{ color:'#a7b4c2', width:1, curveness:0.1, opacity:0.75 },
+    emphasis:{ focus:'adjacency', lineStyle:{width:2.2, color:'#0f6fde'} },
+    categories:[{name:'入口层 (e)'},{name:'表面层 (s)'},{name:'契约层 (c)'},{name:'内核底座 (k)'}]
+  }]
+});
+
+window.addEventListener('resize', function(){ archChart.resize(); funcChart.resize(); });
+</script>
+</body>
+</html>

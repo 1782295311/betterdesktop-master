@@ -12,6 +12,7 @@ using System.Windows.Shapes;
 using System.Windows.Threading;
 using BetterDesktop.Kernel.Core;
 using BetterDesktop.Shell.Core.Native;
+using BetterDesktop.Shell.Core.Surface;
 using BetterDesktop.Shell.MenuBar.Contracts;
 using BetterDesktop.Shell.MenuBar.Services;
 using BetterDesktop.Shell.Settings.Contracts;
@@ -94,7 +95,7 @@ internal sealed class BatteryIcon : ContentControl, IDisposable
         _bolt = new Path
         {
             Data = Geometry.Parse("M12 2L7 8h3l-1.5 4 5-6H10z"),
-            Fill = new SolidColorBrush(Color.FromRgb(byte.MaxValue, 215, 0)),
+            Fill = ThemeBrushes.Get("StatusWarning"),
             Stretch = Stretch.Uniform,
             Width = 7.0,
             Height = 10.0,
@@ -163,9 +164,9 @@ internal sealed class BatteryIcon : ContentControl, IDisposable
         _percentText.Text = $"{Math.Round(num * 100.0)}%";
         if (flag)
         {
-            _fill.Fill = new SolidColorBrush(Color.FromRgb(76, 230, 154));
+            _fill.Fill = ThemeBrushes.Get("StatusSuccess");
             _bolt.Visibility = Visibility.Visible;
-            _percentText.Foreground = new SolidColorBrush(Color.FromRgb(76, 230, 154));
+            _percentText.Foreground = ThemeBrushes.Get("StatusSuccess");
             return;
         }
         _fill.Fill = MenuBarTheme.Foreground;
@@ -173,7 +174,7 @@ internal sealed class BatteryIcon : ContentControl, IDisposable
         _percentText.Foreground = MenuBarTheme.Foreground;
         if (num < 0.2)
         {
-            _fill.Fill = new SolidColorBrush(Color.FromRgb(byte.MaxValue, 106, 106));
+            _fill.Fill = ThemeBrushes.Get("StatusDanger");
         }
     }
 
@@ -383,7 +384,7 @@ internal sealed class BrightnessIcon : ContentControl, IDisposable
     {
         double num = ((snap.Progress >= 0.0) ? (snap.Progress / 100.0) : 0.7);
         int num2 = (int)Math.Round(num * 8.0);
-        SolidColorBrush solidColorBrush = new SolidColorBrush(Color.FromRgb(96, 96, 96));
+        Brush solidColorBrush = Brushes.DimGray;
         for (int i = 0; i < 8; i++)
         {
             _rays[i].Stroke = ((i < num2) ? MenuBarTheme.Foreground : solidColorBrush);
@@ -423,7 +424,7 @@ internal sealed class CapsuleSwitch : ContentControl
             Width = 16.0,
             Height = 7.0,
             CornerRadius = new CornerRadius(3.5),
-            Background = new SolidColorBrush(Color.FromRgb(144, 144, 144))
+            Background = Brushes.Gray
         };
         canvas.Children.Add(_capsule);
         _knob = new Ellipse
@@ -442,12 +443,12 @@ internal sealed class CapsuleSwitch : ContentControl
     {
         if (on)
         {
-            _capsule.Background = new SolidColorBrush(Color.FromRgb(76, 230, 154));
+            _capsule.Background = ThemeBrushes.Get("StatusSuccess");
             Canvas.SetLeft(_knob, 10.0);
         }
         else
         {
-            _capsule.Background = new SolidColorBrush(Color.FromRgb(144, 144, 144));
+            _capsule.Background = Brushes.Gray;
             Canvas.SetLeft(_knob, 1.0);
         }
     }
@@ -550,7 +551,12 @@ internal sealed class FpsIcon : ContentControl, IDisposable
         };
         base.Content = _fpsText;
         base.ToolTip = "渲染帧率 (FPS)";
-        CompositionTarget.Rendering += OnFrame;
+        // 【2026-09-18 电源管理】此处**不再**无条件订阅 CompositionTarget.Rendering。
+        // 成因：只要存在 Rendering 订阅者，WPF 合成器就会认定"有人需要每帧回调"并按刷新率
+        // （60/120/144Hz）持续出帧 —— 即使本控件已被 Collapsed 也不停。菜单栏又是全屏宽的
+        // 分层窗口 + DWM 材质，每帧代价远大于普通小窗；写 TextBlock 还会制造新的渲染失效，
+        // 形成自维持。实测现象就是"风扇一直转，关掉程序才停"。
+        // 改为按需采样：仅当用户要看且系统未挂起/未在恢复冷却期时才订阅，见 SetSampling。
         _timer = new DispatcherTimer
         {
             Interval = TimeSpan.FromSeconds(1.0)
@@ -563,7 +569,75 @@ internal sealed class FpsIcon : ContentControl, IDisposable
                 _frameCount = 0;
             }
         };
-        _timer.Start();
+
+        // 挂起/恢复：现代待机（S0ix）下进程仍会被调度，必须主动停手，否则睡着时还在出帧。
+        var power = Power;
+        power.Suspended += OnPowerSuspended;
+        power.Resumed += OnPowerResumed;
+
+        // 菜单栏整体显隐（空闲淡出）：**这条路上窗口仍在、可视树仍在**，只有靠这个状态才能退订，
+        // 否则"用户已离开"时合成器仍按刷新率出帧（见 MenuBarShellVisibility 头注释）。
+        MenuBarShellVisibility.Changed += OnShellVisibilityChanged;
+    }
+
+    private void OnShellVisibilityChanged() => ApplySampling();
+
+    /// <summary>用户是否要求显示（由菜单栏的 SetComponentVisible 驱动）。</summary>
+    private bool _wanted;
+
+    /// <summary>当前是否已订阅每帧渲染回调。</summary>
+    private bool _subscribed;
+
+    private static BetterDesktop.Kernel.Core.SystemPowerMonitor Power =>
+        BetterDesktop.Kernel.Core.SystemPowerMonitor.Current;
+
+    /// <summary>
+    /// 是否采样帧率 —— 本组件唯一开关。
+    /// 真正订阅每帧回调的条件是「用户要求显示 **且** 菜单栏整体可见 **且** 系统未挂起/未处恢复冷却期」。
+    /// </summary>
+    public void SetSampling(bool wanted)
+    {
+        _wanted = wanted;
+        ApplySampling();
+    }
+
+    private void ApplySampling()
+    {
+        if (_disposed)
+        {
+            return;
+        }
+
+        var shouldRun = _wanted && MenuBarShellVisibility.IsVisible && !Power.ShouldPauseHighFrequencyWork;
+        if (shouldRun == _subscribed)
+        {
+            return;
+        }
+
+        if (shouldRun)
+        {
+            CompositionTarget.Rendering += OnFrame;
+            _timer.Start();
+            _subscribed = true;
+        }
+        else
+        {
+            CompositionTarget.Rendering -= OnFrame;
+            _timer.Stop();
+            _subscribed = false;
+            _frameCount = 0;
+            _fpsText.Text = "--"; // 未采样时不显示过期数字，避免误导
+        }
+    }
+
+    private void OnPowerSuspended() => Dispatcher.BeginInvoke(new Action(ApplySampling));
+
+    private void OnPowerResumed()
+    {
+        // 冷却期后再恢复采样：显示设备与合成器刚回来，立刻出帧没有意义，只会白烧 CPU。
+        _ = Task.Delay(BetterDesktop.Kernel.Core.SystemPowerMonitor.ResumeCooldown).ContinueWith(
+            _ => Dispatcher.BeginInvoke(new Action(ApplySampling)),
+            TaskScheduler.Default);
     }
 
     private void OnFrame(object? sender, EventArgs e)
@@ -576,6 +650,12 @@ internal sealed class FpsIcon : ContentControl, IDisposable
         _disposed = true;
         _timer.Stop();
         CompositionTarget.Rendering -= OnFrame;
+        _subscribed = false;
+
+        var power = Power;
+        power.Suspended -= OnPowerSuspended;
+        power.Resumed -= OnPowerResumed;
+        MenuBarShellVisibility.Changed -= OnShellVisibilityChanged;
     }
 }
 
@@ -1115,7 +1195,10 @@ public sealed class MenuBarStatusStrip : StackPanel, IDisposable
         {
             if (ext.MenuBarButton is { } btnId)
             {
-                SetComponentVisible(btnId, settings?.Get(ext.SettingsKey, true) ?? true);
+                // 默认值必须取目录里的 DefaultEnabled：写死 true 会让"帧率"（DefaultEnabled = false）
+                // 在默认配置下就是开启态 → 每帧渲染订阅常驻，"空闲时 FPS 数字不再恒为刷新率"
+                // 这条验收判据根本无法成立（2026-09-18 电源审计遗留缺口）。
+                SetComponentVisible(btnId, settings?.Get(ext.SettingsKey, ext.DefaultEnabled) ?? ext.DefaultEnabled);
             }
         }
     }
@@ -1126,6 +1209,13 @@ public sealed class MenuBarStatusStrip : StackPanel, IDisposable
         if (_buttons.TryGetValue(id, out var border))
         {
             border.Visibility = visible ? Visibility.Visible : Visibility.Collapsed;
+        }
+
+        // 【2026-09-18 电源管理】帧率组件是唯一"订阅 WPF 每帧渲染"的组件：它一旦不可见就必须退订，
+        // 否则按钮虽已折叠，合成器仍会因存在 Rendering 订阅者而持续出帧（风扇长转的直接来源）。
+        if (id == MenuBarStatusButtonId.Fps)
+        {
+            _fpsIcon.SetSampling(visible);
         }
     }
 
@@ -1361,7 +1451,7 @@ internal sealed class MicIcon : ContentControl, IDisposable
             Y1 = 14.0,
             X2 = 16.0,
             Y2 = 2.0,
-            Stroke = new SolidColorBrush(Color.FromRgb(byte.MaxValue, 106, 106)),
+            Stroke = ThemeBrushes.Get("StatusDanger"),
             StrokeThickness = 1.5,
             Visibility = Visibility.Collapsed
         };
@@ -1406,7 +1496,7 @@ internal sealed class MicIcon : ContentControl, IDisposable
     {
         bool flag = snap.Severity == StatusSeverity.Warning || snap.Severity == StatusSeverity.Critical;
         _muteLine.Visibility = ((!flag) ? Visibility.Collapsed : Visibility.Visible);
-        _micPath.Fill = (flag ? new SolidColorBrush(Color.FromRgb(128, 128, 128)) : MenuBarTheme.Foreground);
+        _micPath.Fill = (flag ? Brushes.Gray : MenuBarTheme.Foreground);
     }
 
     public void Dispose()
@@ -1679,8 +1769,8 @@ internal static class StatusColor
         }
         Brush result = sev switch
         {
-            StatusSeverity.Critical => new SolidColorBrush(Color.FromRgb(byte.MaxValue, 106, 106)),
-            StatusSeverity.Warning => new SolidColorBrush(Color.FromRgb(byte.MaxValue, 215, 0)),
+            StatusSeverity.Critical => ThemeBrushes.Get("StatusDanger"),
+            StatusSeverity.Warning => ThemeBrushes.Get("StatusWarning"),
             _ => MenuBarTheme.Foreground,
         };
         if (1 == 0)
@@ -2162,7 +2252,7 @@ internal sealed class VolumeIcon : ContentControl, IDisposable
         double num = ((snap.Progress >= 0.0) ? (snap.Progress / 100.0) : 0.5);
         bool flag = snap.Severity == StatusSeverity.Warning;
         int num2 = ((!flag) ? ((num < 0.33) ? 1 : ((num < 0.66) ? 2 : 3)) : 0);
-        SolidColorBrush solidColorBrush = new SolidColorBrush(Color.FromRgb(96, 96, 96));
+        Brush solidColorBrush = Brushes.DimGray;
         for (int i = 0; i < 3; i++)
         {
             _waves[i].Visibility = Visibility.Visible;

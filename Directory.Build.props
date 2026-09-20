@@ -12,4 +12,20 @@
     <Version>1.3.0</Version>
     <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
   </PropertyGroup>
+
+  <!--
+    .NET 工程公共属性（2026-09-14 收口）：此前 54 个 .csproj 各自重复声明这 5 个属性
+    （5 × 54 = 270 行），取值全仓一致（TFM 56/56、Platforms 全 x64、Nullable/ImplicitUsings 全 enable、
+    TreatWarningsAsErrors 全 true）。条件限定 .csproj —— 仓库内的 C++/CMake 工程不受影响。
+    例外工程在自己文件里显式覆盖即可（项目内声明晚于本文件，后写者胜）：
+      · tools/bamldecode：TFM = net8.0-windows
+      · tools/GdiAudit：不启用 TreatWarningsAsErrors
+  -->
+  <PropertyGroup Condition="'$(MSBuildProjectExtension)' == '.csproj'">
+    <TargetFramework>net8.0-windows10.0.19041.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <Platforms>x64</Platforms>
+  </PropertyGroup>
 </Project>

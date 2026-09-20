@@ -1855,7 +1855,6 @@ public sealed class DesktopIconsControl : ScrollViewer, IDisposable
     private void OpenFilesWith(string appPath, IReadOnlyList<string> files)
     {
         var exe = ResolveLnkTarget(appPath) ?? appPath;
-        var args = string.Join(" ", files.Select(f => "\"" + f + "\""));
         DiagnosticLog.Trace("shell.desktop",
             $"左键拖放 → 用程序打开: app={exe} files={files.Count}");
 
@@ -1863,12 +1862,19 @@ public sealed class DesktopIconsControl : ScrollViewer, IDisposable
         {
             try
             {
+                // C1：参数**逐项**加入，不做字符串拼接 —— 文件名里含引号或空格时，
+                // 手工拼 `"…"` 会把一个路径拆成两个参数（甚至多出一个开关）。
+                // 代价是不能再用 UseShellExecute=true（ArgumentList 与壳执行互斥），
+                // 而这里本就**不需要壳**：目标是已知 exe，"用该程序打开这些文件"= 直接 CreateProcess 传参。
                 var psi = new System.Diagnostics.ProcessStartInfo
                 {
                     FileName = exe,
-                    Arguments = args,
-                    UseShellExecute = true,
+                    UseShellExecute = false,
                 };
+                foreach (var file in files)
+                {
+                    psi.ArgumentList.Add(file);
+                }
                 var dir = Path.GetDirectoryName(exe);
                 if (!string.IsNullOrWhiteSpace(dir) && Directory.Exists(dir))
                 {

@@ -14,6 +14,7 @@ using System.Windows.Controls;
 using System.Windows.Media;
 using System.Windows.Threading;
 using BetterDesktop.Shell.ContextMenus.Services;
+using BetterDesktop.Shell.Core.Surface;
 using BetterDesktop.Shell.Settings.Contracts;
 using BetterDesktop.Shell.Settings.Surface;
 
@@ -58,9 +59,58 @@ public sealed class MenuManagerSection : ISettingsSection
 
         panel.Children.Add(BuildStyleCard(tokens));
         panel.Children.Add(BuildSceneCard(tokens));
+        panel.Children.Add(BuildBetterDesktopShortcutsCard(settings, tokens));
         panel.Children.Add(BuildNewCard(tokens));
         panel.Children.Add(BuildBackupCard(tokens));
         return panel;
+    }
+
+    // ===== 卡片：BetterDesktop 自有快捷功能（注册开关，2026-09-11） =====
+    // 背景：原由 shell-desktop 另注册一个**同名**「右键菜单」分区来承载这几个开关，
+    //  但 ISettingsSectionRegistry 的规则是"标题重复时后注册覆盖"→ 那个简陋页面把本页整个顶掉
+    //（用户实测"新界面挤占原界面"）。现改为**并入本页**：功能在其中，不与原界面争位。
+    // 语义：关掉 = 注销对应注册表项（explorer 里立刻消失）；打开 = 立即重新注册。
+    // 开关键 = shellmenu.*，落地在 shell-desktop 的 DesktopPlugin.ApplyShellMenuRegistration（订阅设置变更）。
+    private UIElement BuildBetterDesktopShortcutsCard(ISettingsService settings, IThemeTokens tokens)
+    {
+        var card = GroupCard(tokens);
+        var body = CardBody(card);
+        body.Children.Add(TitleBlock("BetterDesktop 快捷功能", tokens));
+        body.Children.Add(Desc("这几个入口是本程序自己加到系统右键菜单里的。关掉即注销（菜单里立刻消失），打开即恢复。", tokens));
+
+        // 【总开关 · 2026-09-17 审计补漏】shellmenu.comExtension 是"整路系统右键接管"的总闸：
+        // Agent 的 60s 自愈、桌面服务的快照写入、托盘「注销右键扩展」都读它 ——
+        // 但设置页此前**没有它的入口**，用户无法从 UI 关掉整路接管（只能逐项关，
+        // 且从托盘注销后还会被 Agent 自愈回补）。放在最前面，语义是"以上功能的父开关"。
+        body.Children.Add(ShortcutToggle(settings, tokens,
+            "总开关：系统右键接管（关掉 = 整路都不注册，也不再自动修复）", "shellmenu.comExtension"));
+
+        body.Children.Add(ShortcutToggle(settings, tokens,
+            "「切换到自绘桌面」（桌面空白处右键）", "shellmenu.toggleDesktop"));
+        body.Children.Add(ShortcutToggle(settings, tokens,
+            "「桌面控制」（桌面图标显隐 / 隐藏任务栏 / 双击隐藏图标…）", "shellmenu.desktopControls"));
+        body.Children.Add(ShortcutToggle(settings, tokens,
+            "「剪贴板历史…」（桌面控制内）", "shellmenu.clipboard"));
+        body.Children.Add(ShortcutToggle(settings, tokens,
+            "「格式转换」（文件右键）", "shellmenu.convert"));
+        body.Children.Add(ShortcutToggle(settings, tokens,
+            "「压缩为 ZIP」（文件 / 文件夹右键）", "shellmenu.archive"));
+        return card;
+    }
+
+    /// <summary>快捷功能注册开关：勾选 = 已注册；改动写设置键，由 shell-desktop 即时注册/注销（无需重启）。</summary>
+    private static UIElement ShortcutToggle(ISettingsService settings, IThemeTokens tokens, string label, string key)
+    {
+        var box = WithStyle(new CheckBox
+        {
+            Content = label,
+            Margin = new Thickness(0, 10, 0, 0),
+            FontSize = 13,
+            IsChecked = settings.Get(key, true),
+        }, "MacToggle", tokens);
+        box.Checked += (_, _) => settings.Set(key, true);
+        box.Unchecked += (_, _) => settings.Set(key, false);
+        return box;
     }
 
     // ===== 卡片① 右键菜单样式（Win11 单独选区；Win10 隐藏选区） =====
@@ -568,6 +618,19 @@ public sealed class MenuManagerSection : ISettingsSection
         row.Children.Add(name);
         wrap.Children.Add(row);
 
+        // 崩溃熔断标记（HandlerCrashGuard）：该扩展连续 3 次把宿主拖死，已由程序自动停用
+        if (HandlerCrashBreaker.IsAutoDisabled(item.Clsid))
+        {
+            wrap.Children.Add(new TextBlock
+            {
+                Text = "已因连续崩溃自动停用（程序自动保护；重新启用后需再连续崩溃 3 次才会被再停用）",
+                FontSize = 11,
+                Foreground = tokens.MutedForeground,
+                Margin = new Thickness(28, 2, 0, 0),
+                TextWrapping = TextWrapping.Wrap,
+            });
+        }
+
         // 详情（专业信息折叠；删除为两段式确认，零 MessageBox）
         var detail = new StackPanel { Margin = new Thickness(28, 4, 0, 6), Visibility = Visibility.Collapsed };
         detail.Children.Add(new TextBlock
@@ -945,6 +1008,11 @@ public sealed class MenuManagerSection : ISettingsSection
         {
             var result = MenuManagerService.Toggle(item);
             ShowStatus(result, false);
+            // 用户手动启用一个被熔断停用的扩展 = 显式恢复：清标记 + 清嫌疑计数
+            if (!item.Enabled)
+            {
+                HandlerCrashBreaker.Clear(item.Clsid);
+            }
         }
         catch (Exception ex)
         {
@@ -962,7 +1030,7 @@ public sealed class MenuManagerSection : ISettingsSection
         }
         _statusText.Text = message;
         _statusText.Foreground = isError
-            ? new SolidColorBrush(Color.FromArgb(0xFF, 0xEA, 0x66, 0x68))
+            ? ThemeBrushes.Get("StatusDanger")
             : _statusMuted;
     }
 

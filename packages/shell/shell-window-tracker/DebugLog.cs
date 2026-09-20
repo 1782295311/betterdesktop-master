@@ -1,40 +1,33 @@
-using System;
-using System.IO;
+using BetterDesktop.Kernel.Core;
 
 namespace BetterDesktop.Shell.WindowTracker;
 
 /// <summary>
-/// 轻量调试追踪：用于真机排查（如缩略图预览链路、启动崩溃定位）。
-/// 自 shell-dock 下沉（步骤5）：缩略图链路随 DwmThumbnail 迁入 window-tracker，
-/// Dock 侧（DockWindow）仍经本类打点，故为 public 供跨程序集使用。
-/// 设计要点：每条 Trace 同步追加落盘到桌面 BetterDesktop_debug.log。
-/// 之所以不用后台缓冲刷盘——崩溃/进程异常退出时内存缓冲会丢失，
-/// 排查崩溃最需要的恰恰是「崩溃前的最后一帧」，必须即时落盘。
-/// 落盘失败静默，不参与正常运行逻辑。
+/// 轻量调试追踪：转投内核单管道（<see cref="DiagnosticLog"/> → 宿主异步文件 sink）。
+/// <para>
+/// 历史实现是"每条同步追加到桌面 BetterDesktop_debug.log"，理由是"崩溃前最后一帧必须即时落盘"。
+/// 但该 API 被 Dock 的悬停/召唤与缩略图链路调用（<c>DockWindow.xaml.cs</c> 36 处、<c>DwmThumbnail</c> 等），
+/// 属 UI 热路径——同步写盘会直接拖慢鼠标响应，且把日志写到用户桌面属"第二管道"违规。
+/// </para>
+/// <para>
+/// 现改为异步入队：性能问题消除；崩溃场景的"最后一帧"由 <c>CrashGuard</c> 在未处理异常时
+/// 同步 Flush（见 host/FileLogSink.Flush）保证，可靠性不降级。
+/// </para>
 /// </summary>
 public static class DebugLog
 {
-    private static readonly string Path =
-        System.IO.Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.Desktop),
-            "BetterDesktop_debug.log");
+    /// <summary>写一条追踪（tag 作为消息前缀）。异步入队，不阻塞调用线程。</summary>
+    public static void Trace(string tag, string msg) => DiagnosticLog.Trace(tag, msg);
 
-    public static void Trace(string tag, string msg)
-    {
-        try
-        {
-            // 仅追加（不覆盖），避免与内核层 DiagnosticLog 共用同一文件时互相清空旧日志。
-            File.AppendAllText(Path, $"[{DateTime.Now:HH:mm:ss.fff}] {tag}: {msg}\n");
-        }
-        catch
-        {
-            // 落盘失败不阻断主流程
-        }
-    }
+    /// <summary>
+    /// 写一条调试级日志：**高频打点（每秒/每次轮询/每次刷新）必须用这个**。
+    /// 默认级别 Info 下不落盘，避免实测几天堆出几十万行把关键信息淹没；
+    /// 排障时设 <c>BETTERDESKTOP_LOG_LEVEL=Debug</c> 打开。
+    /// </summary>
+    public static void Debug(string tag, string msg) => DiagnosticLog.Debug(tag, msg);
 
-    /// <summary>遗留兼容：显式 flush 接口（同步落盘本就是即时，这里为空操作）。</summary>
+    /// <summary>遗留兼容：异步管道无需显式 flush（保留方法以免外部引用报错）。</summary>
     public static void FlushNow()
     {
-        // 同步追加模式下无需额外 flush；保留方法以免外部引用报错。
     }
 }

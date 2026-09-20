@@ -61,7 +61,7 @@ public sealed class Win7Layout : IStartMenuLayoutProvider, IStartMenuLayoutHost
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1.18, GridUnitType.Star) });
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
 
-        // 左栏与右栏间 1px 分隔线（浅 #D0D0D0 / 深 #3A3A3A）。
+        // 左栏与右栏间 1px 分隔线（分隔线令牌，随亮暗主题）。
         var divider = new Border
         {
             Width = 1,

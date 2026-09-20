@@ -1,11 +1,6 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <TargetFramework>net8.0-windows10.0.19041.0</TargetFramework>
-    <Nullable>enable</Nullable>
-    <ImplicitUsings>enable</ImplicitUsings>
-    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
-    <Platforms>x64</Platforms>
     <!-- 强制编译器按 UTF-8 读源文件，避免中文 Windows 上无 BOM 文件被按 ANSI 解码导致运行时中文乱码 -->
     <UseWPF>true</UseWPF>
     <RootNamespace>BetterDesktop.Shell.Settings</RootNamespace>

@@ -51,4 +51,7 @@ public enum EngineKind
 
     /// <summary>MOBI/AZW 电子书源（calibre ebook-convert 子进程：→ epub/pdf/docx/txt）。</summary>
     Calibre,
+
+    /// <summary>进程内轻量引擎（convert-lite，2026-09-20）：零外部 exe，替代 pandoc / LibreOffice / calibre / poppler 的文档与表格族；<b>恒可用</b>（可用性不再取决于磁盘上有没有第三方目录，这是本次迁移的目的）。</summary>
+    Lite,
 }

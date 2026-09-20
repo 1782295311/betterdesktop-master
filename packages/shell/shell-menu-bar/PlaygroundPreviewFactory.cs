@@ -102,7 +102,7 @@ public static class PlaygroundPreviewFactory
         IBrightnessMonitor? brightness = null,
         System.Action<FrameworkElement>? refreshPowerPanel = null)
     {
-        vibrancy ??= new NullVibrancyForPreview();
+        vibrancy ??= NullVibrancyService.Instance;
 
         // -------- 菜单条右区按钮（使用 internal MenuBarExtensions 构造） --------
         // 控制中心不占独立按钮：由通知图标右键打开（StatusBarMenuBarExtension case Notification）。
@@ -197,12 +197,5 @@ public static class PlaygroundPreviewFactory
             cpuPanel: cpuPanel.BuildPreviewContent(),
             microphonePanel: micPanel.BuildPreviewContent(),
             soundPanel: soundPanel.BuildPreviewContent());
-    }
-
-    /// <summary>兜底：IVibrancyService 为空时的空壳（与 MenuBarPlugin.NullVibrancy 独立，避免相互 internal 引用）。</summary>
-    private sealed class NullVibrancyForPreview : IVibrancyService
-    {
-        public void Apply(IntPtr hWnd, VibrancyStyle style, bool roundCorners, bool smallRadius) { }
-        public void Disable(IntPtr hWnd) { }
     }
 }

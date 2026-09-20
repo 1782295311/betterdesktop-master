@@ -6,7 +6,10 @@
 //     整行 hover 高亮；左键：开关项切换、非开关项打开独立面板；右键：一律打开独立面板。
 //     （此前 2×3 网格的右列仅 148px，功能文字被截断，反复调整仍显示不全 —— 纵向行宽度充裕，彻底解决。）
 //   中部：三张统一规格的模块卡片（圆角 + 描边 + 「标题左 / 数值右」对齐的头部）
-//     显示器（亮度滑杆）· 声音（音量滑杆 + 麦克风静音按钮）· 正在播放（SMTC 曲目 + 播放控制）
+//     显示器（亮度滑杆）· 声音（主音量滑杆 + 麦克风静音）· 正在播放（SMTC 简略控制 + 「打开音乐界面」入口）。
+//     【2026-09-09 声音面板改造 v2】简略卡片保留（用户要求：控制中心必须承载简略控制）；
+//     完整音量/音乐控制（应用混音器 / 进度 / seek / 随机 / 循环 / 最近播放）统一由声音面板承载，
+//     卡片内「打开音乐界面 ›」与功能目录「声音」行均可进入。
 //
 // 【2026-08-30 问题 6 重构】
 //   1) 图标：此前全部写死 Segoe MDL2 Assets 码位（\uE701/\uE702/\uE7C2/\uE81E/\uEB0B/\uE7B4/
@@ -15,7 +18,8 @@
 //   2) 信息对齐：三张模块卡片共用 BuildModuleCard（标题左、数值右），卡片内控件垂直居中；
 //      大瓦片图标由 Top 对齐改为 Center 对齐（此前图标顶挂、文字居中 → 视觉错位）。
 //   3) 功能对接：麦克风静音按钮此前只是装饰（无点击事件）；媒体区歌名写死空格 + 三个按钮
-//      无点击事件。现分别接到 AudioCoreNative.SetCaptureVolume 与 SMTC（MediaSessionController）。
+//      无点击事件。现分别接到 AudioCoreNative.SetCaptureVolume 与 SMTC（MediaPlayerCore）。
+//      （2026-09-09：声音/媒体卡片整体移除，能力迁至声音面板 SoundPanelWindow。）
 //   4) 描边/背景：硬编码半透明白（Color.FromArgb(120/60,255,255,255)）改走主题令牌 ThemeSeparator。
 //   5) 第五轮（2026-08-30）：顶部 2×3 网格 → 纵向 6 行条目（右列 148px 截断问题的根治）。
 //
@@ -23,20 +27,22 @@
 
 using System;
 using System.Collections.Generic;
-using System.Linq;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
+using System.Windows.Media.Imaging;
 using System.Windows.Shapes;
 using System.Windows.Threading;
 using BetterDesktop.Shell.Core.Surface;
 using BetterDesktop.Shell.Core.Vibrancy;
 using BetterDesktop.Shell.MenuBar.Contracts;
 using BetterDesktop.Shell.MenuBar.Services;
+using BetterDesktop.Shell.Music.Contracts;
 using BetterDesktop.Shell.Status.Contracts;
 using BetterDesktop.Shell.Status.Native;
 using Windows.Devices.Radios;
+using Windows.Storage.Streams;
 
 namespace BetterDesktop.Shell.MenuBar.Windows;
 
@@ -45,7 +51,7 @@ namespace BetterDesktop.Shell.MenuBar.Windows;
 //   "一个开关磁贴行"                → MakeToggleRow / AddRow；点击 OnTileLeftClick/OnTileRightClick，切换 ToggleTileAsync
 //   "刷新磁贴开关状态"              → RefreshTileStatesAsync / RefreshTileStateAsync / FindFeature
 //   "磁贴视觉（高亮/图标圈/悬停）"  → ApplyTileVisual / ApplyIconCircleVisual / ApplySummaryForeground / AttachTileHover
-//   "模块卡片（亮度/音量/网络等）"  → BuildModuleCard / BuildCardHeader / CreateCardValue
+//   "模块卡片（亮度/声音/正在播放）" → BuildModuleCard / BuildCardHeader / CreateCardValue
 //   各快捷开关背后的系统能力在 shell-status / shell-core；面板基类 MenuBarPopupWindow。
 // ────────────────────────────────────
 
@@ -70,13 +76,14 @@ internal sealed class ControlCenterWindow : MenuBarPopupWindow
 
     private readonly IReadOnlyList<ControlCenterFeature> _features;
     private readonly IVolumeMonitor? _vol;
-    private readonly IMicrophoneMonitor? _mic;
     private readonly IBrightnessMonitor? _brightness;
+    private readonly IVibrancyService _vibrancy;
+    private readonly IAppearanceService? _appearance;
 
     private BrightnessSliderControl? _brightnessControl;
-    private MediaSessionController? _media;
+    private SoundPanelWindow? _audioPanel;
 
-    /// <summary>预览模式（Playground）：关闭一切"需要配对释放"的资源（事件订阅 / 轮询定时器）。</summary>
+    /// <summary>预览模式（Playground）：关闭一切"需要配对释放"的资源（事件订阅）。</summary>
     private bool _isPreview;
 
     // —— 开关网格瓦片引用：左键切换、异步刷新状态时更新视觉 ——
@@ -93,9 +100,9 @@ internal sealed class ControlCenterWindow : MenuBarPopupWindow
     }
 
     // —— 需要随监控事件实时刷新的控件引用 ——
+    private TextBlock? _brightnessValue;
     private Slider? _volumeSlider;
     private TextBlock? _volumeValue;
-    private TextBlock? _brightnessValue;
     private Border? _micButton;
     private TextBlock? _mediaTitle;
     private TextBlock? _mediaArtist;
@@ -103,16 +110,29 @@ internal sealed class ControlCenterWindow : MenuBarPopupWindow
     private Path? _playPausePath;
     private readonly List<Border> _mediaButtons = new();
 
+    // —— 正在播放卡片：2s 轮询 IMediaPlaybackService 快照（原 MediaSessionController 轻量壳已删，职责内联）——
+    private readonly IMediaPlaybackService? _media;
+    private DispatcherTimer? _mediaTimer;
+    private MediaPlaybackSnapshot? _mediaSession;
+    private Border? _mediaCover;
+    /// <summary>封面防重键（歌曲身份；切歌才重读，与声音面板一致）。</summary>
+    private string? _mediaCoverKey;
+
     public ControlCenterWindow(
         IReadOnlyList<ControlCenterFeature> features,
         IVolumeMonitor? vol,
         IMicrophoneMonitor? mic,
         IBrightnessMonitor? brightness,
         IVibrancyService vibrancy,
-        IAppearanceService? appearance = null)
+        IAppearanceService? appearance = null,
+        IMediaPlaybackService? media = null)
         : base(vibrancy, appearance)
     {
-        _features = features; _vol = vol; _mic = mic; _brightness = brightness;
+        _features = features; _vol = vol; _brightness = brightness;
+        _media = media;
+        _vibrancy = vibrancy; _appearance = appearance;
+        // 注：mic 构造参数保留（调用点签名不变）；麦克风静音由声音卡片（本窗口）承载，
+        // 完整音量/音乐控制由声音面板（SoundPanelWindow，卡片内「打开音乐界面」入口 + 功能目录「声音」行）。
         Width = PanelWidth;
         MinWidth = PanelWidth;
         SizeToContent = SizeToContent.Height;
@@ -120,9 +140,9 @@ internal sealed class ControlCenterWindow : MenuBarPopupWindow
 
     /// <summary>Playground/大容器 预览入口：直接取内容 UI（不走 ShellWindow 生命周期）。</summary>
     /// <remarks>
-    /// 预览模式下**不订阅监控事件、不启动 SMTC 轮询**：
+    /// 预览模式下**不订阅监控事件**：
     /// BuildPreviewContent 不会走 OnClosed，退订/Dispose 永远不会执行；
-    /// 若不区分，Playground 每构造一次预览就多一个 2s 定时器和一组常驻事件订阅。
+    /// 若不区分，Playground 每构造一次预览就多一组常驻事件订阅。
     /// </remarks>
     public FrameworkElement BuildPreviewContent()
     {
@@ -148,10 +168,10 @@ internal sealed class ControlCenterWindow : MenuBarPopupWindow
         // 2) 显示器卡片（亮度滑块）
         column.Children.Add(BuildBrightnessCard());
 
-        // 3) 声音卡片（音量 + 麦克风静音）
+        // 3) 声音卡片（主音量滑块 + 麦克风静音）——简略控制，控制中心的定位
         column.Children.Add(BuildVolumeCard());
 
-        // 4) 正在播放卡片（SMTC）
+        // 4) 正在播放卡片（SMTC 简略控制 + 「打开音乐界面」入口）
         column.Children.Add(BuildMediaCard());
 
         root.Child = column;
@@ -162,11 +182,11 @@ internal sealed class ControlCenterWindow : MenuBarPopupWindow
             Dispatcher.BeginInvoke(new Action(async () => await RefreshTileStatesAsync()), DispatcherPriority.Background);
         }
 
-        // 订阅状态变化（控制中心是常驻窗口，事件驱动刷新优于自行轮询）
+        // 订阅亮度/音量变化（控制中心是常驻窗口，事件驱动刷新优于自行轮询）
         if (!_isPreview)
         {
-            if (_vol is not null) _vol.Changed += OnVolumeChanged;
             if (_brightness is not null) _brightness.Changed += OnBrightnessChanged;
+            if (_vol is not null) _vol.Changed += OnVolumeChanged;
         }
 
         return root;
@@ -553,54 +573,7 @@ internal sealed class ControlCenterWindow : MenuBarPopupWindow
     }
 
     // ============================================================
-    //  显示器卡片（亮度）
-    // ============================================================
-    private FrameworkElement BuildBrightnessCard()
-    {
-        _brightnessValue = CreateCardValue("—");
-
-        FrameworkElement body;
-        if (_brightness is not null)
-        {
-            // showValueLabel=false：百分比统一放到卡片头部（与声音卡片对齐），滑杆右侧不再重复显示
-            _brightnessControl = new BrightnessSliderControl(_brightness, title: null, showSettingsLink: false, showValueLabel: false);
-            body = _brightnessControl.Root;
-            _brightnessValue.Text = FormatBrightness();
-        }
-        else
-        {
-            var unavailable = new TextBlock { Text = "亮度调节不可用", FontSize = 11 };
-            SetThemeBinding(unavailable, TextBlock.ForegroundProperty, "ThemeMutedForeground");
-            body = unavailable;
-        }
-
-        return BuildModuleCard("显示器", _brightnessValue, body, new Thickness(0, 10, 0, 0));
-    }
-
-    private string FormatBrightness()
-    {
-        if (_brightness is null || !_brightness.TryGetRange(out int min, out int cur, out int max) || max <= min)
-        {
-            return "—";
-        }
-        int pct = (int)Math.Round((cur - min) * 100.0 / (max - min));
-        return $"{Math.Clamp(pct, 0, 100)}%";
-    }
-
-    private void OnBrightnessChanged(object? sender, StatusSnapshot snapshot)
-    {
-        // 轮询器在后台线程广播；改 WPF 控件必须切回 UI 线程
-        Dispatcher.BeginInvoke(new Action(() =>
-        {
-            if (_brightnessValue is not null)
-            {
-                _brightnessValue.Text = FormatBrightness();
-            }
-        }));
-    }
-
-    // ============================================================
-    //  声音卡片（音量 + 麦克风静音）
+    //  声音卡片（主音量滑块 + 麦克风静音）——简略控制，控制中心定位
     // ============================================================
     private FrameworkElement BuildVolumeCard()
     {
@@ -641,7 +614,7 @@ internal sealed class ControlCenterWindow : MenuBarPopupWindow
         Grid.SetColumn(slider, 0);
         row.Children.Add(slider);
 
-        // 麦克风静音按钮（此前只是装饰：样式齐了但没挂点击事件 → 点了没反应）
+        // 麦克风静音按钮（点击翻转静音，替代装饰态）
         _micButton = BuildMicButton();
         Grid.SetColumn(_micButton, 1);
         row.Children.Add(_micButton);
@@ -747,34 +720,36 @@ internal sealed class ControlCenterWindow : MenuBarPopupWindow
     }
 
     // ============================================================
-    //  正在播放卡片（SMTC）
+    //  正在播放卡片（SMTC 简略控制 + 「打开音乐界面」入口）
     // ============================================================
     private FrameworkElement BuildMediaCard()
     {
         _mediaApp = CreateCardValue("无媒体");
 
         var grid = new Grid { VerticalAlignment = VerticalAlignment.Center };
-        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(34) });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(40) });
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(10) });
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
 
-        // 封面占位：SMTC 缩略图需异步取流，控制中心只承载简略视图，用音乐字形占位
+        // 封面：简略卡片也显示实时封面（歌曲身份防重，异步读流；无封面回退占位字形）
         var album = new Border
         {
-            Width = 34,
-            Height = 34,
-            CornerRadius = new CornerRadius(8),
-            VerticalAlignment = VerticalAlignment.Center
+            Width = 40,
+            Height = 40,
+            CornerRadius = new CornerRadius(10),
+            VerticalAlignment = VerticalAlignment.Center,
+            Clip = new RectangleGeometry(new Rect(0, 0, 40, 40)) { RadiusX = 10, RadiusY = 10 }
         };
         SetThemeBinding(album, Border.BackgroundProperty, "ThemeContentBackground");
         album.Child = new Viewbox
         {
-            Width = 18,
-            Height = 18,
+            Width = 20,
+            Height = 20,
             Stretch = Stretch.Uniform,
             Child = ControlCenterGlyph.Create(ControlCenterIcon.Music, MenuBarTheme.Foreground)
         };
+        _mediaCover = album;
         Grid.SetColumn(album, 0);
         grid.Children.Add(album);
 
@@ -802,26 +777,59 @@ internal sealed class ControlCenterWindow : MenuBarPopupWindow
         var buttons = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
         buttons.Children.Add(MakeMediaButton(
             ControlCenterGlyph.CreatePrev(MenuBarTheme.Foreground),
-            () => SendMedia(MediaCommand.Previous)));
+            () => _ = SendMediaAsync(MediaPlaybackCommand.Previous)));
         _playPausePath = ControlCenterGlyph.CreatePlay(MenuBarTheme.Foreground);
         buttons.Children.Add(MakeMediaButton(
             _playPausePath,
-            () => SendMedia(MediaCommand.Toggle)));
+            () => _ = SendMediaAsync(MediaPlaybackCommand.Toggle)));
         buttons.Children.Add(MakeMediaButton(
             ControlCenterGlyph.CreateNext(MenuBarTheme.Foreground),
-            () => SendMedia(MediaCommand.Next)));
+            () => _ = SendMediaAsync(MediaPlaybackCommand.Next)));
         Grid.SetColumn(buttons, 3);
         grid.Children.Add(buttons);
 
-        // 启动 SMTC 会话轮询（2s 一轮 + 命令后即时回读）
+        // 「打开音乐界面」入口 → 完整声音面板（音乐独立界面：封面/进度/seek/随机/循环/最近播放）
+        var openLink = new TextBlock
+        {
+            Text = "打开音乐界面 ›",
+            FontSize = 10.5,
+            Foreground = MenuBarTheme.Foreground,
+            HorizontalAlignment = HorizontalAlignment.Right,
+            Margin = new Thickness(0, 6, 2, 0),
+            Cursor = System.Windows.Input.Cursors.Hand
+        };
+        openLink.MouseLeftButtonUp += (_, _) => OpenSoundPanel();
+        var body = new StackPanel();
+        body.Children.Add(grid);
+        body.Children.Add(openLink);
+
+        // 启动 SMTC 会话轮询（2s 一轮，直接消费 MediaPlayerCore；命令后即时回读）
         if (!_isPreview)
         {
-            _media = new MediaSessionController();
-            _media.Changed += OnMediaChanged;
-            _media.Start();
+            _mediaTimer = new DispatcherTimer(DispatcherPriority.Background)
+            {
+                Interval = TimeSpan.FromSeconds(2)
+            };
+            _mediaTimer.Tick += async (_, _) => await MediaTickAsync();
+            _mediaTimer.Start();
+
+            // 【2026-09-18 电源管理】面板收起走基类 HidePopup()（只 Hide、不触发 OnClosed），
+            // 而 _mediaTimer 原本只在 OnClosed 里停 → 用户点过一次控制中心后，本进程整个生命周期
+            // 都在每 2s 做一次原生 SMTC 会话枚举（+ 可能的封面读取）。
+            // 订阅前先退订一次，保证幂等（本方法在内容懒构建路径上）。
+            IsVisibleChanged -= OnVisibilityChangedForMediaTimer;
+            IsVisibleChanged += OnVisibilityChangedForMediaTimer;
         }
 
-        return BuildModuleCard("正在播放", _mediaApp, grid, new Thickness(0, 10, 0, 0));
+        return BuildModuleCard("正在播放", _mediaApp, body, new Thickness(0, 10, 0, 0));
+    }
+
+    /// <summary>打开完整音乐界面（声音面板 SoundPanelWindow，锚定控制中心位置）。</summary>
+    private void OpenSoundPanel()
+    {
+        _audioPanel ??= new SoundPanelWindow(_vibrancy, _appearance, _media);
+        _audioPanel.ShowAt(new Point(Left, Top));
+        _audioPanel.Activate();
     }
 
     /// <param name="glyph">图标 Path。播放/暂停按钮传的是**可复用的 Path 实例**，
@@ -852,25 +860,31 @@ internal sealed class ControlCenterWindow : MenuBarPopupWindow
         return host;
     }
 
-    private void SendMedia(MediaCommand command)
+    private async Task SendMediaAsync(MediaPlaybackCommand command)
     {
-        var controller = _media;
-        if (controller is null || controller.Active is null) return;
-        // 事件处理器非 async：显式丢弃 Task（非 async 方法内不会产生 CS4014）
-        _ = controller.SendAsync(command);
+        var media = _media;
+        if (media is null || _mediaSession is null) return;
+        await media.SendCommandAsync(command);
+        await MediaTickAsync(); // 命令后即时回读，UI 立即反映
     }
 
-    private void OnMediaChanged(object? sender, EventArgs e)
+    /// <summary>轮询读取媒体快照并更新卡片（命令后亦即时调用）。</summary>
+    private async Task MediaTickAsync()
     {
-        // MediaSessionController 的回调理论上已在 UI 线程，但为稳妥统一走一次 Dispatcher
-        Dispatcher.BeginInvoke(new Action(ApplyMediaState));
+        var media = _media;
+        if (media is null) return;
+        _mediaSession = await media.GetActiveSessionAsync();
+        ApplyMediaState();
     }
 
     private void ApplyMediaState()
     {
-        var session = _media?.Active;
-        // 是否播放由控制器判定（WinRT 的 Windows.Media.Control 类型收敛在控制器内，UI 层不直接引用）
-        bool playing = _media?.IsPlaying ?? false;
+        var session = _mediaSession;
+        // 是否播放：由快照状态判定（公共契约 MediaPlaybackState）
+
+        // 封面：歌曲身份变化才异步读流（无封面/失败回退占位字形）
+        _ = LoadMediaCoverAsync(session);
+        bool playing = session?.State == MediaPlaybackState.Playing;
 
         if (_mediaTitle is not null)
         {
@@ -899,18 +913,142 @@ internal sealed class ControlCenterWindow : MenuBarPopupWindow
         }
     }
 
+    /// <summary>加载卡片实时封面：歌曲身份防重（引用相等不可靠），读流成功后替换占位字形。</summary>
+    private async Task LoadMediaCoverAsync(MediaPlaybackSnapshot? session)
+    {
+        var cover = _mediaCover;
+        var thumbRef = session?.ThumbnailRef;
+        var key = session is null ? null : $"{session.Title}|{session.Artist}|{session.AppName}";
+        if (cover is null || string.Equals(_mediaCoverKey, key, StringComparison.Ordinal)) return;
+        _mediaCoverKey = key;
+        var bytes = await ReadThumbnailBytesAsync(thumbRef);
+        if (!string.Equals(_mediaCoverKey, key, StringComparison.Ordinal)) return; // 已切歌：丢弃过期结果
+        if (bytes is null || bytes.Length == 0)
+        {
+            cover.Child = new Viewbox
+            {
+                Width = 20,
+                Height = 20,
+                Stretch = Stretch.Uniform,
+                Child = ControlCenterGlyph.Create(ControlCenterIcon.Music, MenuBarTheme.Foreground)
+            };
+            return;
+        }
+        var img = new BitmapImage();
+        using (var ms = new System.IO.MemoryStream(bytes))
+        {
+            img.BeginInit();
+            img.CacheOption = BitmapCacheOption.OnLoad;
+            img.StreamSource = ms;
+            img.EndInit();
+        }
+        img.Freeze();
+        cover.Child = new Image { Source = img, Stretch = Stretch.UniformToFill, SnapsToDevicePixels = true };
+    }
+
+    /// <summary>读取 SMTC 封面缩略图字节（后台 I/O，失败静默返回 null 由 UI 回退占位）。</summary>
+    private static async Task<byte[]?> ReadThumbnailBytesAsync(IRandomAccessStreamReference? thumbRef)
+    {
+        if (thumbRef is null) return null;
+        try
+        {
+            using var stream = await thumbRef.OpenReadAsync();
+            var size = (uint)Math.Min(stream.Size, 10 * 1024 * 1024); // 10MB 上限
+            using var reader = new DataReader(stream);
+            await reader.LoadAsync(size);
+            var bytes = new byte[size];
+            reader.ReadBytes(bytes);
+            return bytes;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    // ============================================================
+    //  显示器卡片（亮度）
+    // ============================================================
+    private FrameworkElement BuildBrightnessCard()
+    {
+        _brightnessValue = CreateCardValue("—");
+
+        FrameworkElement body;
+        if (_brightness is not null)
+        {
+            // showValueLabel=false：百分比统一放到卡片头部（与声音卡片对齐），滑杆右侧不再重复显示
+            _brightnessControl = new BrightnessSliderControl(_brightness, title: null, showSettingsLink: false, showValueLabel: false);
+            body = _brightnessControl.Root;
+            _brightnessValue.Text = FormatBrightness();
+        }
+        else
+        {
+            var unavailable = new TextBlock { Text = "亮度调节不可用", FontSize = 11 };
+            SetThemeBinding(unavailable, TextBlock.ForegroundProperty, "ThemeMutedForeground");
+            body = unavailable;
+        }
+
+        return BuildModuleCard("显示器", _brightnessValue, body, new Thickness(0, 10, 0, 0));
+    }
+
+    private string FormatBrightness()
+    {
+        if (_brightness is null || !_brightness.TryGetRange(out int min, out int cur, out int max) || max <= min)
+        {
+            return "—";
+        }
+        int pct = (int)Math.Round((cur - min) * 100.0 / (max - min));
+        return $"{Math.Clamp(pct, 0, 100)}%";
+    }
+
+    private void OnBrightnessChanged(object? sender, StatusSnapshot snapshot)
+    {
+        // 轮询器在后台线程广播；改 WPF 控件必须切回 UI 线程
+        Dispatcher.BeginInvoke(new Action(() =>
+        {
+            if (_brightnessValue is not null)
+            {
+                _brightnessValue.Text = FormatBrightness();
+            }
+        }));
+    }
+
+    // ============================================================
+    //  正在播放卡片（SMTC）——实现见上方 BuildMediaCard（简略控制 + 入口）
+    // ============================================================
+
+    /// <summary>面板显隐变化：隐藏即停表（原因见 BuildMediaCard 里的注释）。</summary>
+    private void OnVisibilityChangedForMediaTimer(object? sender, DependencyPropertyChangedEventArgs e)
+    {
+        if (_mediaTimer is null)
+        {
+            return;
+        }
+
+        if (IsVisible)
+        {
+            if (!_mediaTimer.IsEnabled)
+            {
+                _mediaTimer.Start();
+            }
+        }
+        else
+        {
+            _mediaTimer.Stop();
+        }
+    }
+
     protected override void OnClosed(EventArgs e)
     {
-        if (_vol is not null) _vol.Changed -= OnVolumeChanged;
         if (_brightness is not null) _brightness.Changed -= OnBrightnessChanged;
+        if (_vol is not null) _vol.Changed -= OnVolumeChanged;
+        if (_mediaTimer is not null)
+        {
+            _mediaTimer.Stop();
+            _mediaTimer = null;
+        }
         _brightnessControl?.Dispose();
         _brightnessControl = null;
-        if (_media is not null)
-        {
-            _media.Changed -= OnMediaChanged;
-            _media.Dispose();
-            _media = null;
-        }
         _mediaButtons.Clear();
         base.OnClosed(e);
     }

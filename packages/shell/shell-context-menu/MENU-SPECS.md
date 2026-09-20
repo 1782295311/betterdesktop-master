@@ -13,6 +13,9 @@
 | ② 插件贡献项 | `IContextMenuContributor`（Scope+Priority） | 按 Priority 降序，同优先级按注册序稳定 |
 | ③ Shell 原生项 | 文件/文件夹场景的 `IContextMenu` verb（native 或 unified 重绘） | 固定区块 |
 | ④ 应用上下文项 | 运行项窗口列表、活动应用操作 | 动态区块 |
+| ⑤ 声明驱动项（M3.1） | `ContextMenuContribution` 统一声明的功能：自绘菜单项填 `Action` 标识对齐 + 系统右键注册表 verb（命令 = CLI `--menu-cmd <Action>`）同源输出 | 由贡献主体决定（复用 ② 的 Priority 语义） |
+
+**⑤ 声明驱动项同源规则（M3.1，用户拍板 2026-09-10）**：一个功能声明一次——自绘 `MenuItemDef.Action` = 注册表 verb action = CLI 路由键，三处一致，消灭两套维护。宿主未运行时系统项点击由 `BetterDesktop.Cli.exe` headless 直执行（转换/压缩/解压/设置直写）；需宿主完整在线的动作（剪贴板历史等）由 CLI 提示「需要 BetterDesktop 正在运行」后退出，不偷偷拉起静默宿主。
 
 **分组规范**：
 

@@ -20,7 +20,6 @@ using BetterDesktop.Shell.Core.Contracts;
 using BetterDesktop.Shell.Core.Native;
 using BetterDesktop.Shell.Core.Surface;
 using BetterDesktop.Shell.Core.Vibrancy;
-using BetterDesktop.Shell.Desktop.Contracts;
 using BetterDesktop.Shell.MenuBar.Contracts;
 using BetterDesktop.Shell.MenuBar.Native;
 using BetterDesktop.Shell.MenuBar.Services;
@@ -56,6 +55,20 @@ internal sealed class MenuBarWindow : ShellWindow
     };
     private bool _idleHidden;
 
+    // ==== z-order 自愈看门狗（2026-09-17）====
+    // 背景：置顶层浮层（PopupWindowBase 强制置顶的窗口，如热键面板）停靠顶部右区 + 非穿透态时，
+    // 会盖住菜单栏 → 菜单栏"可见但不可用"（hover 无高亮、点击被吃；dock 在底部不受影响）。
+    // 菜单栏是 shell 常驻条带，理应永不被盖：周期采样顶部条带命中测试，被盖则抬回置顶层顶。
+    // 常量局部定义（不扩散到共享 NativeMethods，改动面最小）。
+    private const int SwpNoSize = 0x0001;
+    private const int SwpNoMove = 0x0002;
+    private const int SwpNoActivate = 0x0010;
+    private static readonly IntPtr HwndTopmost = new(-1);
+    private readonly System.Windows.Threading.DispatcherTimer _watchdogTimer = new()
+    {
+        Interval = TimeSpan.FromSeconds(1)
+    };
+
     public MenuBarWindow(
         IMenuBarExtensionRegistry registry,
         IVibrancyService vibrancy,
@@ -63,7 +76,6 @@ internal sealed class MenuBarWindow : ShellWindow
         IKernelLogger logger,
         ISettingsWindowService? settingsWindow = null,
         IWindowTrackerService? windowTracker = null,
-        IDesktopBrowser? desktopBrowser = null,
         ISettingsService? settings = null,
         IEventBus? events = null)
         : base(appearance, vibrancy)
@@ -71,6 +83,11 @@ internal sealed class MenuBarWindow : ShellWindow
         _extensions = registry.GetAll(); // assembly snapshot
         _registry = registry;
         _settings = settings;
+
+        // 【2026-09-18 真机根因】此前**漏了这一行** → 菜单栏从不订阅外观变更，只在首帧应用一次外观：
+        // 切「透白」时其它窗口都跟随，唯独菜单栏停在旧主题（暗色/黑），用户看到的就是"透白对菜单栏没成功、
+        // 变成一块纯黑"。基类在有事件总线时走总线订阅。
+        Events = events;
         Title = "BetterDesktop.MenuBar";
         Height = MenuBarMetrics.MenuBarHeight;
         MinHeight = MenuBarMetrics.MenuBarHeight;
@@ -102,8 +119,8 @@ internal sealed class MenuBarWindow : ShellWindow
         root.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
         root.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
 
-        // 左区：Logo 快捷功能菜单（三态动画图标）+ 前台窗口标题 + 位置/下载/文档 + 文件夹工具条
-        _leftZone = new MenuBarLeftZone(vibrancy, appearance, settingsWindow, registry, windowTracker, desktopBrowser, settings, events)
+        // 左区：Logo 快捷功能菜单（三态动画图标）+ 前台窗口标题 + 位置/下载/文档
+        _leftZone = new MenuBarLeftZone(vibrancy, appearance, settingsWindow, registry, windowTracker, settings, events)
         {
             Margin = new Thickness(8, 0, 0, 0)
         };
@@ -253,6 +270,21 @@ internal sealed class MenuBarWindow : ShellWindow
             }
         };
         _idleTimer.Start();
+
+        // z-order 自愈看门狗：1s 周期采样顶部条带命中，被置顶层内窗口盖住时抬回置顶层顶。
+        // tick 包 try/catch：看门狗是兜底，自检失败仅意味着本轮不自愈，不阻断（M10）。
+        _watchdogTimer.Tick += (_, _) =>
+        {
+            try
+            {
+                WatchdogTick();
+            }
+            catch
+            {
+                // 自愈失败不阻断
+            }
+        };
+        _watchdogTimer.Start();
     }
 
     /// <summary>空闲隐藏切换：淡出保留窗口（AppBar 登记），淡入恢复交互。</summary>
@@ -264,6 +296,10 @@ internal sealed class MenuBarWindow : ShellWindow
         }
 
         _idleHidden = hidden;
+        // 【2026-09-18 电源管理】把"菜单栏整体不可见"同步给状态条：帧率组件是全库唯一订阅
+        // CompositionTarget.Rendering 的地方，而空闲淡出时**窗口与可视树都还在**（只是 Opacity 变了），
+        // 不退订就等于"用户已离开、系统准备进待机"时合成器仍按刷新率持续出帧。
+        Status.MenuBarShellVisibility.Set(!hidden);
         IsHitTestVisible = !hidden;
 
         // 隐藏时挂起 DWM 材质（毛玻璃/亚克力）：窗口仍存在（AppBar 登记保留），
@@ -292,6 +328,55 @@ internal sealed class MenuBarWindow : ShellWindow
         return NativeMethods.GetLastInputInfo(ref info)
             ? unchecked(Environment.TickCount - (int)info.dwTime)
             : 0; // 检测失败按"刚有输入"处理 → 不隐藏
+    }
+
+    /// <summary>
+    /// z-order 自愈看门狗单次检查（1s 周期）：
+    /// ① 位置自愈——物理矩形漂离贴顶（Left/Top ≠ 0）→ 重新贴顶 + 重新申请 AppBar 空间；
+    /// ② 命中自愈——顶部条带左/中/右采样点 <c>WindowFromPoint</c> 命中非菜单栏自身
+    ///   （被置顶层内其他窗口盖住，如热键面板停靠顶部右区 + 非穿透态）→ 抬回置顶层顶。
+    /// 空闲隐藏态（<c>_idleHidden</c>）跳过：隐藏 = 不应可见/命中，抬回违反隐藏语义。
+    /// </summary>
+    private void WatchdogTick()
+    {
+        if (_idleHidden || _hwndSource is null)
+        {
+            return;
+        }
+
+        var hwnd = _hwndSource.Handle;
+        if (hwnd == IntPtr.Zero || !NativeMethods.GetWindowRect(hwnd, out var rect))
+        {
+            return;
+        }
+
+        // ① 位置自愈：贴顶漂移（多显示器/协商异常兜底）。容差 1px（物理域）。
+        if (Math.Abs(rect.Left) > 1 || Math.Abs(rect.Top) > 1)
+        {
+            SyncAppBarPosition();
+            return; // 本轮先等位置落定，下一 tick 再验命中
+        }
+
+        // ② 命中自愈：顶部条带内缩 2px 采样（避免边框命中歧义）。
+        var samples = new[]
+        {
+            new NativeMethods.POINT { X = rect.Left + 2, Y = rect.Top + 2 },
+            new NativeMethods.POINT { X = rect.Left + (rect.Right - rect.Left) / 2, Y = rect.Top + 2 },
+            new NativeMethods.POINT { X = rect.Right - 2, Y = rect.Top + 2 }
+        };
+        foreach (var pt in samples)
+        {
+            var hit = NativeMethods.WindowFromPoint(pt);
+            if (hit == hwnd || hit == IntPtr.Zero)
+            {
+                continue;
+            }
+
+            // 被盖：抬回置顶层顶（不动位置/尺寸、不激活）。菜单栏常驻，优先级最高。
+            _ = NativeMethods.SetWindowPos(hwnd, HwndTopmost, 0, 0, 0, 0,
+                (uint)(SwpNoMove | SwpNoSize | SwpNoActivate));
+            break;
+        }
     }
 
 
@@ -332,6 +417,7 @@ internal sealed class MenuBarWindow : ShellWindow
         }
         // B2：先停空闲轮询——否则窗口关闭后 Timer 仍每秒 Tick，闭包持续引用已关窗口。
         _idleTimer.Stop();
+        _watchdogTimer.Stop();
         _leftZone?.Dispose(); // 退订前台窗口事件
         _leftZone = null;
         base.OnClosed(e);

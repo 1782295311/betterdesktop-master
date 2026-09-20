@@ -54,6 +54,14 @@ public sealed class DockPlugin : IPlugin
 
     private DockWindow? _dockWindow;
     private IAppSourceService _appSourceService = null!;
+
+    /// <summary>
+    /// 应用源服务（供 <c>DockWindow</c> 做运行项**溯源**用，T3）：判定某个进程 exe 是否为
+    /// "应用索引里已知的应用"只能问它。
+    /// <para>走属性而非再加构造参数：dock 窗口的构造链已经很长，且这属于"同一插件内共享"的依赖；
+    /// 加参数的收益（显式）不抵它带来的调用点改动面。</para>
+    /// </summary>
+    internal IAppSourceService? AppSource => _appSourceService;
     private IAppIconService _appIconService = null!;
     private IDockAppsService _dockAppsService = null!;
     private IDockIconService _dockIconService = null!;
@@ -144,6 +152,12 @@ public sealed class DockPlugin : IPlugin
         context.Provide<IDockAppsService>(_dockAppsService);
         context.Provide<IDockIconService>(_dockIconService);
         context.Provide<DockVisualSettings>(dockVisual);
+
+        // 【S8 · 2026-09-14】设置中心「Dock 固定项」：固定项健康态的可观测出口
+        //（此前失效只静默让位，用户只感知「图标没了」）。分区签名只给 (ISettingsService, IThemeTokens)，
+        // 拿不到内核上下文，故经桥接暴露门面——仓库既有做法（TaskbarServiceBridge / StartMenuServiceBridge）。
+        DockAppsServiceBridge.Bind(_dockAppsService);
+        context.Get<ISettingsSectionRegistry>()?.Register(new Sections.DockPinnedSection());
 
         // 2026-09-05 收口：dock 菜单自管（DockWindow 内建 DockItemTemplate + DockMenuPopup），
         // 不再注册中央贡献者/模板；「固定到 Dock」贡献者随中央管线退役（桌面右键已转系统原生）。

@@ -1,187 +1,49 @@
-// BetterDesktop.Shell.Dock — DockWindow 的底部 AppBar 接线（partial）
-// dock 注册为底部 AppBar 后 explorer 自动上移工作区，最大化窗口/桌面图标不再覆盖 dock
-// （"不要盖在窗口上"的正解：不是被盖住，而是窗口根本不与它重叠）。
-// 注（2026-09-06）：AppBar 只解决"避让"，不解决"层级"——dock 同时常驻置顶层（DefaultTopmost=true，
-// 等同系统任务栏），否则悬停缩略图 peek 抬起预览目标时会把 dock 盖掉。
-// 生命周期：OnSourceInitialized Register → 布局后首次协商 → ABN_POSCHANGED 重申请 → OnClosed Unregister。
-// 空闲隐藏（SetDockVisible(false)）时 Unregister 释放条带，唤出时重新 Register（见 SetDockVisible）。
+// BetterDesktop.Shell.Dock — DockWindow 的底部定位接线（partial）
+// 【2026-09-12 去 AppBar 决策】dock 不再注册系统 AppBar：
+//   AppBar 会让最大化窗口的工作区上移（把窗口往上抬）；dock 沉底/置顶切换时，
+//   注册/释放条带导致窗口被反复推挤，与 dock "上下竞争打架"（用户实测"dock 太抢戏"）。
+//   新模型：dock 平时沉底（被窗口自然盖住，不在主窗口上显示）、使用中置顶浮在窗口底部
+//   （macOS Dock 风格），**完全不占用工作区**。定位 = 纯底部居中（PositionToBottomCenter），
+//   无协商、无条带、无 ABN_POSCHANGED。
 
 using System;
 using System.Windows;
 using System.Windows.Interop;
-using BetterDesktop.Shell.Dock.Native;
-using BetterDesktop.Shell.WindowTracker;
+using BetterDesktop.Shell.Core.Native;
 
 namespace BetterDesktop.Shell.Dock;
 
 public partial class DockWindow
 {
-    private const int AppBarCallbackMessage = 0x8101;   // 与菜单栏 0x8100 区分
-    private const uint AbnPosChanged = 0x0001;
-    private HwndSource? _appBarHwndSource;
-    private bool _appBarRegistered;
-    private bool _appBarSetPosDone;
-
-    /// <summary>注册前缓存的所在屏**整屏**矩形（物理像素，rcMonitor）。
-    /// 2026-09-02 定稿：dock 底边 = 屏幕底边 − dock.bottomMargin（dock 独占底部，原生任务栏隐藏）。
-    /// ⚠️ 不再用工作区做纵向基准：dock 注册为底部 AppBar 后系统把工作区抬到 dock 顶，
-    /// 读实时工作区会形成"协商→抬升→再定位→再抬升"循环（dock 被抬到屏幕顶，实测回归）；
-    /// 整屏矩形不受 AppBar 抬升影响，循环天然消失，也无需再依赖注册前时序。</summary>
-    private DockAppBarReservation.NativeRect _appBarScreen;
-
-    /// <summary>句柄就绪：挂消息钩子 + 缓存整屏矩形 + 注册底部 AppBar。
-    /// ⚠️ 首次协商**不在这里做**：此时窗口尚未布局（SizeToContent 尺寸未定），
-    /// 用无效矩形协商会得到负高度，回写 Height 抛异常使插件加载失败（实测回归）。
-    /// 首次协商由 Loaded 后的布局定位路径（OnLoadedCore → SyncAppBarPosition）触发。</summary>
+    /// <summary>
+    /// 句柄就绪：设置 Aero Peek / Alt-Tab 豁免（dock 在系统 peek 切换时保持可见）。
+    /// 注：EXCLUDED_FROM_PEEK 对 DwmActivateLivePreview（悬停缩略图透明化）实测无效，
+    /// 但 Alt-Tab/系统级 peek 场景保留设置无害。
+    /// </summary>
     protected override void OnSourceInitialized(EventArgs e)
     {
         base.OnSourceInitialized(e);
-        _appBarHwndSource = PresentationSource.FromVisual(this) as HwndSource;
-        _appBarHwndSource?.AddHook(AppBarWndProc);
-
-        if (_appBarHwndSource is not null)
+        try
         {
-            var hwnd = _appBarHwndSource.Handle;
-            // 缓存整屏矩形（不受 dock 注册后的工作区抬升影响）；取不到再退工作区
-            if (!DockAppBarReservation.GetMonitorBounds(hwnd, out _appBarScreen))
+            var hwnd = new WindowInteropHelper(this).Handle;
+            if (hwnd != IntPtr.Zero)
             {
-                _ = DockAppBarReservation.GetMonitorWorkArea(hwnd, out _appBarScreen);
-            }
-            _appBarRegistered = DockAppBarReservation.Register(hwnd, AppBarCallbackMessage);
-            _appBarSetPosDone = false;
-            DebugLog.Trace("Dock", $"AppBar 注册: {_appBarRegistered} (screen={_appBarScreen.Left},{_appBarScreen.Top},{_appBarScreen.Right},{_appBarScreen.Bottom})");
-        }
-    }
-
-    /// <summary>AppBar 协商定位：先按底部居中落位，再以"期望物理矩形"（基于所在屏**整屏**矩形，
-    /// 底边贴屏幕底 − bottomMargin）向系统申请，协商结果用 SetWindowPos 物理应用，
-    /// WPF 侧只回写 Left/Top（Width/Height 由 SizeToContent 布局决定）。
-    /// 未注册（AppBar 失败降级）时退化为纯定位。
-    /// ⚠️ 回写协商矩形前必须校验宽高有效（协商可能给出异常矩形，负 Height 会抛异常）。
-    /// ⚠️ 协商输入必须用期望矩形而非 GetWindowRect 当前位置：窗口被 SystemParameters 域误导定位到
-    /// 工作区下方时，QUERYPOS 只把 Bottom 拉回工作区底而 Top 不动 → 负高度（实测 W=769 H=-299），条带永不生效。</summary>
-    private void SyncAppBarPosition()
-    {
-        PositionToBottomCenter();
-
-        if (!_appBarRegistered || _appBarHwndSource is null)
-        {
-            return;
-        }
-
-        // 窗口尺寸未就绪（SizeToContent 尚未算出）时跳过协商，等 OnSizeChanged 再来
-        if (ActualWidth <= 0 || ActualHeight <= 0 || !IsVisible)
-        {
-            return;
-        }
-
-        var hwnd = _appBarHwndSource.Handle;
-        var transform = _appBarHwndSource.CompositionTarget?.TransformToDevice ?? default;
-        var scale = transform.M11 > 0 ? transform.M11 : 1.0; // 物理像素 / WPF 逻辑
-
-        // 期望矩形（物理域）：底部居中 + 距**屏幕底边**留白 BottomMargin（2026-09-02 定稿，
-        // dock 独占底部、原生任务栏隐藏——此前锚工作区底会把 dock 抬高一个任务栏高度）。
-        // ⚠️ 用缓存整屏矩形而非实时工作区——工作区已含 dock 自己的抬升，会导致协商循环。
-        var screen = _appBarScreen;
-        if (screen.Right - screen.Left <= 0 || screen.Bottom - screen.Top <= 0)
-        {
-            // 缓存无效（极端时序：未注册/窗口尚未映射屏）→ 实时查整屏，再退工作区，仅本次兜底
-            if (!DockAppBarReservation.GetMonitorBounds(hwnd, out screen) &&
-                !DockAppBarReservation.GetMonitorWorkArea(hwnd, out screen))
-            {
-                return;
+                var excludedFromPeek = 1;
+                _ = NativeMethods.DwmSetWindowAttribute(hwnd, NativeMethods.DwmWindowAttributeExcludedFromPeek, ref excludedFromPeek, sizeof(int));
             }
         }
-
-        var pw = Math.Max(1, (int)Math.Round(ActualWidth * scale));
-        var ph = Math.Max(1, (int)Math.Round(ActualHeight * scale));
-        var margin = (int)Math.Round(_layout.BottomMargin * scale);
-        var bottom = Math.Max(screen.Top + ph, screen.Bottom - margin);
-        var left = screen.Left + Math.Max(0, (screen.Right - screen.Left - pw) / 2);
-        var desired = new DockAppBarReservation.NativeRect
+        catch
         {
-            Left = left,
-            Top = bottom - ph,
-            Right = left + pw,
-            Bottom = bottom
-        };
-
-        if (DockAppBarReservation.TryApplyPos(hwnd, desired, !_appBarSetPosDone, out var agreed))
-        {
-            var w = agreed.Right - agreed.Left;
-            var h = agreed.Bottom - agreed.Top;
-            if (w <= 0 || h <= 0)
-            {
-                DebugLog.Trace("Dock", $"AppBar 协商矩形无效 (W={w} H={h})，跳过回写");
-                return;
-            }
-
-            _appBarSetPosDone = true;
-
-            // 物理定位：不经 WPF Left/Top 属性（属性赋值会按窗口 DPI 再换算一次，域混乱时二次错位）
-            DockAppBarReservation.MoveWindowTo(hwnd, agreed);
-
-            // WPF 逻辑同步：只回写 Left/Top，写 Width/Height 会破坏 SizeToContent 自适应
-            var leftLog = agreed.Left / scale;
-            var topLog = agreed.Top / scale;
-            if (Math.Abs(Left - leftLog) > 0.5 || Math.Abs(Top - topLog) > 0.5)
-            {
-                Left = leftLog;
-                Top = topLog;
-                DebugLog.Trace("Dock", $"AppBar 协商回写: L={leftLog:F0} T={topLog:F0} (物理 {agreed.Left},{agreed.Top},{agreed.Right},{agreed.Bottom})");
-            }
+            // 属性设置失败不阻断 dock。
         }
 
-        UpdateRecycleDropRect(); // dock 窗口移动后：回收站屏幕矩形同步更新（供桌面拖放命中）
+        // 【2026-09-14 真机验证】桌面层实例（计划里的「正本」）：BETTERDESKTOP_DOCK_DESKTOP_LAYER=1 时
+        // 把本窗口挂到 SHELLDLL_DefView —— peek 只透明化顶层窗口，子窗口免疫（桌面图标能存活即此理）。
+        // 默认关 → 本行不产生任何行为，零风险回退。取舍/交接协议/验收见
+        // docs/plans/2026-09-14-dock-desktop-layer-peek-v2.md §3 / §6。
+        DockDesktopLayer.ApplyIfEnabled(this);
     }
 
-    private IntPtr AppBarWndProc(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
-    {
-        if (msg == AppBarCallbackMessage && (uint)wParam == AbnPosChanged)
-        {
-            // 工作区变化（其他 AppBar/任务栏移动）：重新申请位置
-            SyncAppBarPosition();
-            handled = true;
-        }
-        return IntPtr.Zero;
-    }
-
-    /// <summary>确保 AppBar 已注册（空闲隐藏时被释放，唤出时重注册）。</summary>
-    private void EnsureAppBar()
-    {
-        if (_appBarRegistered || _appBarHwndSource is null)
-        {
-            if (_appBarRegistered) SyncAppBarPosition();
-            return;
-        }
-
-        _appBarRegistered = DockAppBarReservation.Register(_appBarHwndSource.Handle, AppBarCallbackMessage);
-        _appBarSetPosDone = false;
-        DebugLog.Trace("Dock", $"AppBar 重注册: {_appBarRegistered}");
-    }
-
-    /// <summary>释放 AppBar 条带（空闲隐藏时调用）：底部空间归还系统，桌面/窗口可用全屏。</summary>
-    private void ReleaseAppBar()
-    {
-        if (!_appBarRegistered || _appBarHwndSource is null)
-        {
-            return;
-        }
-
-        DockAppBarReservation.Unregister(_appBarHwndSource.Handle);
-        _appBarRegistered = false;
-        _appBarSetPosDone = false;
-        DebugLog.Trace("Dock", "AppBar 已释放（空闲隐藏）");
-    }
-
-    /// <summary>窗口关闭必须注销 AppBar，否则底部空间永久被占。</summary>
-    protected override void OnClosed(EventArgs e)
-    {
-        if (_appBarRegistered && _appBarHwndSource is not null)
-        {
-            DockAppBarReservation.Unregister(_appBarHwndSource.Handle);
-            _appBarRegistered = false;
-        }
-        base.OnClosed(e);
-    }
+    /// <summary>纯底部居中定位（无 AppBar 协商；AppBar 已整体移除）。</summary>
+    private void SyncAppBarPosition() => PositionToBottomCenter();
 }

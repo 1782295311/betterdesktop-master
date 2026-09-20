@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
+using System.Threading.Tasks;
 using BetterDesktop.Kernel.Contracts;
 using BetterDesktop.Kernel.Core;
 using BetterDesktop.Shell.Core.Native;
@@ -36,6 +37,22 @@ public sealed class TaskbarAppearanceEngine : ITaskbarAppearanceService, IDispos
     private readonly NativeMethods.EnumWindowsProc _enumSearchProc;
     private readonly NativeMethods.EnumWindowsProc _enumMaxProc;
     private bool _enumFound; // 枚举复用状态，避免闭包捕获
+
+    // 【2026-09-11 崩溃根治 · 幂等去重 + 事件防抖】
+    // 病灶：WinEventPump 窗口事件风暴（创建/销毁/前台，用户操作时每秒数十个）→ 回调在泵线程直接
+    //   RefreshAll → 对每个任务栏无条件跨进程 COM Apply。实测 scene/accent/color 完全不变仍每秒
+    //   20+ 次 SetTaskbarAppearance 轰炸 explorer → explorer 内 comctl32.dll 0xc0000005 崩溃
+    //   （事件日志 Explorer.EXE，当日 9 次，宿主无图标操作时段同样触发）+ explorer 侧繁忙导致
+    //   桌面图标显隐视觉反馈延迟。
+    // 修复：
+    //   1) Apply 幂等去重：每 hwnd 记录上次成功套用的 (accent,color,blurRadius)，值未变 → 零跨进程调用；
+    //   2) 窗口事件防抖：回调只标记脏，200ms 合并后单次刷新（低频；同时把跨进程 COM 移出泵线程，
+    //      遵守 WinEventPump「回调不耗时」纪律）；
+    //   3) 失败不记基线：下次值仍变可重试，但值不变不重试（消灭失败重试风暴）。
+    private const int RefreshDebounceMs = 200;
+    private readonly Dictionary<IntPtr, (TaskbarAccent Accent, uint Color, float BlurRadius)> _lastApplied = new();
+    private CancellationTokenSource? _refreshDebounceCts;
+    private bool _refreshPending;
 
     // 场景状态（显式初始化，避免 CS0649 在 -warnaserror 下报错）
     private bool _startOpened = false;
@@ -109,12 +126,51 @@ public sealed class TaskbarAppearanceEngine : ITaskbarAppearanceService, IDispos
             _appVisibility.Start();
 
             // 监听窗口创建/销毁/前台/重排：触发重新评估外观（7435 收口：统一 WinEventPump 单泵多订阅）。
-            _pump.Subscribe(0x8000, 0x8001, (_, _) => { UpdateSceneState(); RefreshAll(); });
-            _pump.Subscribe(0x0003, 0x0003, (_, _) => { UpdateSceneState(); RefreshAll(); });
-            _pump.Subscribe(0x8008, 0x8008, (_, _) => { UpdateSceneState(); RefreshAll(); });
+            // 【2026-09-11】事件回调只标记脏 → ScheduleRefresh 防抖合并（泵线程零耗时，COM 移出泵线程）。
+            _pump.Subscribe(0x8000, 0x8001, (_, _) => ScheduleRefresh());
+            _pump.Subscribe(0x0003, 0x0003, (_, _) => ScheduleRefresh());
+            _pump.Subscribe(0x8008, 0x8008, (_, _) => ScheduleRefresh());
 
             UpdateSceneState();
             RefreshAll();
+        }
+    }
+
+    /// <summary>窗口事件防抖刷新：200ms 内多事件合并为一次（泵线程只做标记，跨进程 COM 在工作线程执行）。</summary>
+    private void ScheduleRefresh()
+    {
+        lock (_lock)
+        {
+            if (_disposed) return;
+            _refreshPending = true;
+            _refreshDebounceCts?.Cancel();
+            _refreshDebounceCts = new CancellationTokenSource();
+            var token = _refreshDebounceCts.Token;
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    await Task.Delay(RefreshDebounceMs, token).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException)
+                {
+                    return; // 事件继续到来，由最新一次刷新承接
+                }
+                lock (_lock)
+                {
+                    if (_disposed || !_refreshPending) return;
+                    _refreshPending = false;
+                    try
+                    {
+                        UpdateSceneState();
+                        RefreshAll();
+                    }
+                    catch
+                    {
+                        // 刷新失败不阻断（M10）
+                    }
+                }
+            }, CancellationToken.None);
         }
     }
 
@@ -147,6 +203,8 @@ public sealed class TaskbarAppearanceEngine : ITaskbarAppearanceService, IDispos
                     DwmapiHelper.ClearAccent(h);
                 }
             }
+            // 状态已还原为系统默认，去重基线失效：清空让下次 RefreshAll 重新 Apply。
+            _lastApplied.Clear();
             _logger?.Info($"[TaskbarAccent] 已还原任务栏到系统默认外观（{_taskbars.Count} 个窗口）。");
         }
     }
@@ -283,6 +341,14 @@ public sealed class TaskbarAppearanceEngine : ITaskbarAppearanceService, IDispos
     {
         try
         {
+            // 【2026-09-11 崩溃根治核心】幂等去重：值与上次成功套用一致 → 跳过跨进程 COM。
+            // 窗口事件风暴时 scene/accent/color 通常未变，此检查消灭 99% 无效轰炸。
+            var key = (appearance.Accent, appearance.Color, appearance.BlurRadius);
+            if (_lastApplied.TryGetValue(hWnd, out var last) && last == key)
+            {
+                return;
+            }
+
             // 原生 ITaskbarAppearanceService 的 color 参数为 ABGR（对照 TTB 原版 color.ToABGR()）
             var abgr = DwmapiHelper.ToAbgr(appearance.Color);
             // Blur 模式下若用户没设过 radius，0 在 26200 上视觉上看不出模糊；给个合理默认值
@@ -296,18 +362,21 @@ public sealed class TaskbarAppearanceEngine : ITaskbarAppearanceService, IDispos
                     bool ok = _bridge!.SetAppearance(hWnd, 0, abgr);
                     DiagnosticLog.Trace("TaskbarAccent", $"Apply Acrylic hwnd={hWnd:X} => {ok}");
                     if (!ok) _logger?.Warn($"[TaskbarAccent] SetTaskbarAppearance(Acrylic) 失败 hwnd={hWnd:X}。");
+                    if (ok) _lastApplied[hWnd] = key;
                 }
                 else if (appearance.Accent == TaskbarAccent.Blur)
                 {
                     bool ok = _bridge!.SetBlur(hWnd, abgr, blurRadius / 3f);
                     DiagnosticLog.Trace("TaskbarAccent", $"Apply Blur hwnd={hWnd:X} radius={blurRadius} => {ok}");
                     if (!ok) _logger?.Warn($"[TaskbarAccent] SetTaskbarBlur 失败 hwnd={hWnd:X}。");
+                    if (ok) _lastApplied[hWnd] = key;
                 }
                 else
                 {
                     bool ok = _bridge!.SetAppearance(hWnd, 1, abgr);
                     DiagnosticLog.Trace("TaskbarAccent", $"Apply Solid hwnd={hWnd:X} color={abgr:X8} => {ok}");
                     if (!ok) _logger?.Warn($"[TaskbarAccent] SetTaskbarAppearance(SolidColor) 失败 hwnd={hWnd:X}。");
+                    if (ok) _lastApplied[hWnd] = key;
                 }
             }
             else if (!_isWindows11)
@@ -315,6 +384,7 @@ public sealed class TaskbarAppearanceEngine : ITaskbarAppearanceService, IDispos
                 // Win10：直接 SetWindowCompositionAttribute（合法降级路径）。
                 bool ok = DwmapiHelper.SetAccent(hWnd, appearance);
                 if (!ok) _logger?.Warn($"[TaskbarAccent] SetWindowCompositionAttribute 失败 hwnd={hWnd:X}。");
+                if (ok) _lastApplied[hWnd] = key;
             }
             else
             {
@@ -355,6 +425,9 @@ public sealed class TaskbarAppearanceEngine : ITaskbarAppearanceService, IDispos
         {
             if (_disposed) return;
             _disposed = true;
+            _refreshDebounceCts?.Cancel();
+            _refreshDebounceCts = null;
+            _lastApplied.Clear();
             try { ReturnToStock(); } catch { /* ignore */ }
             _pump.Dispose();
             _appVisibility.Dispose();

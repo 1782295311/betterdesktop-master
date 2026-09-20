@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.IO;
 using System.Runtime.InteropServices;
 using System.Text;
 using BetterDesktop.Shell.Core.Native;
@@ -61,8 +62,26 @@ public static class RunningAppDetector
 
     /// <summary>
     /// 获取窗口 placement（含显示状态 showCmd），用于判断最小化。
+    /// <para>
+    /// 【2026-09-18】保留旧签名兼容既有调用方；**要把 placement 写回别人窗口的代码必须改用
+    /// <see cref="TryGetWindowPlacement"/>**——只看结构体、不看返回值会在读失败时拿到全零值。
+    /// </para>
     /// </summary>
     public static void GetWindowPlacement(IntPtr hWnd, out WindowPlacement placement)
+        => _ = TryGetWindowPlacement(hWnd, out placement);
+
+    /// <summary>
+    /// 读窗口 placement，**返回是否真的读到有效值**。
+    /// <para>
+    /// 【2026-09-18 真机事故：dock 把用户的窗口"关掉"并"改小"】原实现丢弃 native 返回值：
+    /// 调用失败时 <paramref name="placement"/> 保持初始零值（showCmd=0、rcNormalPosition 全 0），
+    /// 而 <c>WindowPeek.End</c> 会原样 <c>SetWindowPlacement</c> **写回目标窗口** ——
+    /// showCmd=0 即 SW_HIDE（用户看到的"它自己把运行窗口关掉了"）、rcNormalPosition 归零
+    ///（此后任何 SW_RESTORE 都按被污染的矩形还原 → "窗口重开变成很小的一块"）。
+    /// 这是全仓**唯一**对他人窗口写几何/状态的地方，因此必须"读不到就绝不写回"。
+    /// </para>
+    /// </summary>
+    public static bool TryGetWindowPlacement(IntPtr hWnd, out WindowPlacement placement)
     {
         placement = new WindowPlacement
         {
@@ -70,11 +89,22 @@ public static class RunningAppDetector
         };
         try
         {
-            _ = NativeGetWindowPlacement(hWnd, out placement);
+            // 注意：GetWindowPlacement 要求调用方**先填 length**，所以必须传"已初始化 Length 的同一个变量"；
+            // 传一个全新的 out 变量（length=0）会让 native 调用直接失败。
+            if (!NativeGetWindowPlacement(hWnd, out placement))
+            {
+                return false;
+            }
+
+            return placement.Length != 0;
         }
-        catch
+        catch (EntryPointNotFoundException)
         {
-            placement.showCmd = 0;
+            return false;
+        }
+        catch (DllNotFoundException)
+        {
+            return false;
         }
     }
 
@@ -290,6 +320,8 @@ public static class RunningAppDetector
     ///
     /// 【避免误伤】只有"前台设置明确失败 **且** 延迟校验后目标仍是最小化"才回退；
     /// 前台失败但窗口其实已显示（只是没抢到焦点）时不会多开窗口。
+    /// **shell 进程（explorer.exe 等）绝不重启**：Process.Start("explorer.exe") 会触发 shell 重启，
+    /// 关闭所有资源管理器窗口——这正是"文件管理器被关后只剩一个最小化窗口"的根因。
     /// </summary>
     public static void ActivateWindowOrRelaunch(IntPtr hwnd, string? exePath)
     {
@@ -303,6 +335,10 @@ public static class RunningAppDetector
             return;
         }
 
+        // shell 进程不重启：explorer.exe 等系统进程被 Process.Start 后会重启 shell，
+        // 关掉所有已打开的资源管理器窗口。改为多试一次 Show+前台。
+        var isShellProcess = IsShellProcess(exePath);
+
         var path = exePath;
         _ = Task.Delay(ActivateVerifyDelayMs).ContinueWith(_ =>
         {
@@ -313,6 +349,14 @@ public static class RunningAppDetector
                     return; // 已经显示出来了（只是没抢到焦点），不重启
                 }
 
+                // shell 进程：不重启，再试一次 Show + 前台
+                if (isShellProcess)
+                {
+                    DebugLog.Trace("Activate", $"shell process, retry ShowWindow+Activate: {path} hwnd=0x{(long)hwnd:X}");
+                    ShowAndActivate(hwnd);
+                    return;
+                }
+
                 DebugLog.Trace("Activate", $"relaunch fallback exe={path} hwnd=0x{(long)hwnd:X}");
                 Process.Start(new ProcessStartInfo(path) { UseShellExecute = true });
             }
@@ -321,6 +365,16 @@ public static class RunningAppDetector
                 // 回退失败静默：原始激活已尽力。
             }
         }, TaskScheduler.Default);
+    }
+
+    /// <summary>
+    /// 判断是否为不应被"重启回退"的 shell/系统进程。
+    /// 这些进程被 Process.Start 后会触发 shell 重启或系统行为，关闭已有窗口。
+    /// </summary>
+    private static bool IsShellProcess(string exePath)
+    {
+        var name = Path.GetFileName(exePath).ToLowerInvariant();
+        return name is "explorer.exe" or "shell.exe" or "csrss.exe" or "winlogon.exe" or "svchost.exe";
     }
 
     private const byte VkMenu = 0xA4;       // VK_MENU (ALT)
@@ -368,6 +422,106 @@ public static class RunningAppDetector
                 ActivateWindow(window.Hwnd);
                 return;
             }
+        }
+
+        // 可见窗口找不到 → 可能窗口被隐藏（点X进托盘/最小化到托盘）。
+        // 兜底：找同进程的隐藏顶层窗口并 Show 出来。
+        var hidden = FindHiddenWindowByExe(exePath);
+        if (hidden != IntPtr.Zero)
+        {
+            ShowAndActivate(hidden);
+        }
+    }
+
+    /// <summary>
+    /// 已知脚本解释器/控制台进程名集合。这些进程的 FileDescription 是解释器自身
+    /// （如 "Python"、"Command Prompt"），实际窗口标题才是用户认知的应用名。
+    /// </summary>
+    private static readonly HashSet<string> InterpreterExeNames = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "python", "pythonw", "python3", "python3w",
+        "cmd", "powershell", "powershell_ise", "pwsh",
+        "wscript", "cscript", "mshta",
+        "node", "node.exe",
+    };
+
+    /// <summary>
+    /// 判断给定 exe 路径是否为脚本解释器/控制台宿主进程。
+    /// 运行区显示名遇到这类进程时应改用窗口标题，而不是解释器自身名称。
+    /// </summary>
+    public static bool IsInterpreterProcess(string exePath)
+    {
+        if (string.IsNullOrWhiteSpace(exePath)) return false;
+        var name = Path.GetFileNameWithoutExtension(exePath);
+        return InterpreterExeNames.Contains(name);
+    }
+
+    /// <summary>
+    /// 按 exe 路径查找**隐藏的**顶层窗口（IsWindowVisible=false 但窗口句柄仍存在）。
+    /// 用于"窗口被隐藏（点X进托盘）后点 dock 图标唤回"的场景。
+    /// 过滤：工具窗口、无标题、系统 Progman/WorkerW、幽灵窗口。
+    /// 同进程多窗口时取第一个。
+    /// </summary>
+    public static IntPtr FindHiddenWindowByExe(string exePath)
+    {
+        if (string.IsNullOrWhiteSpace(exePath)) return IntPtr.Zero;
+
+        IntPtr found = IntPtr.Zero;
+        NativeMethods.EnumWindows((hwnd, _) =>
+        {
+            try
+            {
+                // 只要隐藏窗口（可见的已经被 GetRunningWindows 覆盖了）
+                if (NativeMethods.IsWindowVisible(hwnd)) return true;
+
+                // 不能是工具窗口
+                if ((NativeMethods.GetWindowLongPtr(hwnd, GwlExStyle).ToInt64() & WsExToolWindow) != 0) return true;
+
+                // 必须有窗口标题
+                var title = GetWindowText(hwnd);
+                if (string.IsNullOrWhiteSpace(title)) return true;
+
+                // 排除 Progman/WorkerW
+                var cn = new StringBuilder(64);
+                if (NativeMethods.GetClassName(hwnd, cn, 64) > 0)
+                {
+                    var cls = cn.ToString();
+                    if (cls == "Progman" || cls == "WorkerW") return true;
+                }
+
+                // 匹配进程路径
+                if (NativeMethods.GetWindowThreadProcessId(hwnd, out var pid) == 0 || pid == 0) return true;
+                var path = GetProcessPath(pid);
+                if (string.IsNullOrWhiteSpace(path)) return true;
+
+                if (string.Equals(path, exePath, StringComparison.OrdinalIgnoreCase))
+                {
+                    found = hwnd;
+                    return false; // 找到了，停止枚举
+                }
+            }
+            catch { }
+            return true;
+        }, IntPtr.Zero);
+
+        return found;
+    }
+
+    /// <summary>
+    /// 把一个隐藏窗口 Show 出来并激活到前台。
+    /// 先 ShowWindow(SW_SHOW) 让它可见，再走标准的 AttachThreadInput + SetForegroundWindow。
+    /// </summary>
+    public static void ShowAndActivate(IntPtr hwnd)
+    {
+        try
+        {
+            // SW_SHOW = 5：显示窗口并激活
+            NativeMethods.ShowWindow(hwnd, 5);
+            ActivateWindow(hwnd);
+        }
+        catch (Exception ex)
+        {
+            DebugLog.Trace("Activate", $"ShowAndActivate failed: {ex.Message} hwnd={hwnd:X}");
         }
     }
 

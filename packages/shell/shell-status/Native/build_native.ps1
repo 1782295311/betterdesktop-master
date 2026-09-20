@@ -30,7 +30,7 @@ if (-not (Test-Path $nativeRoot)) {
 }
 
 $targets = @("AudioCore.dll", "WlanCore.dll", "PowerCore.dll", "DisplayCore.dll",
-    "NetworkCore.dll", "CpuCore.dll", "MemoryCore.dll", "MediaCore.dll")
+    "NetworkCore.dll", "CpuCore.dll", "MemoryCore.dll", "MediaCore.dll", "ImeCore.dll")
 foreach ($t in $targets) {
     $src = Join-Path $binDir $t
     if (Test-Path $src) {

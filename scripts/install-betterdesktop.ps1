@@ -63,6 +63,12 @@ $startupApprovedKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\
 $required = @(
     # 2026-09-18 launcher: the single entry point users double-click.
     'BetterDesktop.exe',
+    # 2026-09-20 Rust core: the single resident process (tray icon / hotkeys / control pipe /
+    # supervision). Keep in sync with publish.ps1 $required - the verify-system-integration gate
+    # compares the two lists verbatim, so a half package cannot be installed.
+    'betterdesktop-core.exe',
+    # core's tray icon (<exeDir>\BetterDesktop.ico, core/src/tray.rs).
+    'BetterDesktop.ico',
     'BetterDesktop.Host.exe',
     'BetterDesktop.Cli.exe',
     'BetterDesktop.DesktopControl.exe',
@@ -358,15 +364,16 @@ else {
     Get-ChildItem -Path $target -Recurse -Include *.pdb,*.xml -File -ErrorAction SilentlyContinue | Remove-Item -Force
 }
 
-# ---- 3b. format-conversion engines (engines\) ----
-# 2026-09-18 real-machine bug: format conversion was ~80% unusable and most of its menu entries were
-# MISSING. Every engine is located at <AppContext.BaseDirectory>\engines\... (shell-convert), but
-# the main module deliberately excludes the 2.8GB engines tree (it ships as module 06) while this
-# installer only copied the main module -> a clean install had NO engines -> pure-managed targets only
-# reachable. Note ConvertMenuService HIDES unavailable targets entirely (it does not grey them out),
-# which is exactly why the user reported "missing options" rather than "greyed options".
-# Install them here from either layout: full dist (engines\ next to the component exes) or the module
-# package (the 06-* module next to this folder). Missing engines is a Warn, never a Fail.
+# ---- 3b. optional engines (engines\) ----
+# 2026-09-20 convert-lite migration: the document / table / ebook families no longer need any external
+# engine (the Rust lite core converts them IN-PROCESS), so pandoc / libreoffice / calibre are no longer
+# shipped. What is still installed here is only what lite cannot replace: tesseract (OCR),
+# poppler (PDF) and ffmpeg (audio/video - shipped, but its menu entries are hidden this round).
+# Engines are located at <AppContext.BaseDirectory>\engines\... (shell-convert). The tree ships as the
+# "06-*" module next to this folder; a full dist may also carry engines\ directly. Missing engines is a
+# Warn, never a Fail - conversion keeps working, only OCR/PDF rendering would be unavailable.
+# NOTE (2026-09-20): BetterDesktop.Cli.csproj no longer copies engines\ into the build output, so a full
+# dist no longer contains it - the 06-* module is now the only carrier.
 $enginesSource = ''
 $srcParent = Split-Path $src -Parent
 $enginesCandidates = New-Object System.Collections.Generic.List[string]
@@ -385,8 +392,8 @@ foreach ($candidate in $enginesCandidates) {
 }
 
 if ([string]::IsNullOrWhiteSpace($enginesSource)) {
-    Warn 'no conversion engines found (looked for engines\ here or in the parent folder / 06-* module)'
-    Warn 'format conversion will only offer pure-managed image targets until that folder is copied into the install root'
+    Warn 'no optional engines found (looked for engines\ here or in the parent folder / 06-* module)'
+    Warn 'format conversion still works (the Rust lite core is in-process); only OCR (tesseract) and PDF rendering (poppler) will be unavailable'
 }
 else {
     $enginesTarget = Join-Path $target 'engines'
@@ -509,29 +516,56 @@ else {
 $record.msixMode = $msixMode
 [IO.File]::WriteAllText($pointer, ($record | ConvertTo-Json -Depth 4), $utf8NoBom)
 
-# ---- 7. start the tray (it brings up agent + desktop service) ----
-$tray = Join-Path $target 'BetterDesktop.Tray.exe'
-Step "starting tray: $tray"
+# ---- 7. start core: the resident control plane ----
+# core replaced the .NET tray. It owns the notification-area icon, the global hotkeys, the control
+# pipe and the supervisor, so it is what must be running after an install. Starting the tray as well
+# would put a SECOND icon in the notification area and resurrect the component core now supervises.
+# Packages older than core (no core binary) keep the old behaviour through the fallback below.
+$core = Join-Path $target 'betterdesktop-core.exe'
+if (Test-Path $core) {
+    Step "starting core: $core"
+    Start-Process $core -WorkingDirectory $target | Out-Null
+    Start-Sleep -Milliseconds 1200
 
-# Re-arm the one-time "where is my tray icon" hint (TrayApplicationContext.ShowFirstRunTrayHint):
-# Windows 11 folds NEWLY-appeared tray icons into the '^' overflow area, and the #1 user report we get is
-# "the tray app is not installed / not running" while it is in fact running with a hidden icon.
-# The hint is gated by a flag file and shown only once per install -> a reinstall must re-arm it,
-# otherwise an upgrading user is never told to look in the overflow area.
-$trayHintFlag = Join-Path $env:LOCALAPPDATA 'BetterDesktop\tray-icon-hint.flag'
-Remove-Item $trayHintFlag -Force -ErrorAction SilentlyContinue
-
-Start-Process $tray | Out-Null
-Start-Sleep -Milliseconds 700
-
-# Verify it really came up. A silent start failure (stale process holding the single-instance mutex,
-# missing dependency, crash on load) is indistinguishable from "not installed" for the user.
-$trayProc = Get-Process -Name 'BetterDesktop.Tray' -ErrorAction SilentlyContinue
-if ($trayProc) {
-    Step "tray running (pid $($trayProc[0].Id))"
+    # Verify it really came up. A silent start failure (stale process holding the single-instance
+    # mutex, missing dependency, crash on load) is indistinguishable from "not installed" for the
+    # user - and core now owns the tray icon, i.e. the only visible proof that the install worked.
+    $coreProc = Get-Process -Name 'betterdesktop-core' -ErrorAction SilentlyContinue
+    if ($coreProc) {
+        Step "core running (pid $($coreProc[0].Id)): tray icon, hotkeys and supervision are up"
+    }
+    else {
+        Warn 'core did not start. Run betterdesktop-core.exe manually to see the failure, and check %LOCALAPPDATA%\BetterDesktop\logs\core-*.log'
+    }
 }
 else {
-    Warn 'tray did not start. Run BetterDesktop.Tray.exe manually to see the failure, and check %LOCALAPPDATA%\BetterDesktop\logs\tray.log'
+    Warn 'betterdesktop-core.exe is not in this package: falling back to the legacy tray.'
+
+    $tray = Join-Path $target 'BetterDesktop.Tray.exe'
+    Step "starting tray: $tray"
+
+    # Re-arm the one-time "where is my tray icon" hint (TrayApplicationContext.ShowFirstRunTrayHint):
+    # Windows 11 folds NEWLY-appeared tray icons into the '^' overflow area, and the #1 user report we get is
+    # "the tray app is not installed / not running" while it is in fact running with a hidden icon.
+    # The hint is gated by a flag file and shown only once per install -> a reinstall must re-arm it,
+    # otherwise an upgrading user is never told to look in the overflow area.
+    # NOTE: core has no equivalent hint yet (known gap: a fresh core install on Win11 can still look
+    # "missing" because the icon starts folded into '^').
+    $trayHintFlag = Join-Path $env:LOCALAPPDATA 'BetterDesktop\tray-icon-hint.flag'
+    Remove-Item $trayHintFlag -Force -ErrorAction SilentlyContinue
+
+    Start-Process $tray | Out-Null
+    Start-Sleep -Milliseconds 700
+
+    # Verify it really came up. A silent start failure (stale process holding the single-instance mutex,
+    # missing dependency, crash on load) is indistinguishable from "not installed" for the user.
+    $trayProc = Get-Process -Name 'BetterDesktop.Tray' -ErrorAction SilentlyContinue
+    if ($trayProc) {
+        Step "tray running (pid $($trayProc[0].Id))"
+    }
+    else {
+        Warn 'tray did not start. Run BetterDesktop.Tray.exe manually to see the failure, and check %LOCALAPPDATA%\BetterDesktop\logs\tray.log'
+    }
 }
 
 # ---- 8. restart explorer so the shell reloads context-menu handlers ----

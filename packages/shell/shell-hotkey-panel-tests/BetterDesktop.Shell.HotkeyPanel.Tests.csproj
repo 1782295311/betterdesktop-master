@@ -1,0 +1,27 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <IsPackable>false</IsPackable>
+    <RootNamespace>BetterDesktop.Shell.HotkeyPanel.Tests</RootNamespace>
+    <AssemblyName>BetterDesktop.Shell.HotkeyPanel.Tests</AssemblyName>
+    <UseWPF>true</UseWPF>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.11.1" />
+    <PackageReference Include="xunit" Version="2.9.3" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\shell-hotkey-panel\BetterDesktop.Shell.HotkeyPanel.csproj" />
+    <ProjectReference Include="..\shell-core\BetterDesktop.Shell.Core.csproj" />
+    <ProjectReference Include="..\..\kernel\kernel\BetterDesktop.Kernel.csproj" />
+    <ProjectReference Include="..\..\api\BetterDesktop.Api.csproj" />
+    <ProjectReference Include="..\shell-clipboard-ipc\BetterDesktop.Shell.Clipboard.Ipc.csproj" />
+  </ItemGroup>
+
+</Project>

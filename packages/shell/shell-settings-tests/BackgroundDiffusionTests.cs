@@ -253,6 +253,12 @@ public class BackgroundDiffusionTests : IDisposable
                 xamlWin.RaiseEvent(new RoutedEventArgs(FrameworkElement.LoadedEvent, xamlWin));
                 codeWin.RaiseEvent(new RoutedEventArgs(FrameworkElement.LoadedEvent, codeWin));
 
+                // 【2026-09-18】本用例的意图是"色调变更向所有壳面窗口扩散"，必须在一个**真的会叠加色调**的模式下验证。
+                // 默认模式是无色（ThemeMode.None），按用户口径它现在是"零色"：窗口层不铺任何颜色
+                //（视觉全交给 DWM 无色模糊），因此"改 WindowTint → Brush 实例变化"在无色下恒不成立
+                //（前后都是同一个"透明地板"实例）。显式切到暗色（叠透黑）来验证扩散链路。
+                appearance.Mode = BetterDesktop.Shell.Core.Surface.ThemeMode.Dark;
+
                 // 基线 Brush（无皮肤时色调托盘）。
                 var brushBefore = appearance.BackgroundBrush;
                 Assert.Same(brushBefore, xamlWin.Background);

@@ -8,11 +8,6 @@
     本包零项目依赖（仅 WPF 基础程序集），是依赖方向上的最底层契约层。
   -->
   <PropertyGroup>
-    <TargetFramework>net8.0-windows10.0.19041.0</TargetFramework>
-    <Nullable>enable</Nullable>
-    <ImplicitUsings>enable</ImplicitUsings>
-    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
-    <Platforms>x64</Platforms>
     <UseWPF>true</UseWPF>
     <RootNamespace>BetterDesktop.Api</RootNamespace>
     <AssemblyName>BetterDesktop.Api</AssemblyName>

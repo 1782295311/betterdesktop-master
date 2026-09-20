@@ -1,11 +1,6 @@
-<Project Sdk="Microsoft.NET.Sdk">
+﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <TargetFramework>net8.0-windows10.0.19041.0</TargetFramework>
-    <Nullable>enable</Nullable>
-    <ImplicitUsings>enable</ImplicitUsings>
-    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
-    <Platforms>x64</Platforms>
     <UseWPF>true</UseWPF>
     <RootNamespace>BetterDesktop.Shell.Status</RootNamespace>
     <AssemblyName>BetterDesktop.Shell.Status</AssemblyName>
@@ -26,9 +21,13 @@
     <None Include="natives\CpuCore.dll" CopyToOutputDirectory="PreserveNewest" />
     <None Include="natives\MemoryCore.dll" CopyToOutputDirectory="PreserveNewest" />
     <None Include="natives\MediaCore.dll" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="natives\ImeCore.dll" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\..\api\BetterDesktop.Api.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="BetterDesktop.Shell.Status.Tests" />
   </ItemGroup>
 </Project>

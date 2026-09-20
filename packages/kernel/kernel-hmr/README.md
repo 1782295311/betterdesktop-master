@@ -13,6 +13,8 @@ Cordis 内核的 HMR 热重载扩展：运行时动态加载 / 卸载 / 重载�
 - `IPluginStateProvider`：可选能力，实现旧状态捕获与恢复（旧配置迁移）
 - `IPluginSource` / `AssemblyPluginSource` / `DelegatePluginSource`：插件实例来源抽象与实现
 - `PluginDependencyResolver`：必需依赖校验与稳定拓扑排序
+- `ExternalPluginAdapter`：外部程序集插件适配
+- `SemanticVersion`：版本比较与 ABI 兼容判定
 - `HmrEvents` + `PluginLifecycleEvent`：热重载生命周期事件（经内核事件总线）
 
 ## Known Limitations

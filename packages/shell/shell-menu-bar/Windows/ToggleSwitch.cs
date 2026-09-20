@@ -7,6 +7,7 @@ using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Effects;
+using BetterDesktop.Shell.Core.Surface;
 
 namespace BetterDesktop.Shell.MenuBar.Windows;
 
@@ -49,7 +50,7 @@ internal sealed class ToggleSwitch : ContentControl
             CornerRadius = new CornerRadius(10),
             HorizontalAlignment = HorizontalAlignment.Stretch,
             BorderThickness = new Thickness(0.5),
-            BorderBrush = new SolidColorBrush(Color.FromArgb(90, 255, 255, 255))
+            BorderBrush = ThemeBrushes.Tint("ThemeForeground", 0.35)
         };
         _thumb = new Border
         {
@@ -90,7 +91,7 @@ internal sealed class ToggleSwitch : ContentControl
         }
         else
         {
-            _track.Background = new SolidColorBrush(Color.FromRgb(130, 130, 130));
+            _track.Background = ThemeBrushes.Get("ControlTrack");
         }
         _thumb.HorizontalAlignment = IsOn ? HorizontalAlignment.Right : HorizontalAlignment.Left;
         _thumb.Margin = IsOn ? new Thickness(0, 2, 2, 2) : new Thickness(2, 2, 0, 2);

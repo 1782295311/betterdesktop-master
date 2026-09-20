@@ -21,6 +21,9 @@ namespace BetterDesktop.Shell.Settings;
 /// </summary>
 public partial class SettingsWindow : ShellWindow
 {
+    /// <summary>热键表面作用域：设置中心打开期间相关表面键"此刻可用"（P5 P0-1 接线）。</summary>
+    protected override string? SurfaceScopeId => "Surface.Settings";
+
     private readonly ISettingsSectionRegistry _registry;
     private readonly ISettingsService _settings;
     private readonly IThemeTokens _tokens;

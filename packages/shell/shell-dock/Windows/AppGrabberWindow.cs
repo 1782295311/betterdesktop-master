@@ -16,8 +16,10 @@ using System.Windows.Controls;
 using System.Windows.Documents;
 using System.Windows.Input;
 using System.Windows.Media;
+using BetterDesktop.Shell.AppSource.Models;
 using BetterDesktop.Shell.ContextMenus.Contracts;
 using BetterDesktop.Shell.ContextMenus.Services;
+using BetterDesktop.Shell.Core.Services;
 using BetterDesktop.Shell.Core.Surface;
 using BetterDesktop.Shell.Core.Vibrancy;
 using BetterDesktop.Shell.Dock.Models;
@@ -30,7 +32,7 @@ namespace BetterDesktop.Shell.Dock.Windows;
 //   "加载应用列表 / 过滤 / 固定态"      → ReloadAsync / ApplyFilter / RefreshPinnedIds / ClearFilters
 //   "列表渲染（分块/分批防卡顿）"       → RenderViewAsync / AppendBatch / AppendChunkedAsync
 //   "图标分批加载（避免一次性卡死）"    → StartStagedIconLoad / StagedIconLoadAsync / LoadIconInto
-//   "单个应用卡片/右键菜单/启动"        → MakeItem / ShowItemMenu / Launch / OpenContainingDirectory / RunUninstaller
+//   "单个应用卡片/右键菜单/启动"        → MakeItem / ShowItemMenu / Launch（系统级动作统一在 shell-core/Services/AppEntryActions.cs）
 //   "应用分组（新建/取名）"             → PromptNewGroup / GetFolderName（分组存储 AppGroupStore）
 //   "批量排序模式"                      → ToggleBatchOrder / OnBatchItemClicked / RefreshBatchBadges / ApplyBatchOrderCore / RenderBatchViewAsync / ExitBatchOrder
 //   "忙态/状态文案"                     → SetBusy / UpdateStatus
@@ -41,6 +43,9 @@ internal sealed class AppGrabberWindow : ShellWindow
 {
     /// <summary>管理窗口打开即激活（基类约定"管理窗口重写为 true"；重构回归修复——备份副本 stage1-pre-clean 中有此覆写）。</summary>
     protected override bool DefaultShowActivated => true;
+
+    /// <summary>热键表面作用域：应用提取器/Dock 预览打开期间表面键"此刻可用"（P5 P0-1 接线）。</summary>
+    protected override string? SurfaceScopeId => "Surface.DockGrabber";
 
     private const string ModeGroupName = "grabber.mode";
     private const string FilterGroupName = "grabber.filter";
@@ -83,6 +88,9 @@ internal sealed class AppGrabberWindow : ShellWindow
     private readonly List<(DockItemData App, Image Target)> _pendingIcons = new();
 
     private bool _allProgramsMode;
+
+    // 便携工具提示只提示一次（静态：跨窗口实例，同一进程内首次打开应用提取器时提示）
+    private static bool _pocketDirHintShown;
     private int _filterMode; // 0=全部 1=已固定 2=未固定
     private bool _groupByFolder;
     private DateTime _lastFilterAt;
@@ -314,12 +322,25 @@ internal sealed class AppGrabberWindow : ShellWindow
         batchOrderButton.Click += (_, _) => ToggleBatchOrder();
         _batchOrderButton = batchOrderButton;
 
+        // 手动添加应用（§6 P3-3）：便携 / 解压即用的工具不在任何扫描范围，只能由用户手动指认。
+        var addAppButton = new Button
+        {
+            Content = "添加应用…",
+            FontSize = 12,
+            Padding = new Thickness(10, 3, 10, 3),
+            Margin = new Thickness(8, 0, 0, 0),
+            VerticalAlignment = VerticalAlignment.Center,
+            ToolTip = "手动添加应用（可多选）：便携 / 解压即用的工具不在任何扫描范围内，用它直接加入固定列表"
+        };
+        addAppButton.Click += (_, _) => AddAppsFromFiles();
+
         var toolbar = new WrapPanel { Orientation = Orientation.Horizontal };
         toolbar.Children.Add(MakeToolbarGroup("模式", _modeClean, _modeAll));
         toolbar.Children.Add(MakeToolbarGroup("筛选", filterAll, filterPinned, filterUnpinned));
         toolbar.Children.Add(MakeToolbarGroup("排序", sortAlpha, sortGroup));
         toolbar.Children.Add(newGroupButton);
         toolbar.Children.Add(batchOrderButton);
+        toolbar.Children.Add(addAppButton);
         Grid.SetRow(toolbar, 2);
         root.Children.Add(toolbar);
 
@@ -519,6 +540,7 @@ internal sealed class AppGrabberWindow : ShellWindow
                 .ToList();
             RefreshPinnedIds();
             ApplyFilter();
+            ShowPocketDirHintOnce();
             // 图标不再全量 Prefetch：由 StartStagedIconLoad 按可见区优先/小批量 trickle 拉取
             // （503：全量并发预取对数百 exe 是一次磁盘/Shell 提取风暴，反而制造卡顿）
         }
@@ -537,6 +559,65 @@ internal sealed class AppGrabberWindow : ShellWindow
                 }
             }
         }
+    }
+
+    /// <summary>
+    /// 手动添加应用：多选文件 → 逐个按路径固定。
+    /// <para>为什么需要：便携 / 解压即用的工具（MAA / OneDragon 一类）不在 Program Files、
+    /// 没有注册表卸载项、也没有开始菜单快捷方式——三处扫描皆不可见，只能由用户手动指认
+    /// （分析稿 §7.2；过滤器沿用反编译参考实现 tools/decomp/AppGrabberWindow.decomp.cs:1716）。</para>
+    /// <para>走 <c>AddByPath</c>：与「固定到 Dock」同一条通道，Id 由 <c>CreateStableId</c> 统一生成，
+    /// 故手动添加的项与扫描出来的同一程序是同一个 Id（不会出现两份）。</para>
+    /// </summary>
+    private void AddAppsFromFiles()
+    {
+        var dialog = new Microsoft.Win32.OpenFileDialog
+        {
+            Title = "添加应用（可多选）",
+            Multiselect = true,
+            CheckFileExists = true,
+            Filter = "应用与快捷方式|*.exe;*.bat;*.cmd;*.com;*.msc;*.lnk;*.url;*.appref-ms|所有文件|*.*"
+        };
+
+        if (dialog.ShowDialog() != true)
+        {
+            return;
+        }
+
+        var added = 0;
+        foreach (var file in dialog.FileNames)
+        {
+            try
+            {
+                _apps.AddByPath(file);
+                added++;
+            }
+            catch
+            {
+                // 单个文件解析失败不阻断其余（M10）
+            }
+        }
+
+        if (added == 0)
+        {
+            return;
+        }
+
+        _apps.Save();
+        RefreshPinnedIds();
+        ApplyFilter();
+    }
+
+    /// <summary>首次进入应用提取器时提示便携应用怎么加（§12 Q2：口袋目录默认空 + 首次提示，只提示一次）。</summary>
+    private void ShowPocketDirHintOnce()
+    {
+        if (_pocketDirHintShown || _status is null)
+        {
+            return;
+        }
+
+        _pocketDirHintShown = true;
+        _status.Text += " · 便携工具（解压即用）不在扫描范围：用「添加应用…」直接加入，或在设置中心「应用来源」里添加扫描目录";
     }
 
     private void RefreshPinnedIds()
@@ -980,8 +1061,8 @@ internal sealed class AppGrabberWindow : ShellWindow
             Tag = pinDot, // 供 PinnedChanged 联动翻角标
             ToolTip = $"{app.Name}\n{(isPinned ? "已固定到 Dock" : "未固定")}\n{(!string.IsNullOrWhiteSpace(app.TargetPath) ? app.TargetPath : app.ShortcutPath)}"
         };
-        // 悬浮高亮：显式半透明灰（不引主题令牌——"CardHoverBackground"未在主题表核实，禁止编造）
-        var hoverBrush = new SolidColorBrush(Color.FromArgb(0x28, 0x80, 0x80, 0x80));
+        // 悬浮高亮：前景色低透明叠层（与全项目 hover 基准一致；"CardHoverBackground"未在主题表核实，不编造键名）
+        var hoverBrush = ThemeBrushes.Tint("ThemeForeground", 0.16);
         border.MouseEnter += (_, _) => border.Background = hoverBrush;
         border.MouseLeave += (_, _) =>
         {
@@ -1111,73 +1192,41 @@ internal sealed class AppGrabberWindow : ShellWindow
 
     private void ShowItemMenu(DockItemData app, FrameworkElement target)
     {
-        var isPinned = _pinnedIds.Contains(app.Id);
-        var items = new List<MenuItemDef>
-        {
-            new() { Id = "grab.launch", Text = "启动", Command = () => Launch(app) },
-        };
+        // 项集与「什么条件下出现哪一项」集中在 AppEntryMenuBuilder（与菜单栏搜索共用同一套判定）。
+        // 本方法只提供事实（路径/固定态/分组/卸载命令）+ 动作回调，不再自己拼 if 链（2026-09-14 S3）。
+        var path = !string.IsNullOrWhiteSpace(app.TargetPath) ? app.TargetPath : app.ShortcutPath;
+        var uninstallCommand = app.UninstallCommand;
 
-        if (isPinned)
+        var items = AppEntryMenuBuilder.Build(new AppEntryMenuContext
         {
-            items.Add(new()
+            Path = path,
+            IsPinned = _pinnedIds.Contains(app.Id),
+            UninstallCommand = uninstallCommand,
+            Groups = _groups.Groups,
+            CurrentGroup = _groups.GetGroupOf(app.Id),
+            Actions = new AppEntryMenuActions
             {
-                Id = "grab.remove",
-                Text = "从 Dock 移除",
-                Command = () => { _apps.RemoveById(app.Id); _apps.Save(); },
-            });
-        }
-        else
-        {
-            items.Add(new()
-            {
-                Id = "grab.pin",
-                Text = "固定到 Dock",
-                Command = () =>
+                Launch = () => Launch(app),
+                Pin = () =>
                 {
                     _apps.AddByPath(string.IsNullOrWhiteSpace(app.ShortcutPath) ? app.TargetPath : app.ShortcutPath);
                     _apps.Save();
                 },
-            });
-        }
-
-        items.Add(new() { Id = "grab.dir", Text = "打开所在目录", Command = () => OpenContainingDirectory(app) });
-
-        // 自定义分组（506 范式）：从分组移出 / 移动到分组 ▸（含新建）
-        var currentGroup = _groups.GetGroupOf(app.Id);
-        if (currentGroup is not null)
-        {
-            items.Add(new()
-            {
-                Id = "grab.ungroup",
-                Text = $"从「{currentGroup}」移出",
-                Command = () => { _groups.RemoveFromGroup(app.Id); ApplyFilter(); },
-            });
-        }
-
-        var moveChildren = new List<MenuItemDef>();
-        foreach (var groupName in _groups.Groups)
-        {
-            if (string.Equals(groupName, currentGroup, StringComparison.OrdinalIgnoreCase))
-            {
-                continue;
-            }
-
-            var captured = groupName;
-            moveChildren.Add(new()
-            {
-                Id = $"grab.moveto.{captured}",
-                Text = captured,
-                Command = () => { _groups.MoveToGroup(app.Id, captured); ApplyFilter(); },
-            });
-        }
-        moveChildren.Add(new() { Id = "grab.newgroup", Text = "新建分组…", Command = () => PromptNewGroup(app) });
-        items.Add(new() { Id = "grab.moveto", Text = "移动到分组", Kind = MenuItemKind.Submenu, Children = moveChildren });
-
-        // 卸载入口仅"已安装"来源有 UninstallCommand；全程序模式直接删 exe 不清理残留，不暴露
-        if (!string.IsNullOrWhiteSpace(app.UninstallCommand))
-        {
-            items.Add(new() { Id = "grab.uninstall", Text = "卸载…", Command = () => RunUninstaller(app.UninstallCommand) });
-        }
+                Unpin = () => { _apps.RemoveById(app.Id); _apps.Save(); },
+                // 以下动作统一走 shell-core 的公共实现（与菜单栏搜索同一套行为）
+                RevealInExplorer = () => AppEntryActions.RevealInExplorer(path),
+                CopyPath = () => AppEntryActions.CopyToClipboard(path),
+                RunAsAdmin = () => AppEntryActions.RunAsAdmin(path),
+                OpenInTerminal = () => AppEntryActions.OpenInTerminal(path),
+                ShowProperties = () => AppEntryActions.ShowProperties(path),
+                RemoveFromGroup = () => { _groups.RemoveFromGroup(app.Id); ApplyFilter(); },
+                MoveToGroup = group => { _groups.MoveToGroup(app.Id, group); ApplyFilter(); },
+                NewGroup = () => PromptNewGroup(app),
+                Uninstall = string.IsNullOrWhiteSpace(uninstallCommand)
+                    ? null
+                    : () => AppEntryActions.RunUninstaller(uninstallCommand!),
+            },
+        });
 
         DockMenuPopup.ShowAtCursor(items.Cast<object>().ToList(), this);
     }
@@ -1515,43 +1564,6 @@ internal sealed class AppGrabberWindow : ShellWindow
         catch
         {
             // 启动失败静默（M10）
-        }
-    }
-
-    private void OpenContainingDirectory(DockItemData app)
-    {
-        var path = !string.IsNullOrWhiteSpace(app.ShortcutPath) ? app.ShortcutPath : app.TargetPath;
-        try
-        {
-            var dir = Path.GetDirectoryName(path);
-            if (!string.IsNullOrEmpty(dir) && Directory.Exists(dir))
-            {
-                _ = System.Diagnostics.Process.Start("explorer.exe", dir);
-            }
-        }
-        catch
-        {
-            // 打开目录失败不阻断
-        }
-    }
-
-    private static void RunUninstaller(string command)
-    {
-        try
-        {
-            // UninstallString 常带参数（MsiExec.exe /X{GUID}、"…\unins000.exe" /S）：
-            // 经 cmd /c 执行最稳；按 FileName 拆参会破坏带引号路径。
-            _ = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
-            {
-                FileName = "cmd.exe",
-                Arguments = $"/c {command}",
-                UseShellExecute = false,
-                CreateNoWindow = true
-            });
-        }
-        catch
-        {
-            // 卸载器启动失败静默（M10）
         }
     }
 

@@ -1,11 +1,6 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <TargetFramework>net8.0-windows10.0.19041.0</TargetFramework>
-    <Nullable>enable</Nullable>
-    <ImplicitUsings>enable</ImplicitUsings>
-    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
-    <Platforms>x64</Platforms>
     <UseWPF>true</UseWPF>
     <RootNamespace>BetterDesktop.Shell.Dock</RootNamespace>
     <AssemblyName>BetterDesktop.Shell.Dock</AssemblyName>
@@ -29,5 +24,18 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\api\BetterDesktop.Api.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- 供 shell-dock-tests 访问内部纯函数（PinnedRebindResolver 等）——与 shell-app-source 同做法。 -->
+    <InternalsVisibleTo Include="BetterDesktop.Shell.Dock.Tests" />
+  </ItemGroup>
+
+
+
+  <ItemGroup>
+    <!-- 2026-09-17：独立设置进程（BetterDesktop.Settings.exe）按「分区目录」直接 new 本包的分区实现，
+         不再依赖插件 LoadAsync 注册（见 packages/shell/shell-settings-host/SectionCatalog.cs）。
+         只放开可见性，不改变任何运行时行为。 -->
+    <InternalsVisibleTo Include="BetterDesktop.Settings" />
   </ItemGroup>
 </Project>

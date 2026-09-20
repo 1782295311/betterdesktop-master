@@ -1,6 +1,6 @@
 # packages/ — 包目录标准
 
-> 每个包 = 一个 csproj + 同目录 `README.md`。P0 阶段本目录为空（无 csproj），标准先行。
+> 每个包 = 一个 csproj + 同目录 `README.md`。本目录现承载 kernel / shell / api 全部包（30+ csproj）。
 
 ## 包是什么
 

@@ -1,6 +1,8 @@
 # security.md — 安全与供应链规则
 
 > 地位：安全相关的唯一真相源（MECHANISMS.md M11）。目标形态是社区生态（第三方插件），安全不是可选功能。
+>
+> 分工：本文件写「**我们要求什么**」（插件权限、供应链、许可证、密钥、更新签名）；「**当前防住 / 不防什么、为什么**」见 [`threat-model.md`](threat-model.md)；「这些要求**怎么被机器挡住**、七条门禁规则、禁止事项、存量欠账」见 [`security-hardening.md`](security-hardening.md)。
 
 ## 一、插件最小权限
 
@@ -24,7 +26,7 @@
 ## 四、敏感信息
 
 1. 密钥 / 令牌 / 密码一律不入库、不入日志；设置中的敏感项加密存储（P2）。
-2. P2 落地 `verify-secrets.ps1`（提交前扫描常见密钥模式）。
+2. 明文密钥字面量**已机检**（`verify-security` 规则 5，当前 0 命中）；P2 的 `verify-secrets.ps1` 收窄为「提交前扫描凭据模式」，只管历史泄漏面。
 
 ## 五、更新机制
 
@@ -32,9 +34,11 @@
 
 ## 机检状态（诚实标注）
 
-| 规则 | 当前机检 | 规划机检 |
-|---|---|---|
-| 依赖漏洞 | **暂无机检** | P1：CI `dotnet list package --vulnerable` |
-| 敏感信息扫描 | **暂无机检** | P2：`verify-secrets.ps1` |
-| 许可证合规 | **暂无机检** | P2：`gen-third-party-notices.ps1 --check` |
-| 插件权限声明 | **暂无机检** | P1：清单 schema 校验（运行时） |
+| 规则 | 当前机检 |
+|---|---|
+| 明文密钥 | **已机检**：`verify-security` 规则 5（0 命中） |
+| 依赖漏洞 | **暂无机检** → P1：CI `dotnet list package --vulnerable` |
+| 许可证合规 | **暂无机检** → P2：`gen-third-party-notices.ps1 --check` |
+| 插件权限声明 | **暂无机检** → P1：清单 schema 校验（运行时） |
+
+> 管道有界读、参数不拼接、反序列化限深、原生加载路径、空 catch、原生编译加固六条机检见 [`security-hardening.md`](security-hardening.md)。

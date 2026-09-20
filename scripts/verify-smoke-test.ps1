@@ -15,7 +15,7 @@ function Test-ProcessAlive([bool]$HasExited) {
 # 门禁主体（dot-source 时跳过）
 if ($MyInvocation.InvocationName -ne '.') {
     Write-GateStart 'smoke-test'
-    $exe = Join-Path (Get-RepoRoot) 'host\bin\x64\Debug\net8.0-windows10.0.19041.0\BetterDesktop.Host.exe'
+    $exe = Join-Path (Get-RepoRoot) 'packages\entry\host\bin\x64\Debug\net8.0-windows10.0.19041.0\BetterDesktop.Host.exe'
     if (-not (Test-Path $exe)) {
         Write-GateFail 'smoke-test' @("$exe — 主程序不存在，请先 ``dotnet build BetterDesktop.slnx``（Debug/x64）")
     }

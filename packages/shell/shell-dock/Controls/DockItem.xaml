@@ -3,10 +3,10 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              Width="48" Height="48">
     <Grid>
-        <!-- 背景（悬停时显示） -->
-        <Border x:Name="BackgroundBorder" 
-                CornerRadius="8" 
-                Background="#20FFFFFF"
+        <!-- 背景（悬停时显示）：弱描边令牌（白色低透明），随主题跟随 -->
+        <Border x:Name="BackgroundBorder"
+                CornerRadius="8"
+                Background="{DynamicResource BorderStrokeSubtle}"
                 Opacity="0"/>
         
         <!-- 真实图标（由 IDockIconService 加载后显示） -->

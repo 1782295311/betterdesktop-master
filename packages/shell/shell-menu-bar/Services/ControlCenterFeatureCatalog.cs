@@ -11,6 +11,7 @@ using BetterDesktop.Shell.Core.Surface;
 using BetterDesktop.Shell.Core.Vibrancy;
 using BetterDesktop.Shell.MenuBar.Contracts;
 using BetterDesktop.Shell.MenuBar.Windows;
+using BetterDesktop.Shell.Music.Contracts;
 using BetterDesktop.Shell.Status.Contracts;
 using Windows.Devices.Radios;
 
@@ -50,7 +51,8 @@ internal static class ControlCenterFeatureCatalog
         IVolumeMonitor? vol,
         IMicrophoneMonitor? mic,
         IBatteryMonitor? bat,
-        IBrightnessMonitor? brightness)
+        IBrightnessMonitor? brightness,
+        IMediaPlaybackService? media = null)
     {
         var list = new List<ControlCenterFeature>(capacity: 10);
 
@@ -93,11 +95,11 @@ internal static class ControlCenterFeatureCatalog
             () => SummaryBrightness(brightness),
             anchor => { theme ??= new ThemePopupWindow(brightness, vibrancy, appearance); ShowAt(theme, anchor); }));
 
-        // 声音
+        // 声音（2026-09-14 修复：漏传 media 导致从这里打开的声音面板收不到 SMTC，音乐区永远空态）
         SoundPanelWindow? audio = null;
         list.Add(new ControlCenterFeature("声音",
             () => SummaryAudio(vol, mic),
-            anchor => { audio ??= new SoundPanelWindow(vibrancy, appearance); ShowAt(audio, anchor); }));
+            anchor => { audio ??= new SoundPanelWindow(vibrancy, appearance, media); ShowAt(audio, anchor); }));
 
         return list;
     }

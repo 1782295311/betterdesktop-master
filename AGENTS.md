@@ -14,11 +14,12 @@ Better Desktop Cordis（`better-desktop-cordis`）是 Windows 桌面外壳的从
 
 ```
 docs/           架构、教程、事后分析、物证（决策记录在 .agents/notes/，刻意分层）
-packages/       每个功能 = 一个包（csproj + README.md），P1 起逐步落地
+packages/       每个功能 = 一个包（csproj + README.md）；入口工程集中在 packages/entry/
 scripts/        门禁（verify-*.ps1）与生成器（gen-*.ps1），唯一入口 run-gates.ps1
-host/           薄宿主 exe（P2 起）
 .agents/notes/  决策记录（proposed/implemented/rejected + archived 密封归档）
 ```
+
+> **2026-09-20 重组**：入口工程并入 `packages/entry/`，根目录不再放功能工程。
 
 ## 文档纪律
 
@@ -36,6 +37,21 @@ host/           薄宿主 exe（P2 起）
 2. **唯一合法解释器是 PowerShell 7（`pwsh`）**：Windows PowerShell 5.1 会把仓库内 UTF-8 无 BOM 脚本读成乱码导致解析失败。全量检查命令：`pwsh -NoProfile -ExecutionPolicy Bypass scripts/run-gates.ps1`。每次改动收工前必须全绿。
 3. 每条门禁必须有门禁单测（`scripts/verify-*.Tests.ps1`，Pester），覆盖「非法输入 → 返回违规」；契约见 `scripts/AGENTS.md` 第 5 条。
 4. 门禁失败即阻断：退出码非 0 一律视为失败；禁止注释掉门禁、禁止在 CI 中跳过门禁。
+
+## 安全禁止事项
+
+红线由 `scripts/verify-security.ps1`（七条规则）机器强制；**判据、豁免写法与「为什么某条通行建议没有照搬」见 `docs/security-hardening.md`**。禁则：
+
+- 服务端命名管道禁止裸 `ReadLine`（必须 `BoundedPipeLine` 有界读 + 总超时）。
+- 禁止字符串拼命令行，一律 `ProcessStartInfo.ArgumentList`。
+- 禁止**非壳语义**下 `UseShellExecute = true`（壳动词如 `explorer.exe "路径"` 仍须用它，那不是漏洞）。
+- 禁止外部输入（管道 / HTTP / 跨进程 stdio）的 JSON 不设 `MaxDepth`；禁止多态反序列化（`TypeNameHandling.All` 等）。
+- 禁止 `LoadLibrary` / `Assembly.LoadFrom` 用相对名字面量。
+- 禁止密钥 / 令牌入源码或日志。
+- 禁止原生工程不开 `/guard:cf` `/DYNAMICBASE` `/NXCOMPAT`。
+- 禁止空 `catch { }` 吞安全异常。
+
+豁免必须在同一行或上方 3 行内写 `SECURITY-EXEMPT: <理由>` —— 没有理由的豁免等于把红线变成装饰。
 
 ## 会话交接（新会话接手的第一件事）
 

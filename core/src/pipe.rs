@@ -617,9 +617,16 @@ fn dispatch_control(
 ///
 /// # 为什么 `unregister` 先查询再删
 ///
-/// 为了让回答**诚实**：`task::unregister` 是幂等的（本来就没了也返回 `Ok`），
+/// 为了让回答**诚实**：`task::stop` 底层的删除是幂等的（本来就没了也返回 `Ok`），
 /// 单看它的返回值无法区分"删掉了"与"本来就没有" —— 而调用方（安装脚本 / 排查的人）
 /// 恰恰需要这个区别。多一次 `schtasks /query` 换一个不含糊的回答，值得。
+///
+/// # 两个动词同时是**兜底的开关**（2026-09-20）
+///
+/// `register` = 装回兜底（先解除"用户主动停止"，否则 `ensure()` 会正确地拒绝）。
+/// `unregister` = 撤掉兜底**并记住这是用户要的**（写 `core-stopped.flag`，见 [`crate::task::stop`]）。
+/// 后者让"撤掉"是**持久**的；不持久的版本表现为"我删了它又回来了"——
+/// 与"退了又被拉回来"是同一类故障，只是入口不同。
 fn task_command(action: &str) -> Response {
     match action {
         "status" => match crate::task::query() {
@@ -630,15 +637,16 @@ fn task_command(action: &str) -> Response {
             Err(e) => Response::err("task", ErrorCode::InternalError, e),
         },
 
-        "register" => match crate::task::ensure() {
+        // `arm` 而不是 `ensure`：`ensure` 在"用户主动停止过"时会**正确地**拒绝，
+        // 所以"装回"这个意图必须先解除停止态。顺序封装在 `task::arm` 里，这里不重复。
+        "register" => match crate::task::arm() {
             Ok(ensured) => {
                 let (outcome, detail) = match &ensured {
                     crate::task::Ensured::Created => ("created", String::new()),
                     crate::task::Ensured::Repaired(why) => ("repaired", why.clone()),
                     crate::task::Ensured::AlreadyCurrent => ("already-current", String::new()),
-                    // 拒绝注册是**结论**而不是错误：这台 core 不在稳定位置（dev bin / dist 目录），
-                    // 把系统级任务指过去只会得到一条每次必定失败的记录。如实回 "skipped" + 原因，
-                    // 让调用方（安装脚本 / 排查的人）能立刻看出"为什么没注册"。
+                    // 拒绝写是**结论**而不是错误（三种起因：不是部署 / 位置不稳 / 用户已停止），
+                    // 如实回 "skipped" + 原因，让调用方（安装脚本 / 排查的人）立刻看出为什么。
                     crate::task::Ensured::Skipped(why) => ("skipped", why.clone()),
                 };
                 Response::Ok {
@@ -655,9 +663,11 @@ fn task_command(action: &str) -> Response {
             Err(e) => Response::err("task", ErrorCode::InternalError, e),
         },
 
+        // `stop` 而不是 `unregister`：除了删任务，它还会写 `core-stopped.flag` 让"撤掉"**持久** ——
+        // 否则下一次 core 启动会把它装回来，用户看到的是"我删了它又回来了"。
         "unregister" => {
             let previous = crate::task::query().ok();
-            match crate::task::unregister() {
+            match crate::task::stop() {
                 Ok(()) => Response::Ok {
                     verb: "task".to_string(),
                     data: serde_json::json!({

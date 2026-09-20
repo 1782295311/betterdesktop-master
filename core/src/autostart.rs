@@ -9,11 +9,24 @@
 //! CLSID / `InprocServer32` 写错会让 explorer 加载失败，风险高一个量级，且实现已在 C# 侧验证过。
 //! 判据一句话：**改自己启动路径的（core 直接写），改别人行为的（core 触发、CLI 执行）**。
 //!
-//! # 与计划任务**共用同一条守卫**
+//! # 与计划任务**共用同一条判据**
 //!
-//! 只在 [`crate::task::is_stable_location`]（安装根 / `%LOCALAPPDATA%\BetterDesktop` 之下）才写。
-//! 把开发 bin 的路径写进 Run 键，那个 bin 一次 clean 之后每次开机都失败 ——
-//! 与"把开发目录写进计划任务"是同款负债，而且同样**没有任何地方会报错**。
+//! 判据在 [`crate::ownership`]，本模块只是它的两个消费者之一。两句话：
+//!
+//! - 位置会在 build/clean 中消失（dev bin / `target/` / 打包中间目录）⇒ 不写。
+//!   那个 bin 一次 clean 之后每次开机都失败 —— 与"把开发目录写进计划任务"是同款负债，
+//!   而且同样**没有任何地方会报错**。
+//! - 产品目录里的**另一份**构建（测试副本 / 旧版本残留）⇒ 也不写。
+//!   否则一个测试副本会悄悄成为这台机器的开机自启项，而用户以为自启指向的是他装的那一份。
+//!
+//! 第二条是 2026-09-20 与计划任务那一侧同批补上的（同一条判据、同一个事故）。
+//!
+//! # 【边界】`clean_legacy_values` **刻意不**受这条规则管
+//!
+//! 它删的是已经退役的组件的值名（`LEGACY_VALUE_NAMES`），指向的 exe 早已随 S4-4 删除，
+//! 因此**不可能动到任何活着的引用**（这条由单测 `legacy_names_exclude_the_live_launcher` 钉住）。
+//! 那属于"清死引用"，而不是"接管别人的引用"—— 后者才是本规则要防的事。
+//! 把清理也加上写权判定，只会让一份副本在这台机器上失去"顺手清掉开机报错的死项"的能力。
 //!
 //! # 值名是跨进程契约
 //!
@@ -73,10 +86,14 @@ pub fn is_enabled() -> bool {
     read_value().is_some_and(|v| value_matches_path(&v, &exe))
 }
 
-/// 打开（必要时创建）自启登记。返回 `Err` 含 Win32 错误码，**绝不静默**。
+/// 打开（必要时创建）自启登记。
+///
+/// # 契约
+/// 成功 = 值已写入并指向**本进程**；`Err` 含 Win32 错误码或写权拒绝理由，**绝不静默**
+/// （调用方是托盘菜单：失败必须回一条气泡，否则用户会以为开关生效了）。
 pub fn enable() -> Result<(), String> {
     let exe = current_exe()?;
-    ensure_stable_location(&exe)?;
+    require_owner(&exe)?;
 
     let key = open_run_key(true)?;
     // 带引号：路径含空格时 Run 键的解析器会把参数切错（与 `CreateProcessW` 同款语义）。
@@ -84,7 +101,13 @@ pub fn enable() -> Result<(), String> {
 }
 
 /// 删除自启登记（**幂等**：键或值本来就不存在算成功）。
+///
+/// # 为什么"删"也要判写权
+/// 值名是单例：删它等于关掉**这台机器**的开机自启。一份副本删掉的是**部署的**自启项 ——
+/// 用户看到的是"我点了一下自启开关，装的那份反而不自启了"，而且没有任何日志说明是谁干的。
 pub fn disable() -> Result<(), String> {
+    require_owner(&current_exe()?)?;
+
     // 键不存在 ⇒ 值必然不存在 ⇒ 已经是关的。用 create=false 打开，避免"关一次反而建出空键"。
     let Ok(key) = open_run_key(false) else {
         return Ok(());
@@ -166,19 +189,24 @@ fn value_matches_path(value: &str, exe: &Path) -> bool {
     !cleaned.is_empty() && crate::shellmenu::path_eq(cleaned, &exe.to_string_lossy())
 }
 
-/// 只在**稳定位置**才允许写系统级引用（与计划任务同一条守卫，见模块头）。
-fn ensure_stable_location(exe: &Path) -> Result<(), String> {
+/// 只有**这份部署自己**才允许写这条系统级引用（判据与计划任务共用，见模块头）。
+///
+/// # 为什么在这里再包一层，而不是让 `enable` / `disable` 各自调判据
+/// [`crate::ownership::of`] 是纯函数，两个入参（安装根、`%LOCALAPPDATA%`）得由调用方从真实环境取。
+/// "取值 → 判定 → 取措辞"这三步在本模块里总是一起出现，包一层就只写一遍；
+/// 写两遍的后果不是多两行，而是**两个入口的判据会漂移**（本仓反复吃过的那类病）。
+///
+/// # 契约
+/// `Ok(())` = 本进程可以写这个值名；`Err(理由)` = 不可以，理由可直接进日志/气泡。
+/// 无 IO 之外的副作用：读一次 `deployment.json` 与环境变量。
+fn require_owner(exe: &Path) -> Result<(), String> {
     let install_root = crate::shellmenu::install_root();
     let local_appdata = std::env::var("LOCALAPPDATA").ok().map(PathBuf::from);
+    let ownership = crate::ownership::of(exe, install_root.as_deref(), local_appdata.as_deref());
 
-    if crate::task::is_stable_location(exe, install_root.as_deref(), local_appdata.as_deref()) {
-        Ok(())
-    } else {
-        Err(format!(
-            "this core lives at {} which is neither under the install root nor under \
-             %LOCALAPPDATA%\\BetterDesktop — refusing to write a boot-time reference to it",
-            exe.display()
-        ))
+    match crate::ownership::refusal_reason(ownership, exe, install_root.as_deref()) {
+        None => Ok(()),
+        Some(reason) => Err(reason),
     }
 }
 

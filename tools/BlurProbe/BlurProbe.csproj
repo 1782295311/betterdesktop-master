@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    BlurProbe — 毛玻璃"实拍"探针（诊断工具，不参与产品运行）。
+    【为什么需要】WCA_ACCENT_POLICY 有两个致命特性：失败不设 GetLastError、且**返回成功也不代表
+    DWM 真的画了模糊**。所以"毛玻璃没生效"此前只能靠猜：分不清是系统前提被关、窗口样式不支持、
+    还是配方档位不对。本工具用"实拍像素比对"把这件事变成一次可判定的结论。
+
+    用法（在目标机器上跑，包含虚拟机）：
+        dotnet build tools/BlurProbe -c Release -p:Platform=x64
+        tools/BlurProbe/bin/x64/Release/net8.0-windows10.0.19041.0/BlurProbe.exe
+    结果同时写入 exe 同目录的 blurprobe-result.txt 并弹窗摘要。
+
+    刻意不加入 BetterDesktop.slnx：它是排障工具，不该参与产品构建与门禁（与 tools/GdiAudit 同类）。
+    TreatWarningsAsErrors 关闭：诊断工具优先"能跑起来给人看"，不为分析器规则反复折腾。
+  -->
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <UseWPF>true</UseWPF>
+    <AssemblyName>BlurProbe</AssemblyName>
+    <RootNamespace>BlurProbe</RootNamespace>
+    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+  </PropertyGroup>
+
+</Project>

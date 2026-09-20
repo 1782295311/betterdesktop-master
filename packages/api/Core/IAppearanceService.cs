@@ -52,6 +52,21 @@ public interface IAppearanceService
     /// <summary>毛玻璃材质：透亮模糊（Transparent）或系统亚克力（Acrylic，自带暗色调）。</summary>
     VibrancyStyle Material { get; set; }
 
+    /// <summary>
+    /// 毛玻璃是否走"非分层玻璃窗"路径（对应设置键 <c>appearance.material.glass</c>，默认 false）。
+    /// <para>
+    /// 【为什么需要它】accent 模糊（WCA_ACCENT_POLICY）画在**常规 DWM 重定向位图的透明像素**后面；
+    /// 分层窗口（WPF <c>AllowsTransparency=true</c>，per-pixel alpha 自绘）走的是另一条合成路径，
+    /// 模糊不被支持/不稳定——这是"配方没错、模糊就是不出现"的结构性原因。
+    /// 壳面窗口基类（ShellWindow）据此在**构造期**决定是否放弃分层、改用 <c>DwmExtendFrameIntoClientArea</c> 玻璃区。
+    /// </para>
+    /// <para>
+    /// 【为什么带默认实现】新增的可选能力：默认 false = 现行分层行为，既有实现（含测试替身）
+    /// 无需改动即保持零回归；需要毛玻璃的窗口构造期读一次，改动后需重开窗口才生效。
+    /// </para>
+    /// </summary>
+    bool GlassBackdrop => false;
+
     /// <summary>皮肤背景图路径；null/空表示无皮肤（仅半透明托盘）。</summary>
     string? SkinPath { get; set; }
 

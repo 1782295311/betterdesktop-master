@@ -318,7 +318,7 @@ internal sealed class StacksPopupWindow : MenuBarPopupWindow
                 Margin = new Thickness(0, 2, 0, 2),
                 Background = Brushes.Transparent,
                 BorderThickness = new Thickness(1),
-                BorderBrush = new SolidColorBrush(Color.FromArgb(120, 0xC0, 0xC8, 0xD4))
+                BorderBrush = ThemeBrushes.Tint("ThemeForeground", 0.47)
             };
 
         var entry = new Border
@@ -348,7 +348,7 @@ internal sealed class StacksPopupWindow : MenuBarPopupWindow
         };
 
         entry.MouseEnter += (_, _) => entry.Background =
-            new SolidColorBrush(Color.FromArgb(38, 0x7F, 0xB3, 0xFF));
+            ThemeBrushes.AccentTint(0.15);
         entry.MouseLeave += (_, _) => entry.Background = Brushes.Transparent;
         entry.MouseLeftButtonUp += (_, _) => onClick();
         return entry;

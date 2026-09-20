@@ -110,31 +110,39 @@
       "betterdesktop.kernel.hmr": {
         "type": "Project",
         "dependencies": {
-          "BetterDesktop.Kernel": "[1.0.0, )"
+          "BetterDesktop.Kernel": "[1.3.0, )"
         }
       },
       "betterdesktop.shell.calendar": {
         "type": "Project",
         "dependencies": {
-          "BetterDesktop.Api": "[1.0.0, )",
-          "BetterDesktop.Kernel": "[1.0.0, )",
-          "BetterDesktop.Shell.Settings": "[1.0.0, )"
+          "BetterDesktop.Api": "[1.3.0, )",
+          "BetterDesktop.Kernel": "[1.3.0, )",
+          "BetterDesktop.Shell.Settings": "[1.3.0, )"
+        }
+      },
+      "betterdesktop.shell.clipboard.ipc": {
+        "type": "Project",
+        "dependencies": {
+          "BetterDesktop.Api": "[1.3.0, )",
+          "BetterDesktop.Kernel": "[1.3.0, )"
         }
       },
       "betterdesktop.shell.core": {
         "type": "Project",
         "dependencies": {
-          "BetterDesktop.Api": "[1.0.0, )",
-          "BetterDesktop.Kernel": "[1.0.0, )"
+          "BetterDesktop.Api": "[1.3.0, )",
+          "BetterDesktop.Kernel": "[1.3.0, )",
+          "BetterDesktop.Shell.Clipboard.Ipc": "[1.3.0, )"
         }
       },
       "betterdesktop.shell.settings": {
         "type": "Project",
         "dependencies": {
-          "BetterDesktop.Api": "[1.0.0, )",
-          "BetterDesktop.Kernel": "[1.0.0, )",
-          "BetterDesktop.Kernel.Hmr": "[1.0.0, )",
-          "BetterDesktop.Shell.Core": "[1.0.0, )"
+          "BetterDesktop.Api": "[1.3.0, )",
+          "BetterDesktop.Kernel": "[1.3.0, )",
+          "BetterDesktop.Kernel.Hmr": "[1.3.0, )",
+          "BetterDesktop.Shell.Core": "[1.3.0, )"
         }
       }
     }

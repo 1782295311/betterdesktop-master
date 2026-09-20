@@ -16,12 +16,14 @@ using System.Windows.Shapes;
 using System.Windows.Threading;
 using BetterDesktop.Kernel.Contracts;
 using BetterDesktop.Shell.AppSource.Contracts;
+using BetterDesktop.Shell.AppSource.Models;
 using BetterDesktop.Shell.AppSource.Services;
 using BetterDesktop.Shell.ContextMenus.Contracts;
 using BetterDesktop.Shell.ContextMenus.Services;
 using BetterDesktop.Shell.Core;
 using BetterDesktop.Shell.Core.Animation;
 using BetterDesktop.Shell.Core.Native;
+using BetterDesktop.Shell.Core.Services;
 using BetterDesktop.Shell.Core.Surface;
 using BetterDesktop.Shell.Core.Vibrancy;
 using BetterDesktop.Shell.Dock.Models;
@@ -40,7 +42,7 @@ namespace BetterDesktop.Shell.Dock;
 // ── 本文件方法级白话索引（Dock 主窗口，2600 行按功能分组找）──
 //   "Dock 显示/隐藏、自动隐藏、唤出带"   → SetDockVisible / OnAutoHideTick / IsCursorNearSummonBand / IsCursorOverDock / ApplyTickInterval
 //   "Dock 材质/背景/主题令牌"            → ApplyDockMaterial / SyncRootBackground / BindTheme / ThemeBrush / DoVisualSettingsRebuild
-//   "系统入口面板（此电脑/回收站/控制面板）" → RebuildSystemPanel；系统图标 GetSystemIcon/GetShellIconByClsid/GetStockIcon；回收站高亮 UpdateRecycleDropRect/UpdateRecycleHoverHighlight
+//   "系统入口面板（此电脑/网络/回收站/控制面板）" → RebuildSystemPanel；系统图标 GetSystemIcon（→ shell-core `ShellItemIcon.GetByParsingName`）/GetStockIcon（回收站无特殊处理，表内普通条目）
 //   "开始按钮面板 / Win+X 降级菜单"      → RebuildStartPanel / CreateStartFlag / ShowStartContextMenu / _showFallbackStartContextMenu
 //   "启动程序/打开 URI/管理员 PowerShell" → LaunchUri / LaunchFile / RunShell / LaunchPowerShellAdmin / ShowSystemEntryMenu
 //   "组件开关即时生效"                  → SetComponentEnabled
@@ -62,14 +64,13 @@ public partial class DockWindow : ShellWindow
     // dock 悬浮胶囊：尺寸由图标数量/停靠位置决定（SizeToContent 驱动），resize 会破坏布局，钉死不可缩放。
     protected override ResizeMode DefaultResizeMode => ResizeMode.NoResize;
 
-    // 【2026-09-06 定案】dock 常驻置顶层，**层级等同系统任务栏**：
-    // 之前平时不置顶（想"不盖在窗口上"），但由此带来两个硬伤——
-    // ① 悬停缩略图 peek 抬起预览目标时，被抬起的窗口会把 dock 盖掉（用户实测："两个置顶打架"）；
-    // ② SetDockVisible(topmost:true) 的临时提权只在自动隐藏开启的 tick 分支里执行，
-    //    自动隐藏关闭时走不到那一步，dock 永远拿不到置顶。
-    // dock 只占底部一条且已注册底部 AppBar（工作区上移），常驻置顶不会挡住任何实际内容，
-    // 这正是系统任务栏的行为（任务栏同样是 topmost 且盖住窗口底部）。
-    protected override bool DefaultTopmost => true;
+    // 【2026-09-12 用户定案】dock 平时**沉底**（不置顶，被窗口自然盖住，不在主窗口上显示），
+    // 使用中（鼠标靠近 dock/贴底热区/悬停缩略图）才临时置顶唤出；未来预留热键固定置顶。
+    // 2026-09-06 曾因旧 SetWindowPos 抬窗机制改常驻置顶（"抬起的预览目标会盖掉 dock"），
+    // 现抬窗已改 DWM 预览（DwmActivateLivePreview，不改变 Z 序），该硬伤在新机制下不存在。
+    // 2026-09-12 另：AppBar 已移除（抬窗打架根源），dock 不占用工作区；预览交互改
+    // 实时大图预览层（PreviewWindow，不透明化任何窗口）。
+    protected override bool DefaultTopmost => false;
 
     private readonly IDockAppsService _dockAppsService;
     private readonly IDockIconService _dockIconService;
@@ -100,6 +101,12 @@ public partial class DockWindow : ShellWindow
     {
         Interval = TimeSpan.FromMilliseconds(60)
     };
+    // 底部热区唤出防误触：光标进入热区的时间戳（null=不在热区）；持续停留 ≥ EdgeHoverHoldMs 才唤出。
+    // 热区 = dock 窗口最顶部 ± EdgeTopBandPx（逻辑 px）窄带（2026-09-12 用户定案：以 dock 顶部为界，
+    // 而非屏幕底边缘——旧坐标域 bug 曾让热区高达 ~290px，窗口底部操作即误触）。
+    private DateTime? _edgeHoverEnterAt;
+    private const double EdgeHoverHoldMs = 600;
+    private const double EdgeTopBandPx = 4;
     private readonly List<string> _lastRunningKeys = new();
     // 空状态占位是否已渲染：与去重键集合(_lastRunningKeys)解耦，避免双职责导致状态机脆弱。
     private bool _runningEmptyRendered;
@@ -181,16 +188,21 @@ public partial class DockWindow : ShellWindow
         SizeChanged += OnSizeChanged;
         PinnedScrollViewer.ScrollChanged += (_, _) => UpdateEdgeFadeFor(PinnedScrollViewer);
         RunningScrollViewer.ScrollChanged += (_, _) => UpdateEdgeFadeFor(RunningScrollViewer);
-        _refreshTimer.Tick += (_, _) => RefreshAll();
+        _refreshTimer.Tick += (_, _) =>
+        {
+            // 【2026-09-18 电源管理】运行区刷新每秒做两次**全量窗口枚举**
+            //（EnumWindows + 逐可见窗口 OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION)），
+            // 且跑在 UI 线程。系统挂起/恢复冷却期直接跳过本拍（与 _autoHideTimer 同一道闸门），
+            // 否则现代待机（S0ix）下仍每秒唤醒 CPU 做进程枚举。
+            if (BetterDesktop.Kernel.Core.SystemPowerMonitor.Current.ShouldPauseHighFrequencyWork)
+            {
+                return;
+            }
+
+            RefreshAll();
+        };
         _sunSyncTimer.Tick += OnSunSyncTick;
         _sunSyncTimer.Start();
-
-        // 回收站悬停高亮（2026-09-07）：桌面拖动悬停到 dock 回收站时，150ms 轮询 kernel 共享标志
-        // 并点亮回收站图标（红框红底）。dock 是顶层窗口、盖在自绘桌面之上，拖动图标被它挡住，
-        // 高亮让用户仍能确认"拖到了回收站"，松手即移入回收站。
-        _recycleHoverTimer.Tick += (_, _) => UpdateRecycleHoverHighlight();
-        _recycleHoverTimer.Start();
-        Closed += (_, _) => _recycleHoverTimer.Stop();
 
         // 首次亮相保留期后启用自动隐藏（与 dock 规格一致：保留约 1800ms）。
         var dwell = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(1800) };
@@ -224,7 +236,6 @@ public partial class DockWindow : ShellWindow
                     return Task.CompletedTask;
                 });
             Closed += (_, _) => _settingsSub?.Dispose();
-            Closed += (_, _) => BetterDesktop.Kernel.Core.DockDropTargets.ClearDockRecycleBinRect();
         }
     }
 
@@ -387,7 +398,6 @@ public partial class DockWindow : ShellWindow
                 try
                 {
                     SyncAppBarPosition();
-                    UpdateRecycleDropRect(); // 首次布局完成：上报回收站屏幕矩形
                     DebugLog.Trace("Dock", "布局定位 PositionToBottomCenter 完成");
                     UpdateEdgeFade();
                     DebugLog.Trace("Dock", "布局定位 UpdateEdgeFade 完成");
@@ -423,9 +433,9 @@ public partial class DockWindow : ShellWindow
         if (e.SkinChanged) SyncRootBackground();
     }
 
-    /// <summary>从 App 资源读取主题令牌画刷（代码生成控件跟随外观模式）。缺失时回退白色。</summary>
+    /// <summary>从 App 资源读取主题令牌画刷（代码生成控件跟随外观模式）。统一委托 shell-core ThemeBrushes。</summary>
     private static Brush ThemeBrush(string key)
-        => Application.Current?.TryFindResource(key) as Brush ?? Brushes.White;
+        => ThemeBrushes.Get(key);
 
     /// <summary>把主题令牌以 DynamicResource 绑定到元素属性（与设置窗口右侧一致：模式切换自动更新，不依赖重建/事件链）。</summary>
     private static void BindTheme(FrameworkElement target, DependencyProperty prop, string key)
@@ -448,6 +458,15 @@ public partial class DockWindow : ShellWindow
     {
         try
         {
+            // 【2026-09-18 电源管理】挂起中 / 恢复冷却期：直接跳过这一拍。
+            // 现代待机（S0ix）下本定时器仍会被调度，若不闸住就是"系统睡着时每 60ms 醒一次"，
+            // 而每拍都会做 GetCursorPos / GetLastInputInfo / 布局查询，甚至一次 COM 激活。
+            // 只做一次布尔判断即返回，不产生任何系统调用。
+            if (BetterDesktop.Kernel.Core.SystemPowerMonitor.Current.ShouldPauseHighFrequencyWork)
+            {
+                return;
+            }
+
             if (_layout.ShouldHideOnFullscreen())
             {
                 // 全屏隐藏态：光标远离时归慢档（全屏→恢复的显示延迟最坏 ≈250ms，无感知）。
@@ -459,10 +478,12 @@ public partial class DockWindow : ShellWindow
             var cursor = GetCursorScreenPoint();
 
             // 悬停 dock 上 / 预览浮层上：绝不隐藏且置顶可交互。
-            // ⚠️ 本判定必须排在 `!_autoHideEnabled` **之前**：自动隐藏关闭时同样要保证
-            // 「鼠标在 dock 上 → dock 在最上」，否则 peek 抬起预览目标时会把 dock 盖掉
-            // （此前正是自动隐藏关闭的用户永远走到 return，dock 拿不到置顶 → 与 peek 打架）。
-            if (IsCursorOverDock(cursor) || IsPointerOverPreviewOrIcon(cursor))
+            // ⚠️【2026-09-12 抢戏修复】前置 `Topmost &&`：dock **沉底（非置顶）时**光标落在 dock
+            // 矩形内**不**触发置顶唤出——沉底时 dock 通常被窗口盖住（光标其实在盖住它的窗口上），
+            // 旧逻辑会把 dock 抢着抬起来（置顶 + AppBar 注册 → 工作区上移把窗口往上推），鼠标一动
+            // 又沉底（AppBar 释放 → 窗口落回盖住 dock）→ 上下竞争打架（用户实测"dock 太抢戏"）。
+            // 沉底态唤出统一走下方「贴底部热区」；置顶态（使用中）才用光标保持，移开即沉底。
+            if (Topmost && (IsCursorOverDock(cursor) || IsPointerOverPreviewOrIcon(cursor)))
             {
                 ApplyTickInterval(statePending: false, cursorNearDock: true);
                 SetDockVisible(true, topmost: true);
@@ -474,12 +495,28 @@ public partial class DockWindow : ShellWindow
                 return;
             }
 
-            // 贴底部热区：唤出（置顶）
-            if (_layout.ShouldShowOnEdgeHover(cursor))
+            // 底部热区：**以 dock 窗口最顶部为界**（2026-09-12 用户定案）。
+            // ⚠️ 旧实现 ShouldShowOnEdgeHover 有坐标域 bug：GetCursorScreenPoint 返回**物理像素**，
+            // 与 SystemParameters.PrimaryScreenHeight（**逻辑**高）混比 → 125% 缩放下热区实际高达
+            // 物理 1150~1440 ≈ 290px，窗口底部输入框整个落入 → 鼠标操作窗口底部即误触。
+            // 新判定：光标逻辑 Y 落在 dock.Top ± EdgeTopBandPx 窄带才唤出——dock 顶部在屏幕底往上
+            // ~107px，操作窗口底部（屏幕最底）碰不到；主动够 dock（鼠标移到 dock 顶部线）才触发。
+            // 停留 EdgeHoverHoldMs 防路过。
+            if (IsCursorAtDockTopEdge(cursor))
             {
-                ApplyTickInterval(statePending: false, cursorNearDock: true);
-                SetDockVisible(true, topmost: true);
-                return;
+                _edgeHoverEnterAt ??= DateTime.UtcNow;
+                if ((DateTime.UtcNow - _edgeHoverEnterAt.Value).TotalMilliseconds >= EdgeHoverHoldMs)
+                {
+                    // 唤出诊断：记录触发时刻光标位置，复现"未点 dock 却唤出"时可据此确认触发源。
+                    DebugLog.Trace("Dock", $"DockTopEdge summon: cursorPhys=({cursor.X:F0},{cursor.Y:F0}) dockTop={Top:F0} band={EdgeTopBandPx} holdMs={EdgeHoverHoldMs}");
+                    ApplyTickInterval(statePending: false, cursorNearDock: true);
+                    SetDockVisible(true, topmost: true);
+                    return;
+                }
+            }
+            else
+            {
+                _edgeHoverEnterAt = null;
             }
 
             // 系统级空闲判定：GetLastInputInfo 覆盖鼠标移动/点击/键盘，任何输入即"操作中"
@@ -494,11 +531,11 @@ public partial class DockWindow : ShellWindow
                 return;
             }
 
-            // 用户活跃 → 常驻显示。层级恒为置顶（等同系统任务栏）：
-            // dock 只占底部一条且已注册底部 AppBar（工作区上移），不会挡住有效内容；
-            // 但若降为不置顶，peek 抬起的预览目标会盖掉 dock。
+            // 用户活跃 → **沉底显示**（2026-09-12 用户定案：平时不在主窗口上显示，被窗口自然盖住）。
+            // 鼠标靠近 dock/贴底热区/悬停时由上方分支置顶唤出（AppBar 随置顶注册、沉底释放）。
+            // 抬窗走 DWM 预览（不改变 Z 序），2026-09-06"抬窗盖 dock"硬伤已不存在。
             ApplyTickInterval(statePending: false, cursorNearDock: IsCursorNearSummonBand(cursor));
-            SetDockVisible(true, topmost: true);
+            SetDockVisible(true, topmost: false);
         }
         catch
         {
@@ -543,8 +580,9 @@ public partial class DockWindow : ShellWindow
     }
 
     /// <param name="topmost">
-    /// 默认 **true**：dock 层级恒等同系统任务栏（见 <see cref="DefaultTopmost"/>）。
-    /// 传 false 只在「隐藏」路径出现（隐藏态层级无意义，唤出时会重新置顶）。
+    /// 2026-09-12 沉底模型：true=使用中（悬停/热区）置顶唤出并注册 AppBar 占位；
+    /// false=平时沉底（被窗口盖住，不在主窗口上显示）并释放 AppBar 条带。
+    /// 传 false 也出现在「隐藏」路径（隐藏态层级无意义，唤出时会重新置顶）。
     /// </param>
     private void SetDockVisible(bool visible, bool topmost = true)
     {
@@ -560,10 +598,10 @@ public partial class DockWindow : ShellWindow
         if (visible)
         {
             DebugLog.Trace("Dock", $"SetDockVisible -> Show (topmost={topmost})");
-            // 先定层级再显示。常驻态与悬停态层级一致（都置顶），不会出现"唤出时降层"的抖动。
+            // 先定层级再显示。2026-09-12 无 AppBar 模型：dock 不占用工作区（不抬窗口），
+            // 置顶时浮在窗口底部（macOS 风格）、沉底时被窗口自然盖住。定位 = 纯底部居中。
             Topmost = topmost;
             Show();
-            EnsureAppBar();
             SyncAppBarPosition();
             // 显现：先恢复材质（DWM 毛玻璃）再淡入，避免"先看到透明条再长出背景"的错位观感。
             // 恢复走虚方法，dock 自己的材质策略（clear→无磨砂 / 其它→BlurBehind）原样生效。
@@ -573,7 +611,8 @@ public partial class DockWindow : ShellWindow
         }
         else
         {
-            RefreshAll();
+            // 不在这里调 RefreshAll()：隐藏瞬间重建运行区会导致 dock 抽搐闪烁。
+            // 运行区状态由 1 秒定时器统一刷新，隐藏期间不抢刷新。
             // 淡出（Opacity 1 -> 0），动画结束再隐藏，避免瞬间消失且不影响 Top/Left。
             var fade = _animation.CreateFadeOutAnimation(this, TimeSpan.FromMilliseconds(220));
             if (fade is not null)
@@ -583,7 +622,6 @@ public partial class DockWindow : ShellWindow
                 {
                     SetMaterialSuspended(true);
                     Hide();
-                    ReleaseAppBar();
                 };
                 fade.Begin();
             }
@@ -591,14 +629,13 @@ public partial class DockWindow : ShellWindow
             {
                 SetMaterialSuspended(true);
                 Hide();
-                ReleaseAppBar();
             }
         }
     }
 
     /// <summary>组件开关（2026-09-07）：shell.dock 关闭时停自动隐藏 tick 并隐藏，开启时恢复 tick 并显示。
     /// 防止「隐藏 Dock」后被 OnAutoHideTick 每拍（≤250ms）无条件 SetDockVisible(true) 拉回。
-    /// 停 tick 的同时释放 AppBar 条带（SetDockVisible(false) 内含），dock 彻底退出底部占用。</summary>
+    /// 2026-09-12：AppBar 已移除，dock 不占用工作区条带。</summary>
     public void SetComponentEnabled(bool enabled)
     {
         try
@@ -637,6 +674,25 @@ public partial class DockWindow : ShellWindow
         var lx = cursorPhysical.X / dpiX;
         var ly = cursorPhysical.Y / dpiY;
         return lx >= Left && lx <= Left + ActualWidth && ly >= Top && ly <= Top + ActualHeight;
+    }
+
+    /// <summary>
+    /// 光标是否落在 **dock 窗口最顶部**唤出带（逻辑 Top ± EdgeTopBandPx）。
+    /// 2026-09-12 用户定案：唤出以 dock 顶部为界，而非屏幕底边缘（旧热区因坐标域混比实际宽达 ~290px，
+    /// 窗口底部输入框整个落入导致误触）。dock 顶部在屏幕底往上约一个 dock 高，操作窗口底部碰不到。
+    /// 不要求 IsVisible：idle 隐藏态同样用 dock 顶部位置唤出。
+    /// </summary>
+    private bool IsCursorAtDockTopEdge(Point cursorPhysical)
+    {
+        if (double.IsNaN(cursorPhysical.Y) || double.IsNaN(Top) || Top < 0)
+        {
+            return false;
+        }
+
+        var scale = PresentationSource.FromVisual(this)?.CompositionTarget?.TransformToDevice;
+        var dpiY = scale?.M22 ?? 1.0;
+        var logicalY = cursorPhysical.Y / dpiY;
+        return Math.Abs(logicalY - Top) <= EdgeTopBandPx;
     }
 
     /// <summary>系统级用户空闲毫秒数（最后一次鼠标/键盘输入至今；GetLastInputInfo）。</summary>
@@ -683,29 +739,10 @@ public partial class DockWindow : ShellWindow
 
     // ---- 系统功能区（此电脑/网络/回收站/控制面板）----
 
-    // 图标主路径：NativeMethods.SHParseDisplayName(CLSID) → PIDL → SHGetFileInfo(SHGFI_PIDL)，
-    // 走 Shell 命名空间提取图标，与桌面/资源管理器中的系统图标样式完全一致（含当前主题）。
-    // 兜底：SHGetStockIconInfo（系统 stock 图标）——PIDL 提取失败时保证仍能显示。
-    private const uint ShgfiIcon = 0x00000100;
-    private const uint ShgfiLargeIcon = 0x00000000;
-    private const uint ShgfiPidl = 0x00000008;
+    // 图标主路径：ShellItemIcon.GetByParsingName(CLSID)（shell-core，唯一实现；桌面侧同款）。
+    // 兜底：SHGetStockIconInfo（系统 stock 图标）——命名空间提取失败时保证仍能显示。
     private const uint ShgsiIcon = 0x00000100;
     private const uint ShgsiLargeIcon = 0x00000000;
-
-    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
-    private struct SHFILEINFO
-    {
-        public IntPtr hIcon;
-        public int iIcon;
-        public uint dwAttributes;
-        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 260)]
-        public string szDisplayName;
-        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 80)]
-        public string szTypeName;
-    }
-
-    [DllImport("shell32.dll", EntryPoint = "SHGetFileInfo")]
-    private static extern IntPtr SHGetFileInfoPidl(IntPtr pidl, uint dwFileAttributes, ref SHFILEINFO psfi, uint cbSizeFileInfo, uint uFlags);
 
     [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
     private struct SHSTOCKICONINFO
@@ -723,12 +760,8 @@ public partial class DockWindow : ShellWindow
 
     // 系统功能条目：设置键 / 显示名 / Shell CLSID 或 exe 路径（图标提取 + 启动目标）/ 兜底 stock ID /
     // 是否走 control.exe / 是否走任务管理器专用启动（单例激活 + 冷启动补置前）。
-    // 回收站拖放（2026-09-07）：桌面拖动图标到 dock 栏回收站松手 = 移入回收站。
-    // 布局后把回收站容器屏幕矩形写入 kernel 共享 DockDropTargets，桌面侧拖动时读取命中。
-    private Grid? _recycleBinContainer;
-    private readonly DispatcherTimer _recycleHoverTimer = new() { Interval = TimeSpan.FromMilliseconds(150) };
-    private bool _recycleBinHighlighted;
-
+    // 【2026-09-17 用户拍板】回收站不再特殊：它就是本表里的一个普通条目（无专用容器跟踪、无拖放命中、
+    // 无跨窗口高亮）——原"拖到 dock 回收站 = 移入回收站"的 kernel 共享通道 DockDropTargets 已整体拆除。
     private static readonly (string Key, string Name, string Clsid, uint FallbackStockId, bool IsControlPanel, bool IsTaskManager)[] SystemEntries =
     {
         ("dock.systemComputer", "此电脑", "::{20D04FE0-3AEA-1069-A2D8-08002B30309D}", 15u, false, false),
@@ -751,56 +784,13 @@ public partial class DockWindow : ShellWindow
     /// <summary>取系统图标（桌面同款）：先按 CLSID 经 Shell 命名空间提取，失败回退 stock 图标。失败返回 null。</summary>
     private static ImageSource? GetSystemIcon(string clsid, uint fallbackStockId)
     {
-        var icon = GetShellIconByClsid(clsid);
+        var icon = ShellItemIcon.GetByParsingName(clsid);
         if (icon is not null)
         {
             return icon;
         }
 
         return GetStockIcon(fallbackStockId);
-    }
-
-    /// <summary>SHParseDisplayName → SHGetFileInfo(PIDL)：与桌面/资源管理器一致的 shell 主题图标。</summary>
-    private static ImageSource? GetShellIconByClsid(string clsid)
-    {
-        IntPtr pidl = IntPtr.Zero;
-        try
-        {
-            if (NativeMethods.SHParseDisplayName(clsid, IntPtr.Zero, out pidl, 0, out _) != 0 || pidl == IntPtr.Zero)
-            {
-                return null;
-            }
-
-            var info = new SHFILEINFO();
-            var ret = SHGetFileInfoPidl(pidl, 0, ref info, (uint)Marshal.SizeOf<SHFILEINFO>(), ShgfiIcon | ShgfiLargeIcon | ShgfiPidl);
-            if (ret == IntPtr.Zero || info.hIcon == IntPtr.Zero)
-            {
-                return null;
-            }
-
-            try
-            {
-                return Imaging.CreateBitmapSourceFromHIcon(
-                    info.hIcon,
-                    Int32Rect.Empty,
-                    BitmapSizeOptions.FromEmptyOptions());
-            }
-            finally
-            {
-                NativeMethods.DestroyIcon(info.hIcon);
-            }
-        }
-        catch
-        {
-            return null;
-        }
-        finally
-        {
-            if (pidl != IntPtr.Zero)
-            {
-                NativeMethods.CoTaskMemFree(pidl);
-            }
-        }
     }
 
     /// <summary>SHGetStockIconInfo：系统 stock 图标（当前主题）兜底。</summary>
@@ -922,88 +912,10 @@ public partial class DockWindow : ShellWindow
                 onClick: () => LaunchSystemEntry(captured),
                 onRightClick: () => ShowSystemEntryMenu(captured));
             SystemPanel.Children.Add(container);
-
-            if (string.Equals(entry.Key, "dock.systemRecycleBin", StringComparison.Ordinal))
-            {
-                _recycleBinContainer = container; // 供桌面"拖到回收站"命中检测
-            }
         }
 
         // 全部关闭或取不到图标时折叠整块（不留空白），与运行区 showRunning=false 联动由调用方处理。
         SystemPanel.Visibility = SystemPanel.Children.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
-        UpdateRecycleDropRect(); // 重建后回收站容器可能整体位移 → 重新上报屏幕矩形
-    }
-
-    /// <summary>
-    /// 把 dock 栏回收站容器在屏幕上的物理像素矩形写入 kernel 共享 DockDropTargets
-    /// （与 GetCursorPos 同域），供桌面拖动"拖到回收站松手 = 移入回收站"命中检测。
-    /// 容器不可见 / 布局异常时清空（桌面视为 dock 回收站不在场）。
-    /// </summary>
-    private void UpdateRecycleDropRect()
-    {
-        if (_recycleBinContainer is null || !_recycleBinContainer.IsVisible || !IsVisible)
-        {
-            BetterDesktop.Kernel.Core.DockDropTargets.ClearDockRecycleBinRect();
-            return;
-        }
-
-        try
-        {
-            var scale = PresentationSource.FromVisual(this)?.CompositionTarget?.TransformToDevice.M11 ?? 1.0;
-            if (scale <= 0)
-            {
-                scale = 1.0;
-            }
-
-            var rel = _recycleBinContainer.TransformToAncestor(this).Transform(new Point(0, 0));
-            var rect = new System.Drawing.Rectangle(
-                (int)((Left + rel.X) * scale),
-                (int)((Top + rel.Y) * scale),
-                (int)(_recycleBinContainer.ActualWidth * scale),
-                (int)(_recycleBinContainer.ActualHeight * scale));
-            if (rect.Width > 0 && rect.Height > 0)
-            {
-                BetterDesktop.Kernel.Core.DockDropTargets.DockRecycleBinScreenRect = rect;
-            }
-            else
-            {
-                BetterDesktop.Kernel.Core.DockDropTargets.ClearDockRecycleBinRect();
-            }
-        }
-        catch
-        {
-            // 容器已脱离可视树（TransformToAncestor 抛异常）：视为不在场（M10）
-            BetterDesktop.Kernel.Core.DockDropTargets.ClearDockRecycleBinRect();
-        }
-    }
-
-    /// <summary>
-    /// 回收站悬停高亮：读 kernel 共享 DockDropTargets.IsRecycleBinHovered（桌面拖动时写入），
-    /// 变化时给回收站容器加红框红底（与桌面回收站高亮同一套视觉），离开/松手恢复。
-    /// 状态防抖：无变化直接返回，样式只在实际切换时设置一次。
-    /// </summary>
-    private void UpdateRecycleHoverHighlight()
-    {
-        var hovered = BetterDesktop.Kernel.Core.DockDropTargets.IsRecycleBinHovered;
-        if (hovered == _recycleBinHighlighted)
-        {
-            return;
-        }
-
-        _recycleBinHighlighted = hovered;
-        if (_recycleBinContainer is null)
-        {
-            return;
-        }
-
-        if (hovered)
-        {
-            _recycleBinContainer.Background = new SolidColorBrush(Color.FromArgb(110, 0xE8, 0x4C, 0x3D));
-        }
-        else
-        {
-            _recycleBinContainer.Background = null;
-        }
     }
 
     /// <summary>
@@ -1359,7 +1271,11 @@ public partial class DockWindow : ShellWindow
             {
                 Width = iconSize + 16,
                 Margin = new Thickness(spacing / 2, 0, spacing / 2, 0),
-                Cursor = System.Windows.Input.Cursors.Hand
+                Cursor = System.Windows.Input.Cursors.Hand,
+                // 【2026-09-14 用户要求】悬停显示应用名：名称被截断或关闭标签时仍能看清是哪个应用。
+                // 系统区（:909）与开始按钮（:1071）本来各自显式设过，固定区此前漏了 ——
+                // 根因是三个区各自建容器、能力没统一。显示延迟统一在 AttachItemInteractions（150ms）。
+                ToolTip = item.Name
             };
 
             var rowIcon = new RowDefinition { Height = new GridLength(1, GridUnitType.Auto) };
@@ -1769,7 +1685,172 @@ public partial class DockWindow : ShellWindow
     }
 
 
-    /// <summary>Dock 项右键：dock 自管（模板直调 + DockMenuPopup 渲染；2026-09-05 收口）。</summary>
+    /// <summary>
+    /// **运行项**右键：走统一项集构建器 <see cref="AppEntryMenuBuilder"/>（S1–S4 建立的那套）。
+    ///
+    /// <para>【为什么必须与固定区分开】固定区那份（<see cref="ShowItemContextMenu"/>）是 dock 自管的
+    /// "分类器 + <c>_dockItemTemplate</c> + FileIdentity" 体系，**为固定项写的**。运行项借它弹出来会出现
+    /// 「从 Dock 中移除」这种固定区语义（2026-09-14 真机踩到：运行项的菜单里没有「固定」，只有「移除」）。
+    /// 这里按运行项的**真实语义**给项：未固定 → 「固定到 Dock」；已固定 → 「从 Dock 移除」；
+    /// 左键语义是"激活那个窗口"（不是"启动"），故 <c>LaunchText</c> 用「激活」。</para>
+    /// </summary>
+    private void ShowRunningItemMenu(DockItemData item)
+    {
+        try
+        {
+            var path = !string.IsNullOrWhiteSpace(item.TargetPath) ? item.TargetPath : item.ShortcutPath;
+            var uninstall = item.UninstallCommand;
+
+            var items = AppEntryMenuBuilder.Build(new AppEntryMenuContext
+            {
+                Path = path,
+                IsPinned = IsPinnedInDock(item),
+                LaunchText = "激活",
+                UninstallCommand = uninstall,
+                // 刻意不传 Groups / CurrentGroup：运行项若尚未固定，就不属于任何分组
+                //（构建器据此整项省略「移动到分组」，不会出现空分组菜单）。
+                Actions = new AppEntryMenuActions
+                {
+                    Launch = () => ActivateFirstWindow(item),
+                    Pin = () => PinFromRunning(item),
+                    Unpin = () => RemoveFromDock(item.Id),
+                    RevealInExplorer = () => AppEntryActions.RevealInExplorer(path),
+                    CopyPath = () => AppEntryActions.CopyToClipboard(path),
+                    RunAsAdmin = () => AppEntryActions.RunAsAdmin(path),
+                    OpenInTerminal = () => AppEntryActions.OpenInTerminal(path),
+                    ShowProperties = () => AppEntryActions.ShowProperties(path),
+                    Uninstall = string.IsNullOrWhiteSpace(uninstall)
+                        ? null
+                        : () => AppEntryActions.RunUninstaller(uninstall!),
+                },
+            });
+
+            DockMenuPopup.ShowAtCursor(items.Cast<object>().ToList(), this);
+        }
+        catch (Exception ex)
+        {
+            DebugLog.Trace("Dock", $"运行项右键菜单失败: {ex.GetType().Name}: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// 运行项**溯源**：运行中的那个进程未必是用户认知里的应用本体。
+    /// <para>沿**进程父子链**由近及远，取第一个"应用索引里已知"的祖先作为固定目标；全链未知 → 返回
+    /// <c>null</c>（调用方退回当前 exe 并记日志）。</para>
+    /// <para>**绝不按路径相似 / 同安装根去猜** —— 那正是 2026-09-14 误绑的成因
+    ///（S8 第 ④ 级把 WorkBuddy 错指到同根下的 CodeBuddy CN.exe）。
+    /// 判定逻辑在 <see cref="RunningAppOriginResolver"/>（纯函数、可单测）。</para>
+    /// </summary>
+    private string? ResolvePinOrigin(DockItemData item)
+    {
+        try
+        {
+            var appSource = _dockPlugin?.AppSource;
+            if (appSource is null)
+            {
+                return null; // 拿不到索引就退回当前 exe（不猜）
+            }
+
+            var path = !string.IsNullOrWhiteSpace(item.TargetPath) ? item.TargetPath : item.ShortcutPath;
+            var window = RunningAppDetector.GetRunningWindows()
+                .FirstOrDefault(w => string.Equals(w.ExePath, path, StringComparison.OrdinalIgnoreCase));
+            if (window.Hwnd == IntPtr.Zero)
+            {
+                return null;
+            }
+
+            _ = NativeMethods.GetWindowThreadProcessId(window.Hwnd, out var pid);
+            if (pid == 0)
+            {
+                return null;
+            }
+
+            // 高完整性（管理员）应用也能取到路径：ProcessGenealogy 用 QueryFullProcessImageNameW。
+            var chain = ProcessGenealogy.GetAncestorPaths((int)pid);
+            var origin = RunningAppOriginResolver.Resolve(
+                chain,
+                candidate => appSource.ResolveFromPath(candidate) is not null);
+
+            if (origin is null)
+            {
+                DebugLog.Trace("Dock", $"溯源未命中（沿用当前 exe）: {path} chain={chain.Count}");
+            }
+
+            return origin;
+        }
+        catch (Exception ex)
+        {
+            DebugLog.Trace("Dock", $"溯源失败（沿用当前 exe）: {ex.GetType().Name}: {ex.Message}");
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// 运行项是否已在 Dock 中固定。
+    /// <para>运行项 Id 与固定项 Id 同源（都是稳定路径，见 S1），但这里仍按
+    /// <c>Id</c> + <c>TargetPath</c> + <c>ShortcutPath</c> 三者比对 —— 与运行区的"排除已固定"判定
+    /// 用同一套口径，避免"运行区认为已固定、菜单认为未固定"这种两处口径漂移。</para>
+    /// </summary>
+    private bool IsPinnedInDock(DockItemData item)
+    {
+        var path = !string.IsNullOrWhiteSpace(item.TargetPath) ? item.TargetPath : item.ShortcutPath;
+
+        foreach (var pinned in _dockAppsService.Pinned)
+        {
+            if (pinned.Id == item.Id)
+            {
+                return true;
+            }
+
+            if (!string.IsNullOrWhiteSpace(pinned.TargetPath)
+                && string.Equals(pinned.TargetPath, path, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+
+            if (!string.IsNullOrWhiteSpace(pinned.ShortcutPath)
+                && string.Equals(pinned.ShortcutPath, path, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>把运行项固定到 Dock（复用既有落库路径 → 与其它入口同 Id，归并不生双图标）。</summary>
+    private void PinFromRunning(DockItemData item)
+    {
+        try
+        {
+            var path = string.IsNullOrWhiteSpace(item.ShortcutPath) ? item.TargetPath : item.ShortcutPath;
+
+            // T3：固定的应是**应用本体**，而不是"此刻在跑的那个进程"（可能是 helper 子进程，
+            // 也可能是启动器拉起的、索引里没登记的本体）。溯源不中则退回当前 exe（不猜）。
+            _dockAppsService.AddByPath(ResolvePinOrigin(item) ?? path);
+            _dockAppsService.Save();
+        }
+        catch (Exception ex)
+        {
+            DebugLog.Trace("Dock", $"固定运行项失败: {ex.GetType().Name}: {ex.Message}");
+        }
+    }
+
+    /// <summary>从 Dock 移除固定项（运行项未固定时菜单不会给出该项）。</summary>
+    private void RemoveFromDock(DockItemId id)
+    {
+        try
+        {
+            _dockAppsService.RemoveById(id);
+            _dockAppsService.Save();
+        }
+        catch (Exception ex)
+        {
+            DebugLog.Trace("Dock", $"移除固定项失败: {ex.GetType().Name}: {ex.Message}");
+        }
+    }
+
+    /// <summary>固定区 Dock 项右键：dock 自管（模板直调 + DockMenuPopup 渲染；2026-09-05 收口）。</summary>
     private void ShowItemContextMenu(DockItemData item, MouseButtonEventArgs? e)
     {
         DebugLog.Trace("Dock", $"Dock 项右键探针: item={item.Name} template={(_dockItemTemplate is null ? "null" : "ok")}");
@@ -1882,6 +1963,18 @@ public partial class DockWindow : ShellWindow
                         System.Windows.Threading.DispatcherPriority.Background);
                     return;
                 }
+            }
+
+            // 可见窗口没找到 → 窗口可能被隐藏（点X进托盘但进程没退）。
+            // 兜底：找同进程隐藏窗口并 Show 出来，避免点固定图标直接新开实例。
+            var hiddenHwnd = RunningAppDetector.FindHiddenWindowByExe(path);
+            if (hiddenHwnd != IntPtr.Zero)
+            {
+                var hwnd = hiddenHwnd;
+                Dispatcher.BeginInvoke(
+                    () => RunningAppDetector.ShowAndActivate(hwnd),
+                    System.Windows.Threading.DispatcherPriority.Background);
+                return;
             }
 
             System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
@@ -2005,7 +2098,9 @@ public partial class DockWindow : ShellWindow
         try
         {
             var windows = RunningAppDetector.GetRunningWindows();
-            DebugLog.Trace("Running", $"refresh windows={windows.Count}");
+            // Debug 级：这是每秒两行的刷新打点，Info 级落盘会把日志淹掉（实测每分钟 120 行）。
+            // 排障时设 BETTERDESKTOP_LOG_LEVEL=Debug 打开。
+            DebugLog.Debug("Running", $"refresh windows={windows.Count}");
 
             // 一屏可视约 6 个运行图标（对齐左侧固定区）；运行窗口再多时由 ScrollViewer 横向滚动查看
             // （备着：一般不会开那么多窗口，但滚动+边缘半隐能力与左侧一致）。
@@ -2048,6 +2143,15 @@ public partial class DockWindow : ShellWindow
                 }
 
                 var (displayName, targetPath, source) = ShellLinkResolver.Resolve(exePath);
+
+                // 脚本解释器（pythonw.exe 等）：FileDescription 是解释器自身名（"Python"），
+                // 实际窗口标题才是用户认知的应用名（如"绝区零-一条龙 01"）。
+                // 用窗口标题替代，避免运行区显示成"py"。
+                if (RunningAppDetector.IsInterpreterProcess(exePath) && !string.IsNullOrWhiteSpace(info.Title))
+                {
+                    displayName = info.Title;
+                }
+
                 orderedItems.Add(new DockItemData
                 {
                     Id = new DockItemId(targetPath ?? exePath),
@@ -2065,7 +2169,8 @@ public partial class DockWindow : ShellWindow
                 .ToList();
 
             // 诊断：运行区不显示时据此定位断点（windows 数 / 显示的固定目标数 / 最终 items 数）。
-            DebugLog.Trace("Running", $"refresh apps={runningApps.Count} pinnedShown={pinnedTargets.Count} items={orderedItems.Count}");
+            // Debug 级：与上一处同为每秒刷新打点，默认不落盘（BETTERDESKTOP_LOG_LEVEL=Debug 打开）。
+            DebugLog.Debug("Running", $"refresh apps={runningApps.Count} pinnedShown={pinnedTargets.Count} items={orderedItems.Count}");
 
             // 将运行项同步进 DockService 运行时模型（统一由 IDockService 维护当前可见的运行集合）。
             SyncRunningIntoService(orderedItems);
@@ -2173,10 +2278,13 @@ public partial class DockWindow : ShellWindow
                 };
 
                 // 悬停即弹出该应用的多窗口缩略图预览（紧贴图标上方，参考 cairoshell 行为）。
+                // 【2026-09-14 用户要求】运行区**补齐右键**：与固定区同一套菜单（未固定态 → 「固定到 Dock」等）。
+                // 之前这里只传了 onHover，没传 onRightClick → 运行项右键无反应（工厂只在回调非 null 时挂事件）。
                 AttachItemInteractions(
                     container,
                     iconImage,
                     onClick: () => { }, // 空操作，点击已由 iconZone 处理
+                    onRightClick: () => ShowRunningItemMenu(capturedItem),
                     onHover: () => ScheduleOpenPreview(capturedItem, GetItemScreenAnchor(container), container));
 
                 // 鼠标离开运行项后延迟关闭预览（留出移动到预览层的时间）。
@@ -2188,6 +2296,8 @@ public partial class DockWindow : ShellWindow
                     CornerRadius = new CornerRadius(10),
                     BorderThickness = new Thickness(0),
                     Child = container,
+                    // 【2026-09-14 用户要求】悬停显示应用名：标签被截断或关闭标签时仍能看清是哪个应用。
+                    ToolTip = item.Name,
                     // 与固定区一致：卡片 Tag 记 Dock 项 Id，供预览存续判定在列表重建后重新锚定图标。
                     Tag = item.Id
                 };
@@ -2472,7 +2582,15 @@ public partial class DockWindow : ShellWindow
         _previewAnchor = anchor;
         _previewAnchorItemId = item.Id;
         // 预览窗自 shell-window-tracker 通用化（原 DockThumbWindow）；缩略图质量由本窗从设置读取后传入。
-        var flyout = new ThumbnailWindow(anchorScreen, windows, GetPreviewThumbnailQuality());
+        // 2026-09-12：悬停缩略图 → 实时大图预览层（PreviewWindow），不再走 DWM 透明化 Aero Peek
+        // （DwmActivateLivePreview 会透明化 dock/浮层，EXCLUDED_FROM_PEEK 实测无效）。
+        // 【2026-09-18】callingHwnd 必须传 **dock 自己的句柄**：它的语义是"预览期间不被 DWM 透明化的窗口"。
+        // 传浮层自身会让 peek 把 dock（含运行区）一起变暗/近乎消失，叠加运行区重建就是用户看到的"抽搐"。
+        var flyout = new ThumbnailWindow(
+            anchorScreen,
+            windows,
+            GetPreviewThumbnailQuality(),
+            new System.Windows.Interop.WindowInteropHelper(this).Handle);
         // Closed 可能晚于 Close() 返回（消息泵时序）：只有它仍是当前浮层时才停看门狗，
         // 否则会把后开的浮层的看门狗误停 → 新缩略图永不自动关闭。
         flyout.Closed += (_, _) =>
@@ -2695,6 +2813,19 @@ public partial class DockWindow : ShellWindow
         DebugLog.Trace("Activate", $"click exe={exe} matched={matches.Count}");
         if (matches.Count == 0)
         {
+            // 可见窗口找不到 → 可能窗口被隐藏（点X进托盘但进程没退）。
+            // 兜底：找同进程隐藏窗口并 Show 出来，而不是直接新开实例。
+            var hiddenHwnd = RunningAppDetector.FindHiddenWindowByExe(exe);
+            if (hiddenHwnd != IntPtr.Zero)
+            {
+                var hwnd = hiddenHwnd;
+                DebugLog.Trace("Activate", $"found hidden window hwnd={hwnd:X}, showing");
+                Dispatcher.BeginInvoke(
+                    () => RunningAppDetector.ShowAndActivate(hwnd),
+                    System.Windows.Threading.DispatcherPriority.Background);
+                return;
+            }
+
             // 窗口已全部关闭（枚举与点击间有时间差）：有真实 exe 时直接启动兜底。
             if (File.Exists(exe))
             {
@@ -2771,6 +2902,12 @@ public partial class DockWindow : ShellWindow
         Action? onRightClick = null,
         Action? onHover = null)
     {
+        // 【2026-09-14 用户要求】工具提示延迟统一在此调：默认 InitialShowDelay=400ms，
+        // 在 dock 这种小的置顶窗上体感"半天不出来"；150ms 才有"悬停即见"的手感。
+        // 放在共用工厂里 → 固定区/运行区/系统区/开始按钮一处调优、行为一致（各写一份必然漂移）。
+        ToolTipService.SetInitialShowDelay(container, 150);
+        ToolTipService.SetShowDuration(container, 15000);
+
         var scale = new ScaleTransform(1, 1);
         var translate = new TranslateTransform(0, 0);
         iconImage.RenderTransform = new TransformGroup
@@ -2856,21 +2993,16 @@ public partial class DockWindow : ShellWindow
         // 当前实例绑定到主屏（多屏多实例由 host 后续扩展）。
         // 坐标参考域（2026-09-02 修复）：⚠️ SystemParameters.PrimaryScreen* 返回的域与窗口 WPF 逻辑域
         // （PerMonitorV2 按窗口所在屏 DPI）不一致时，会把 dock 定位到工作区之外（实测 125% 屏上
-        // 窗口被放到物理 1679px，而工作区底只有 1380px → AppBar 协商负高度 W=769 H=-299）。
+        // 窗口被放到物理 1679px，而工作区底只有 1380px → 负高度 W=769 H=-299）。
         // 改为以 GetMonitorInfo 物理矩形为权威源，÷TransformToDevice 换算成 WPF 逻辑坐标。
-        // 纵向基准（2026-09-02 定稿）：**整屏**矩形——dock 底边 = 屏幕底边 − bottomMargin
-        // （dock 独占底部、原生任务栏隐藏）。整屏不受 AppBar 抬升影响，"协商→抬升→再定位"循环免疫。
-        var hwnd = _appBarHwndSource?.Handle ?? new System.Windows.Interop.WindowInteropHelper(this).Handle;
-        var transform = _appBarHwndSource?.CompositionTarget?.TransformToDevice ?? default;
+        // 纵向基准（2026-09-02 定稿）：**整屏**矩形——dock 底边 = 屏幕底边 − bottomMargin。
+        // 2026-09-12：AppBar 已移除（_appBarHwndSource/_appBarScreen 不再存在），
+        // 句柄与 DPI 直接取自 WindowInteropHelper / PresentationSource，整屏矩形实时查。
+        var hwnd = new System.Windows.Interop.WindowInteropHelper(this).Handle;
+        var transform = PresentationSource.FromVisual(this)?.CompositionTarget?.TransformToDevice ?? default;
         var dpiScale = transform.M11 > 0 ? transform.M11 : 1.0;
         Rect screen;
-        var cachedScreen = _appBarScreen;
-        if (cachedScreen.Right - cachedScreen.Left > 0 && cachedScreen.Bottom - cachedScreen.Top > 0)
-        {
-            screen = new Rect(cachedScreen.Left / dpiScale, cachedScreen.Top / dpiScale,
-                (cachedScreen.Right - cachedScreen.Left) / dpiScale, (cachedScreen.Bottom - cachedScreen.Top) / dpiScale);
-        }
-        else if (DockAppBarReservation.GetMonitorBounds(hwnd, out var mon))
+        if (DockAppBarReservation.GetMonitorBounds(hwnd, out var mon))
         {
             screen = new Rect(mon.Left / dpiScale, mon.Top / dpiScale,
                 (mon.Right - mon.Left) / dpiScale, (mon.Bottom - mon.Top) / dpiScale);

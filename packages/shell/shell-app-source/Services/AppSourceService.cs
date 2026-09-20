@@ -4,8 +4,10 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Text.Json;
+using BetterDesktop.Kernel.Contracts;
 using BetterDesktop.Shell.AppSource.Contracts;
 using BetterDesktop.Shell.AppSource.Models;
+using BetterDesktop.Shell.IndexIpc;
 
 namespace BetterDesktop.Shell.AppSource.Services;
 
@@ -16,7 +18,10 @@ namespace BetterDesktop.Shell.AppSource.Services;
 //   "新安装应用角标"                → GetNewlyInstalledApps / MarkAppsSeen（已读集合 LoadSeen/SaveSeen 持久化）
 //   "由文件路径反查应用项"          → ResolveFromPath；缓存失效 InvalidateCache
 //   "各类过滤判定（文档/系统工具/可执行/排除名）" → IsDocumentTarget / IsSystemTool / IsLikelyExecutable / IsExcludedName
-//   "稳定应用 ID 生成"              → CreateStableId；开始菜单目录变化监听 OnStartMenuChanged
+//   "稳定应用 ID 生成"              → CreateStableId（干净/全程序/引擎升格三路共用）；开始菜单目录变化监听 OnStartMenuChanged
+//   "全程序模式按稳定 Id 去重"       → DedupByStableId / DedupAndLog
+//   "全程序模式过滤（CLI/工具链）"    → ApplyAllProgramsFilter（开关 IsAllProgramsFilterEnabled，默认关）；规则表 Services/AppFilterRules.cs
+//   "口袋目录 / 桌面快捷方式"        → SetExtraScanRoots + ScanExtraRoots / SetDesktopShortcutsEnabled + ScanDesktopShortcuts；设置映射 Services/AppSourceSettings.cs
 // ────────────────────────────────────
 
 /// <summary>
@@ -92,8 +97,36 @@ public sealed class AppSourceService : IAppSourceService, IDisposable
         ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx"
     };
 
-    public AppSourceService(string? dataDirectory = null)
+    /// <summary>
+    /// 【M2 · 2026-09-13】索引引擎客户端（`null` = 未接引擎 → 全部走本地实现，行为与接入前**逐字一致**）。
+    /// <para>
+    /// 引擎只提供「磁盘上有哪些可执行文件」这一**事实**（省掉全盘扫描），
+    /// 应用语义（lnk 解析、显示名、过滤链、Id）仍由本类按既有实现升格 —— 见 <see cref="AppCandidateMapper"/>。
+    /// </para>
+    /// </summary>
+    private readonly IndexIpcClient? _indexClient;
+
+    /// <summary>降级/诊断日志（可空：无日志时降级仍以返回值表达，不为日志阻塞构造）。</summary>
+    private readonly IKernelLogger? _logger;
+
+    /// <summary>全程序模式是否启用过滤（默认关；见 <see cref="IsAllProgramsFilterEnabled"/>）。</summary>
+    private readonly bool _filterAllPrograms;
+
+    /// <summary>口袋目录（设置「应用扫描目录」；默认空，§12 Q2 裁决）。</summary>
+    private volatile string[] _extraScanRoots = Array.Empty<string>();
+
+    /// <summary>桌面快捷方式是否纳入干净模式（默认纳入；§12 Q3 裁决）。</summary>
+    private volatile bool _scanDesktopShortcuts = true;
+
+    public AppSourceService(
+        string? dataDirectory = null,
+        IndexIpcClient? indexClient = null,
+        IKernelLogger? logger = null,
+        bool? filterAllPrograms = null)
     {
+        _indexClient = indexClient;
+        _logger = logger;
+        _filterAllPrograms = filterAllPrograms ?? IsAllProgramsFilterEnabled();
         var appData = dataDirectory ?? Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
             "BetterDesktop");
@@ -109,6 +142,29 @@ public sealed class AppSourceService : IAppSourceService, IDisposable
         _watcher.Changed += OnStartMenuChanged;
     }
 
+    /// <summary>
+    /// 设置口袋目录（便携 / 解压即用工具的自定义根）。由 <c>AppSourcePlugin</c> 从设置推送。
+    /// <para>只影响<see cref="ScanAllPrograms"/>的附加扫描，故无需失效既有缓存。</para>
+    /// </summary>
+    public void SetExtraScanRoots(IReadOnlyList<string>? roots)
+    {
+        _extraScanRoots = roots is null ? Array.Empty<string>() : roots.ToArray();
+    }
+
+    /// <summary>
+    /// 设置桌面快捷方式是否纳入干净模式。桌面来源影响<see cref="ScanStartMenu"/>的缓存结果，故必须失效缓存。
+    /// </summary>
+    public void SetDesktopShortcutsEnabled(bool enabled)
+    {
+        if (_scanDesktopShortcuts == enabled)
+        {
+            return;
+        }
+
+        _scanDesktopShortcuts = enabled;
+        InvalidateCache();
+    }
+
     /// <inheritdoc />
     public IReadOnlyList<AppItem> ScanStartMenu()
     {
@@ -120,28 +176,37 @@ public sealed class AppSourceService : IAppSourceService, IDisposable
             }
         }
 
-        var result = new List<AppItem>();
-        var directories = new[]
+        // 【M2 · 2026-09-13】优先走索引引擎（省掉全递归目录扫描：M0 基线 4254ms → 引擎候选 + 本地升格）；
+        // 引擎不可用/构建中 → 回退下方本地实现（降级记 Warn，绝不静默）。
+        var ordered = ScanStartMenuFromEngine();
+        if (ordered is null)
         {
-            Environment.GetFolderPath(Environment.SpecialFolder.StartMenu) + @"\Programs",
-            Environment.GetFolderPath(Environment.SpecialFolder.CommonStartMenu) + @"\Programs"
-        };
-
-        foreach (var directory in directories)
-        {
-            if (!Directory.Exists(directory))
+            var result = new List<AppItem>();
+            var directories = new[]
             {
-                continue;
+                Environment.GetFolderPath(Environment.SpecialFolder.StartMenu) + @"\Programs",
+                Environment.GetFolderPath(Environment.SpecialFolder.CommonStartMenu) + @"\Programs"
+            };
+
+            foreach (var directory in directories)
+            {
+                if (!Directory.Exists(directory))
+                {
+                    continue;
+                }
+
+                result.AddRange(ScanDirectory(directory));
             }
 
-            result.AddRange(ScanDirectory(directory));
+            ordered = result
+                .GroupBy(x => x.Id)
+                .Select(x => x.First())
+                .OrderBy(x => x.Name, StringComparer.OrdinalIgnoreCase)
+                .ToList();
         }
 
-        var ordered = result
-            .GroupBy(x => x.Id)
-            .Select(x => x.First())
-            .OrderBy(x => x.Name, StringComparer.OrdinalIgnoreCase)
-            .ToList();
+        // 桌面快捷方式（附加来源）对**两条路径都**并入——否则切换后端会改变干净模式条目集
+        ordered = MergeDesktopShortcuts(ordered);
 
         lock (_cacheGate)
         {
@@ -150,6 +215,100 @@ public sealed class AppSourceService : IAppSourceService, IDisposable
         }
 
         return ordered;
+    }
+
+    /// <summary>
+    /// 【M2】开始菜单的引擎路径：`list_apps` 只给磁盘事实（路径），
+    /// 这里**逐候选复用本地 <see cref="ResolveFromPath"/> 升格**（完整过滤链语义不变）。
+    /// 返回 <c>null</c> = 引擎不可用/构建中 → 调用方回退本地实现。
+    /// </summary>
+    private List<AppItem>? ScanStartMenuFromEngine()
+    {
+        var page = TryListAppsFromEngine();
+        if (page is null)
+        {
+            return null;
+        }
+
+        var result = new List<AppItem>();
+        var filtered = 0;
+        foreach (var candidate in page.Apps)
+        {
+            if (!string.Equals(candidate.Source, AppCandidateMapper.EngineSourceStartMenu, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            var item = AppCandidateMapper.FromStartMenuCandidate(candidate, ResolveFromPath);
+            if (item is null)
+            {
+                filtered++; // 被本地过滤链拒收（排除名/文档目标/非可执行/系统工具）
+                continue;
+            }
+
+            result.Add(item);
+        }
+
+        var ordered = result
+            .GroupBy(x => x.Id)
+            .Select(x => x.First())
+            .OrderBy(x => x.Name, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        _logger?.Info($"[app-source] 开始菜单走索引引擎：候选 {page.Apps.Count} 项 → 收录 {ordered.Count} 项（本地过滤 {filtered} 项）");
+        return ordered;
+    }
+
+    /// <summary>
+    /// 【M2】引擎可用时取候选快照；不可用 / 构建中 / 异常 → <c>null</c>（调用方回退本地实现）。
+    /// </summary>
+    private ListAppsResult? TryListAppsFromEngine()
+    {
+        var client = _indexClient;
+        if (client is null)
+        {
+            return null; // 未接引擎（构造未注入）→ 调用方走本地，属正常路径不记降级
+        }
+
+        if (!client.IsConnected)
+        {
+            _logger?.Warn("[app-source] 索引引擎未连接 → 本次回退本地扫描");
+            return null;
+        }
+
+        try
+        {
+            // 本方法是同步接口（IAppSourceService），必须在**后台线程**等待异步 IPC：
+            // 直接 GetResult 会捕获调用方（UI）上下文 → 有死锁风险。
+            var page = System.Threading.Tasks.Task
+                .Run(() => client.ListAppsAsync(System.Threading.CancellationToken.None))
+                .GetAwaiter()
+                .GetResult();
+
+            if (page.Building)
+            {
+                _logger?.Warn("[app-source] 索引引擎仍在构建中 → 本次回退本地扫描");
+                return null;
+            }
+
+            // 【2026-09-14 修复】降级（应用索引为空 / 无可用根目录）同样必须回退本地实现。
+            // 此前只判 Building → 引擎"一条都没扫到"会被当成"系统里真的没有应用"，
+            // 开始菜单与应用盘点列表直接变空，且没有任何降级提示。
+            // 纪律与 TrySearchFilesAsync 的 `Building || Degraded` 一致（降级不得静默）。
+            // 注：引擎侧 `list_apps.degraded` 只反映**应用索引**，不会被"文件索引触顶"牵连。
+            if (page.Degraded)
+            {
+                _logger?.Warn($"[app-source] 应用索引降级（{page.DegradeReason}）→ 本次回退本地扫描");
+                return null;
+            }
+
+            return page;
+        }
+        catch (Exception e)
+        {
+            _logger?.Warn($"[app-source] 查询索引引擎失败（{e.Message}）→ 本次回退本地扫描");
+            return null;
+        }
     }
 
     /// <inheritdoc />
@@ -471,7 +630,15 @@ public sealed class AppSourceService : IAppSourceService, IDisposable
         return result;
     }
 
-    private static AppItemId CreateStableId(BetterDesktop.Shell.AppSource.Models.AppSource source, string shortcutPath, string targetPath)
+    /// <summary>
+    /// 稳定 Id 的**唯一产生点**（干净模式 / 全程序模式 / 引擎升格三条路径共用）。
+    /// 与固定库同源（<c>DockAppsService.AddByPath</c> → <see cref="ResolveFromPath"/>），
+    /// 故「同一个程序」在两种模式与固定集合里得到同一个 Id。
+    /// <para>内部而非私有 + 单一实现是刻意的：全程序模式曾自造 <c>"all:" + 路径</c> 前缀，
+    /// 导致固定态 / 绿点 / 已固定筛选 / 新装提醒在两种模式间全部分裂（2026-09-13 修）。
+    /// 引擎升格路径（<c>AppCandidateMapper</c>）也必须调本函数，否则引擎/本地结果集不再平价。</para>
+    /// </summary>
+    internal static AppItemId CreateStableId(BetterDesktop.Shell.AppSource.Models.AppSource source, string shortcutPath, string targetPath)
     {
         var keySource = source switch
         {
@@ -479,7 +646,14 @@ public sealed class AppSourceService : IAppSourceService, IDisposable
             _ => string.IsNullOrWhiteSpace(targetPath) ? shortcutPath : targetPath
         };
 
-        return new AppItemId(keySource ?? shortcutPath ?? string.Empty);
+        // 双保险：任何来源都不得产出空 Id。空 Id 会让所有「无路径」项在固定集合与
+        // _containers 字典里互相碰撞（Store 分支此前直接取 targetPath，空则产出空 Id —— 2026-09-14 修）。
+        if (string.IsNullOrWhiteSpace(keySource))
+        {
+            keySource = shortcutPath;
+        }
+
+        return new AppItemId(keySource ?? string.Empty);
     }
 
     private static bool IsSystemComponentKey(Microsoft.Win32.RegistryKey subKey)
@@ -749,6 +923,14 @@ public sealed class AppSourceService : IAppSourceService, IDisposable
     /// <inheritdoc />
     public IReadOnlyList<AppItem> ScanAllPrograms()
     {
+        // 【M2 · 2026-09-13】优先走索引引擎（M0 基线：冷扫描 53,107ms → 引擎候选 + 本地 lnk 升格）；
+        // 引擎不可用/构建中 → 回退下方本地递归扫描（降级记 Warn）。
+        var fromEngine = ScanAllProgramsFromEngine();
+        if (fromEngine is not null)
+        {
+            return DedupAndLog(ApplyAllProgramsFilter(MergeExtraRoots(fromEngine)));
+        }
+
         var roots = GetAllProgramRoots();
         var results = new List<AppItem>();
         var seenPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -771,7 +953,251 @@ public sealed class AppSourceService : IAppSourceService, IDisposable
             }
         }
 
+        return DedupAndLog(ApplyAllProgramsFilter(MergeExtraRoots(results)));
+    }
+
+    /// <summary>
+    /// 桌面快捷方式作为**干净模式的附加来源**（用户桌面 + 公共桌面，深度 1，只收快捷方式类文件）。
+    /// <para>为什么纳入：桌面是用户最主要的手动启动入口，「主动放桌面」是极强的「我在意这个应用」信号
+    /// （分析稿 §7.2 指出桌面完全没参与索引）。**下载目录不纳入**（噪音大，§12 Q3 裁决）。</para>
+    /// <para>解析后按稳定 Id 与既有条目合并去重（依赖 2026-09-14 的 Id 统一），故与开始菜单里
+    /// 指向同一目标的快捷方式不会重复出现。</para>
+    /// </summary>
+    private List<AppItem> ScanDesktopShortcuts()
+    {
+        if (!_scanDesktopShortcuts)
+        {
+            return new List<AppItem>();
+        }
+
+        var result = new List<AppItem>();
+        var directories = new[]
+        {
+            Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory),
+            Environment.GetFolderPath(Environment.SpecialFolder.CommonDesktopDirectory)
+        };
+
+        foreach (var directory in directories)
+        {
+            if (string.IsNullOrEmpty(directory) || !Directory.Exists(directory))
+            {
+                continue;
+            }
+
+            try
+            {
+                // 深度 1：桌面上的快捷方式（子目录是用户自建的项目文件夹，不猜）
+                foreach (var file in Directory.EnumerateFiles(directory, "*.*", SearchOption.TopDirectoryOnly))
+                {
+                    if (!ShellLinkResolver.IsSupportedFile(file))
+                    {
+                        continue;
+                    }
+
+                    // 复用完整过滤链（排除名 / 文档目标 / 可执行 / 系统工具）
+                    var app = ResolveFromPath(file);
+                    if (app is not null)
+                    {
+                        result.Add(app);
+                    }
+                }
+            }
+            catch
+            {
+                // 单个桌面目录不可读不阻断（M10）
+            }
+        }
+
+        return result;
+    }
+
+    /// <summary>把桌面快捷方式并入干净模式结果（按稳定 Id 去重、按名排序；无新增则原样返回）。</summary>
+    private List<AppItem> MergeDesktopShortcuts(List<AppItem> existing)
+    {
+        var extra = ScanDesktopShortcuts();
+        if (extra.Count == 0)
+        {
+            return existing;
+        }
+
+        var merged = existing
+            .Concat(extra)
+            .GroupBy(x => x.Id)
+            .Select(x => x.First())
+            .OrderBy(x => x.Name, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        _logger?.Info($"[app-source] 桌面快捷方式并入干净模式：新增候选 {extra.Count} 项 → 合并后 {merged.Count} 项");
+        return merged;
+    }
+
+    /// <summary>
+    /// 口袋目录的本地扫描（深度 3，与主根集一致）。
+    /// <para><b>为什么在 C# 侧扫而不是交给引擎</b>：引擎的根集是它自己的 <c>scan_roots</c>，
+    /// 不知道用户后加的口袋目录；若只走引擎路径，口袋目录在「后端=engine」时会静默失效。
+    /// 本地附加 + 按稳定 Id 合并，保证**切换后端不改变条目集**。</para>
+    /// <para>目录不存在 / 不可访问**记 Warn 不静默**（计划 §9：口袋目录失效必须可见）。</para>
+    /// </summary>
+    private List<AppItem> ScanExtraRoots()
+    {
+        var roots = _extraScanRoots;
+        if (roots.Length == 0)
+        {
+            return new List<AppItem>();
+        }
+
+        var results = new List<AppItem>();
+        var seenPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var root in roots)
+        {
+            if (string.IsNullOrWhiteSpace(root))
+            {
+                continue;
+            }
+
+            if (!Directory.Exists(root))
+            {
+                _logger?.Warn($"[app-source] 口袋目录不存在或不可访问，已跳过：{root}");
+                continue;
+            }
+
+            try
+            {
+                EnumerateExecutablesRecursive(root, results, seenPaths, currentDepth: 0, maxDepth: 3);
+            }
+            catch (Exception e)
+            {
+                _logger?.Warn($"[app-source] 口袋目录扫描失败（{root}）：{e.Message}");
+            }
+        }
+
         return results;
+    }
+
+    /// <summary>把口袋目录并入全程序模式结果（去重交给 <see cref="DedupAndLog"/> 的稳定 Id 去重）。</summary>
+    private List<AppItem> MergeExtraRoots(List<AppItem> existing)
+    {
+        var extra = ScanExtraRoots();
+        if (extra.Count == 0)
+        {
+            return existing;
+        }
+
+        existing.AddRange(extra);
+        _logger?.Info($"[app-source] 口袋目录并入全程序模式：{extra.Count} 项");
+        return existing;
+    }
+
+    /// <summary>
+    /// 全程序模式的过滤层（**只作用于 <see cref="ScanAllPrograms"/>**，干净模式不受影响）。
+    /// <para>默认关闭：过滤会改变条目集（实测 1789 → 更少），属行为变更，需先在真机对比两档效果
+    /// 再定默认（§12 Q1 裁决）。开启时记 Info，保证「条目为什么变少」可查（不静默）。</para>
+    /// <para>引擎路径与本地路径**都**要过这里——否则切换后端会导致条目集不一致（破坏 M2 平价）。</para>
+    /// </summary>
+    private List<AppItem> ApplyAllProgramsFilter(List<AppItem> items)
+    {
+        if (!_filterAllPrograms)
+        {
+            return items;
+        }
+
+        var kept = new List<AppItem>(items.Count);
+        foreach (var item in items)
+        {
+            // 按路径/文件名判定（不用显示名：lnk 描述是文案，见 AppFilterRules 注释）
+            var path = string.IsNullOrWhiteSpace(item.TargetPath) ? item.ShortcutPath : item.TargetPath;
+            if (AppFilterRules.ShouldFilter(path))
+            {
+                continue;
+            }
+
+            kept.Add(item);
+        }
+
+        _logger?.Info($"[app-source] 全程序模式过滤生效：{items.Count} → {kept.Count} 项（滤除 {items.Count - kept.Count}）");
+        return kept;
+    }
+
+    /// <summary>
+    /// 全程序模式过滤开关，默认**关**。
+    /// <para>【为什么用环境变量而不是设置键】本包未引用 shell-settings（避免为一个开关引入新包依赖），
+    /// 与 <c>AppSourcePlugin.IsEngineBackendEnabled</c>（<c>BETTERDESKTOP_INDEX_BACKEND</c>）同一惯例；
+    /// 设置中心的可见开关待与索引后端状态行一并落地（计划 §12 Q1 的「设置内可开」）。</para>
+    /// <para>取值 <c>on</c> / <c>true</c> / <c>1</c> 视为开启，其余（含未设）为关。</para>
+    /// </summary>
+    private static bool IsAllProgramsFilterEnabled()
+    {
+        var value = Environment.GetEnvironmentVariable("BETTERDESKTOP_APP_FILTER");
+        return string.Equals(value, "on", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(value, "true", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(value, "1", StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// 按稳定 Id 去重（保留首次出现顺序）。
+    /// <para>为什么必须有：Id 统一为「target 路径」后，同一 target 可能被多个文件命中
+    /// （同名 exe 的多版本目录、lnk 与其目标同时被枚举、未来桌面 lnk 与开始菜单 lnk 同目标）。
+    /// 而下游 <c>DockItemData.Id</c> 是字典键（<c>AppGrabberWindow._containers</c>）——
+    /// 重复键会让后一项覆盖前一项的容器、角标与批量编号错位。</para>
+    /// </summary>
+    internal static List<AppItem> DedupByStableId(List<AppItem> items)
+    {
+        var seen = new HashSet<AppItemId>();
+        var result = new List<AppItem>(items.Count);
+        foreach (var item in items)
+        {
+            if (seen.Add(item.Id))
+            {
+                result.Add(item);
+            }
+        }
+
+        return result;
+    }
+
+    /// <summary>去重 + 差异日志（去重不得静默发生：计划 §9 风险表要求记录条目数变化）。</summary>
+    private List<AppItem> DedupAndLog(List<AppItem> items)
+    {
+        var result = DedupByStableId(items);
+        if (result.Count != items.Count)
+        {
+            _logger?.Info($"[app-source] 全程序模式按稳定 Id 去重：{items.Count} → {result.Count} 项");
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// 【M2】程序盘点的引擎路径：与本地 <c>EnumerateExecutablesRecursive</c> **逐条对齐** ——
+    /// 直接 <see cref="ShellLinkResolver.Resolve"/> 升格，**不跑**四道过滤、不排序、Id 为 <c>"all:" + 路径</c>。
+    /// 返回 <c>null</c> = 引擎不可用/构建中 → 调用方回退本地实现。
+    /// </summary>
+    private List<AppItem>? ScanAllProgramsFromEngine()
+    {
+        var page = TryListAppsFromEngine();
+        if (page is null)
+        {
+            return null;
+        }
+
+        var result = new List<AppItem>();
+        foreach (var candidate in page.Apps)
+        {
+            if (!string.Equals(candidate.Source, AppCandidateMapper.EngineSourceProgramFiles, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            var item = AppCandidateMapper.FromProgramFilesCandidate(candidate);
+            if (item is not null)
+            {
+                result.Add(item);
+            }
+        }
+
+        _logger?.Info($"[app-source] 程序盘点走索引引擎：候选 {page.Apps.Count} 项 → 收录 {result.Count} 项");
+        return result;
     }
 
     private static void EnumerateExecutablesRecursive(string dir, List<AppItem> sink, HashSet<string> seenPaths, int currentDepth, int maxDepth)
@@ -803,7 +1229,9 @@ public sealed class AppSourceService : IAppSourceService, IDisposable
                 var (displayName, targetPath, source) = ShellLinkResolver.Resolve(file);
                 sink.Add(new AppItem
                 {
-                    Id = new AppItemId("all:" + file),
+                    // Id 与干净模式/固定库同源（见 CreateStableId）。此处曾为 new AppItemId("all:" + file)，
+                    // 使全程序模式的条目与固定集合永远对不上 Id（固定态在两种模式间分裂）。
+                    Id = CreateStableId(source, file, targetPath),
                     Name = displayName,
                     ShortcutPath = file,
                     TargetPath = string.IsNullOrWhiteSpace(targetPath) ? file : targetPath,
@@ -854,12 +1282,18 @@ public sealed class AppSourceService : IAppSourceService, IDisposable
         }
 
         // 常见第三方安装盘（D:/E: 下的 Program Files），覆盖非系统盘安装的程序。
+        // 注意必须同时收 Program Files 与 Program Files (x86)：系统盘的两个目录由
+        // SpecialFolder.ProgramFiles / ProgramFilesX86 提供，非系统盘的 (x86) 只能在这里补，
+        // 否则装在 D:\Program Files (x86) 下的 32 位程序永远扫不到（2026-09-13 实测缺口）。
         foreach (var drive in DriveInfo.GetDrives().Where(d => d.IsReady && d.DriveType == DriveType.Fixed))
         {
-            var candidate = Path.Combine(drive.RootDirectory.FullName, "Program Files");
-            if (Directory.Exists(candidate) && !roots.Any(r => r.Equals(candidate, StringComparison.OrdinalIgnoreCase)))
+            foreach (var leaf in new[] { "Program Files", "Program Files (x86)" })
             {
-                roots.Add(candidate);
+                var candidate = Path.Combine(drive.RootDirectory.FullName, leaf);
+                if (Directory.Exists(candidate) && !roots.Any(r => r.Equals(candidate, StringComparison.OrdinalIgnoreCase)))
+                {
+                    roots.Add(candidate);
+                }
             }
         }
 

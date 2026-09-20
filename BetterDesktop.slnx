@@ -53,32 +53,32 @@
       <Platform Project="x64" />
     </Project>
   </Folder>
-  <Folder Name="/host/">
-    <Project Path="host/BetterDesktop.Host.csproj">
+  <Folder Name="/packages/entry/host/">
+    <Project Path="packages/entry/host/BetterDesktop.Host.csproj">
       <Platform Project="x64" />
     </Project>
   </Folder>
-  <Folder Name="/launcher/">
-    <Project Path="launcher/BetterDesktop.Launcher.csproj">
+  <Folder Name="/packages/entry/launcher/">
+    <Project Path="packages/entry/launcher/BetterDesktop.Launcher.csproj">
       <Platform Project="x64" />
     </Project>
   </Folder>
-  <Folder Name="/launcher-tests/">
-    <Project Path="launcher-tests/BetterDesktop.Launcher.Tests.csproj">
+  <Folder Name="/packages/entry/launcher-tests/">
+    <Project Path="packages/entry/launcher-tests/BetterDesktop.Launcher.Tests.csproj">
       <Platform Project="x64" />
     </Project>
   </Folder>
-  <Folder Name="/recovery/">
-    <Project Path="recovery/BetterDesktop.Recovery.csproj">
+  <Folder Name="/packages/entry/recovery/">
+    <Project Path="packages/entry/recovery/BetterDesktop.Recovery.csproj">
       <Platform Project="x64" />
     </Project>
-  <Folder Name="/BetterDesktop.Cli/">
-    <Project Path="BetterDesktop.Cli/BetterDesktop.Cli.csproj">
+  <Folder Name="/packages/entry/cli/">
+    <Project Path="packages/entry/cli/BetterDesktop.Cli.csproj">
       <Platform Project="x64" />
     </Project>
   </Folder>
-  <Folder Name="/BetterDesktop.Cli.Tests/">
-    <Project Path="BetterDesktop.Cli.Tests/BetterDesktop.Cli.Tests.csproj">
+  <Folder Name="/packages/entry/cli-tests/">
+    <Project Path="packages/entry/cli-tests/BetterDesktop.Cli.Tests.csproj">
       <Platform Project="x64" />
     </Project>
   </Folder>
@@ -294,13 +294,13 @@
       <Platform Project="x64" />
     </Project>
   </Folder>
-  <Folder Name="/tray/">
-    <Project Path="tray/BetterDesktop.Tray.csproj">
+  <Folder Name="/packages/entry/tray/">
+    <Project Path="packages/entry/tray/BetterDesktop.Tray.csproj">
       <Platform Project="x64" />
     </Project>
   </Folder>
-  <Folder Name="/updater/">
-    <Project Path="updater/BetterDesktop.Updater.csproj">
+  <Folder Name="/packages/entry/updater/">
+    <Project Path="packages/entry/updater/BetterDesktop.Updater.csproj">
       <Platform Project="x64" />
     </Project>
   </Folder>

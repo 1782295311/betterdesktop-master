@@ -20,19 +20,9 @@ internal static class StaComWorker
     private static readonly object Gate = new();
     private static Dispatcher? _dispatcher;
 
-    public static T Run<T>(Func<T> func)
-        => EnsureStarted().Invoke(func, DispatcherPriority.Normal);
-
-    public static void Run(Action action)
-        => Run<object?>(() =>
-        {
-            action();
-            return null;
-        });
-
     /// <summary>
     /// 异步派发（不阻塞调用线程）。原生弹层的 TrackPopupMenuEx 是模态循环——必须 fire-and-forget，
-    /// UI 线程同步 Run 会把菜单模态周期变成宿主卡死（M0 分流纪律）。
+    /// UI 线程同步 Invoke 会把菜单模态周期变成宿主卡死（M0 分流纪律）。
     /// </summary>
     public static void Begin(Action action)
         => EnsureStarted().BeginInvoke(action, DispatcherPriority.Normal);

@@ -95,4 +95,21 @@ public interface IDockAppsService
     /// 按名称反查已安装列表取最新路径。路径仍有效返回原项；应用真被卸载返回 null。
     /// </summary>
     DockItemData? TryRefreshStalePath(DockItemData item);
+
+    /// <summary>
+    /// 全部固定项的健康报告（设置中心「Dock 固定项」消费）。**只读判定**，不修改任何状态。
+    /// 三态：Healthy（路径有效）/ Healable（原路径失效但已重绑到新路径）/ Orphaned（各级失配，视为已卸载）。
+    /// </summary>
+    IReadOnlyList<PinnedHealth> GetPinnedHealth();
+
+    /// <summary>
+    /// 把指定固定项手动重绑到新路径（用户在设置中心指认）。重解析后**静默回写**快照并保留原主键；
+    /// 路径无法解析为应用时不动作。
+    /// </summary>
+    void RebindTo(DockItemId id, string path);
+
+    /// <summary>
+    /// 清理所有 Orphaned 固定项（**删除持久化数据**，与渲染层"让位"不同）。返回清理数量。
+    /// </summary>
+    int PurgeOrphaned();
 }

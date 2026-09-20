@@ -46,18 +46,29 @@ public sealed class TesseractEngine : IConversionEngine
                 FileName = tesseract,
                 UseShellExecute = false,
                 CreateNoWindow = true,
+                // 红线 6：探测输出必须重定向——否则 ReadToEnd 抛 InvalidOperationException（内置前从未运行未暴露）
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
             };
             process.StartInfo.ArgumentList.Add("--version");
             process.Start();
-            var exited = process.WaitForExitAsync().Wait(3_000);
+            // 探测超时：tesseract 内置后首次冷启动慢（与 ffmpeg 同款），放宽到 10s
+            var exited = process.WaitForExitAsync().Wait(10_000);
             var stdout = exited ? process.StandardOutput.ReadToEnd() : string.Empty;
             var ok = exited && process.HasExited
                 && stdout.Contains("tesseract", StringComparison.OrdinalIgnoreCase);
+            if (!ok)
+            {
+                BetterDesktop.Kernel.Core.DiagnosticLog.Trace("shell-convert",
+                    $"tesseract 探测未通过: path={tesseract} exited={exited} code={(exited ? process.ExitCode : -1)} stdoutLen={stdout.Length} head='{(stdout.Length > 120 ? stdout[..120] : stdout)}'");
+            }
             _probeCache = ok ? EngineAvailability.Ok(stdout.Split('\n')[0].Trim()) : EngineAvailability.Missing;
         }
         catch (Exception ex)
         {
             _probeCache = new EngineAvailability(false, null, $"tesseract 探测失败: {ex.Message}");
+            BetterDesktop.Kernel.Core.DiagnosticLog.Trace("shell-convert",
+                $"tesseract 探测异常: path={tesseract} {ex.GetType().Name}: {ex.Message}");
         }
         return _probeCache;
     }
@@ -90,13 +101,17 @@ public sealed class TesseractEngine : IConversionEngine
         var name = Path.GetFileNameWithoutExtension(input);
         var outBase = Path.Combine(job.TempDir, name + "-ocr");
 
-        var (code, _, stderr) = await RunCaptureAsync(tesseract,
-            [input, outBase, "-l", "chi_sim+eng", "--psm", "6"], ct);
+        // 受管内置 tessdata 定位（UB-Mannheim exe 编译 DATADIR=Program Files 安装路径，迁移后须显式指定；
+        // 优先 exe 同目录 tessdata，缺语言包时回落 eng 逻辑不变）
+        var tessdataDir = Path.Combine(Path.GetDirectoryName(tesseract) ?? string.Empty, "tessdata");
+        string[] tessArgs = [input, outBase, "--tessdata-dir", tessdataDir, "-l", "chi_sim+eng", "--psm", "6"];
+
+        var (code, _, stderr) = await RunCaptureAsync(tesseract, tessArgs, ct);
         if (code != 0)
         {
             // 缺 chi_sim 语言包 → 回落 eng（诚实重试，不静默）
-            var (code2, _, stderr2) = await RunCaptureAsync(tesseract,
-                [input, outBase, "-l", "eng", "--psm", "6"], ct);
+            string[] engArgs = [input, outBase, "--tessdata-dir", tessdataDir, "-l", "eng", "--psm", "6"];
+            var (code2, _, stderr2) = await RunCaptureAsync(tesseract, engArgs, ct);
             if (code2 != 0)
             {
                 throw new ConvertException(ConvertError.ConversionFailed,
@@ -123,6 +138,9 @@ public sealed class TesseractEngine : IConversionEngine
             FileName = exe,
             UseShellExecute = false, // 红线 1：参数数组直传
             CreateNoWindow = true,
+            // 红线 6：子进程输出必须重定向——ReadToEndAsync 未重定向抛 InvalidOperationException（内置前从未运行未暴露）
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
         };
         foreach (var arg in args)
         {

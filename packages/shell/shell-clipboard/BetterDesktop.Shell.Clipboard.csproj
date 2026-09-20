@@ -1,11 +1,6 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <TargetFramework>net8.0-windows10.0.19041.0</TargetFramework>
-    <Nullable>enable</Nullable>
-    <ImplicitUsings>enable</ImplicitUsings>
-    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
-    <Platforms>x64</Platforms>
     <UseWPF>true</UseWPF>
     <RootNamespace>BetterDesktop.Shell.Clipboard</RootNamespace>
     <AssemblyName>BetterDesktop.Shell.Clipboard</AssemblyName>
@@ -20,6 +15,16 @@
     <ProjectReference Include="..\..\api\BetterDesktop.Api.csproj" />
     <ProjectReference Include="..\shell-core\BetterDesktop.Shell.Core.csproj" />
     <ProjectReference Include="..\shell-settings\BetterDesktop.Shell.Settings.csproj" />
+    <!-- engine 后端（默认）：IClipboardService 经 IPC 代理，杜绝宿主旧实现与引擎双写同一历史库 -->
+    <ProjectReference Include="..\shell-clipboard-ipc\BetterDesktop.Shell.Clipboard.Ipc.csproj" />
   </ItemGroup>
 
+
+
+  <ItemGroup>
+    <!-- 2026-09-17：独立设置进程（BetterDesktop.Settings.exe）按「分区目录」直接 new 本包的分区实现，
+         不再依赖插件 LoadAsync 注册（见 packages/shell/shell-settings-host/SectionCatalog.cs）。
+         只放开可见性，不改变任何运行时行为。 -->
+    <InternalsVisibleTo Include="BetterDesktop.Settings" />
+  </ItemGroup>
 </Project>

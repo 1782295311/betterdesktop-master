@@ -5,6 +5,7 @@
 
 using System.Threading;
 using BetterDesktop.Kernel.Contracts;
+using BetterDesktop.Shell.Music.Contracts;
 using BetterDesktop.Shell.Status.Contracts;
 using BetterDesktop.Shell.Status.Native;
 using BetterDesktop.Shell.Status.Services;
@@ -64,6 +65,10 @@ public sealed class StatusPlugin : IPlugin
         context.Provide<IImeMonitor>(ime);
         // 亮度：手动/事件驱动（PollIntervalMilliseconds=0），只注册服务不参与固定轮询。
         context.Provide<IBrightnessMonitor>(brightness);
+
+        // 媒体播放控制公共服务（SMTC）：供菜单栏 / 第三方扩展 / 灵动岛经 IContext.Get<IMediaPlaybackService>() 消费。
+        // 变更事件由服务内部按订阅者轮询（无订阅者零开销），不占用统一轮询器。
+        context.Provide<IMediaPlaybackService>(new MediaPlaybackService());
 
         // 统一轮询器：检测变化 → 触发 Changed + 经 IEventBus 广播 "status.changed"。
         // 注意：不 Provide<IStatusPoller>——全仓零消费方（面板由 _poller 字段直接驱动），

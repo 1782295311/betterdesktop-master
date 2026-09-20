@@ -15,8 +15,26 @@
 //! | 谁注册 | core 自注册，安装程序兜底 | 只靠安装程序 → core 自行搬迁目录就断；只靠自注册 → 装完没启动过 core 就没任务 |
 //! | 频率 | **5 分钟** | 1 分钟的恢复优势用户感知不到，日志膨胀是真的；入口 ensure 才是主要恢复路径 |
 //! | 身份 | **用户级**（当前用户 SID + `InteractiveToken` + `LeastPrivilege`） | 任务以 SYSTEM 跑会得到一个**不同 SID** 的 core，它建的管道当前用户连不上 —— 直接违反 §6.3 |
-//! | 动作 | core 绝对路径 + **无参数** + 显式工作目录 | 有参数会让任务与 core 的启动路径分叉；工作目录不写会落到 `%SystemRoot%\System32` |
+//! | 动作 | core 绝对路径 + `--from-task` + 显式工作目录 | 那个参数是**信息**（"本次启动来自兜底"），不是便利开关：core 靠它把"兜底敲门"与"用户显式启动"分开，从而能在用户主动退出后拒绝复活（见下一节）；工作目录不写会落到 `%SystemRoot%\System32` |
 //! | 清理 | 卸载程序删 + core 启动时自我修正 | 用户直接删目录时任务会残留，每次触发都失败 |
+//!
+//! # 停止语义：**崩溃**要拉回来，**用户主动退出**不许拉回来（2026-09-20）
+//!
+//! 兜底存在的理由只有一条：**崩溃是意外**。用户主动退出不是意外 —— 两者必须能被分开，
+//! 而"分开"的判据只能落在 core 自己身上：
+//!
+//! | 退出方式 | 留下什么 | 后果 |
+//! |---|---|---|
+//! | 崩溃 / 被杀 / 断电 | **什么都不留**（没有任何代码去写） | 任务照常把它拉回来 ✓ |
+//! | 托盘「退出」/ `task unregister` | 写 `core-stopped.flag` + **删掉任务** | 不再被拉回，直到用户显式启动 |
+//!
+//! 两道防线是刻意的：删任务是**意图**（兜底不该再存在），标记是**保险**（万一删失败，
+//! 任务再敲门时 core 自己会拒绝）。[`stop`] 里的顺序是"先写标记、再删任务"，
+//! 与 `main::stop_component` 同一条纪律 —— 先做几乎不会失败的那一步。
+//!
+//! 反向动作：**任何非兜底发起的启动都算"用户要它跑"** ⇒ 清标记（[`resume`]）。
+//! 因此启动器 / CLI / 安装器 / 双击 exe **都不需要知道这个标记存在**；只有兜底那一条路
+//! 必须带 [`LAUNCH_MARKER`] 自报身份。写入者一个、读取者一个，判据不会漂移。
 //!
 //! # 两个会咬人的设置（默认值都与"core 常驻"冲突）
 //!
@@ -37,12 +55,33 @@
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use crate::components;
+use crate::ownership;
 use crate::process::{self, RunOutput};
 use crate::security;
 use crate::shellmenu::path_eq;
 
 /// 任务名（**跨进程契约**：卸载程序、`recovery --clean-autostart`、验证脚本都按它查找）。
 pub const TASK_NAME: &str = "BetterDesktop Core Ensure";
+
+/// 兜底任务发起启动时携带的命令行标记。
+///
+/// # 契约
+/// **跨模块字面量**：本模块把它写进任务动作的 `<Arguments>`，`main.rs` 用它判断"本次启动来自兜底"
+/// （`main` 直接引用本常量，不另抄一份）。失配的表现是本模块要防的那类故障——
+/// "任务带着标记、core 认不出" ⇒ 把兜底启动误当成用户显式启动 ⇒ 退了又被拉回来，且**没有任何报错**。
+pub const LAUNCH_MARKER: &str = "--from-task";
+
+/// **用户主动停止** core 的标记（`%LOCALAPPDATA%\BetterDesktop\core-stopped.flag`）。
+///
+/// # 为什么
+/// 它存在的唯一理由是"崩溃与正常退出的区别"：崩溃**不写它**（没有任何代码去写），正常退出写它。
+/// 与 `components.json` 的 `stopFlag` 是同一种东西 —— 那边的写者是 `main::stop_component`、
+/// 读者是 `supervisor`；这边的写者是 [`stop`]、读者是 [`ensure`] 与 `main` 的启动闸门。
+///
+/// # 资源与生命周期
+/// 空文件、零字节；由 [`stop`] 创建、[`resume`] 删除。不持有句柄，删除是幂等的。
+pub const STOPPED_FLAG: &str = "core-stopped.flag";
 
 /// 触发间隔（ISO 8601 duration）。
 const REPEAT_INTERVAL: &str = "PT5M";
@@ -78,7 +117,9 @@ pub enum Ensured {
     Repaired(String),
     /// 已存在且配置正确，未做任何事。
     AlreadyCurrent,
-    /// **拒绝注册**：本进程不在稳定位置，已存在的任务也**原封不动**留给它（附原因）。
+    /// **拒绝写**（附原因，三种起因）：本进程不是这份部署（测试副本 / 旧版本残留）、
+    /// 它的位置会在 build/clean 中消失、或者用户已主动停止 core。
+    /// 已存在的任务**原封不动**留给合法的写者。
     Skipped(String),
 }
 
@@ -87,35 +128,49 @@ pub enum Ensured {
 /// 注意：这里用 `std::env::current_exe()` 作为任务动作的目标 —— 这正是"core 自行搬迁目录后
 /// 下次启动就把任务指回自己"的实现，不需要额外逻辑。
 ///
-/// # 但**先**判这个位置稳不稳定
+/// # 但**先**判本进程有没有资格写它
 ///
-/// 任务是一个**持久的系统级引用**（每 5 分钟跑一次）。若把开发 bin 的路径写进去，那个 bin
-/// 一次 clean/重建之后，任务就永远指向一个不存在的 exe —— 每次触发都失败，而且**没有任何地方
-/// 会报这条错**（core 已经不在了，日志无从产生）。
+/// 任务是一个**持久的系统级引用**（每 5 分钟跑一次），"谁能写它"因此必须有唯一答案。
+/// 判据在 [`crate::ownership`]，两句话：
 ///
-/// 这与"注册表里的 DLL 路径"是同一类问题，结论也相同：**持久引用必须指向最持久的位置**
-/// （见 `protocols/native-dll-path-test-vectors.json` 的 `_rule`）。
-/// 所以不在稳定位置时**宁可不注册**：少一条兜底，好过留一条每次必定失败的兜底。
+/// - 位置会在 build/clean 中消失（dev bin / `target/` / 打包中间目录）⇒ 不写。
+///   写进去的引用每次触发都失败，而那时 core 已经不在了、**没有任何地方会报这条错**。
+/// - 产品目录里的**另一份**构建（测试副本 / 旧版本残留）⇒ 也不写。
+///   它可以用既有的兜底，但不得创建、改写、删除它。
+///
+/// 第二条是 2026-09-20 真机事故的修正：此前只有第一条，于是"任务指向了别的 exe"这一分支
+/// 成了**无条件夺权** —— 谁最后启动谁拿走系统级任务，表现是"一个测试副本被计划任务反复复活，
+/// 只能靠手工删任务停下来"。因果与取证见
+/// `.agents/notes/implemented/bug-fix/2026-09-20-task-ownership.md`。
 ///
 /// 与 `shellmenu` 的 dev opt-in 不同的是，这里**没有 `--dev` 例外**：dev 注册右键扩展是
 /// "我要测这个功能"，而把一个开发目录写进系统级计划任务是纯负债，没有对应的收益。
 pub fn ensure() -> Result<Ensured, String> {
-    let exe = current_exe()?;
-    let install_root = crate::shellmenu::install_root();
-    let local_appdata = std::env::var("LOCALAPPDATA").ok().map(PathBuf::from);
-
-    if !is_stable_location(&exe, install_root.as_deref(), local_appdata.as_deref()) {
+    // 用户主动停过 ⇒ 不装也不修。这是"正常退出不被拉回来"的**第二道防线**
+    // （第一道是 [`stop`] 直接删任务）；万一那次删除失败，任务会继续每 5 分钟敲门，
+    // 而这条让每次敲门都变成一次便宜的拒绝（`main` 的启动闸门甚至更早，根本不创建实例）。
+    // 放在最前：它最便宜，且与位置 / 归属判据无关。
+    if is_stopped() {
         return Ok(Ensured::Skipped(format!(
-            "this core lives at {} which is neither under the install root ({}) nor under \
-             %LOCALAPPDATA%\\BetterDesktop — refusing to point a system-wide task at it",
-            exe.display(),
-            install_root
-                .as_deref()
-                .map(|p| p.display().to_string())
-                .unwrap_or_else(|| "not installed".to_string())
+            "core is STOPPED by the user ('{STOPPED_FLAG}' exists) — the fallback is neither \
+             created nor repaired; start core explicitly (launcher / bdctl / installer) to arm it"
         )));
     }
 
+    let exe = current_exe()?;
+    let install_root = crate::shellmenu::install_root();
+    let local_appdata = std::env::var("LOCALAPPDATA").ok().map(PathBuf::from);
+    let ownership = ownership::of(&exe, install_root.as_deref(), local_appdata.as_deref());
+
+    // **先判权限、再查任务**：不是主人时连 `schtasks` 都不必跑（省一次进程创建，
+    // 也让"副本不碰系统级任务"这条约束在读代码时一眼可见）。
+    if let Some(reason) = ownership::refusal_reason(ownership, &exe, install_root.as_deref()) {
+        return Ok(Ensured::Skipped(reason));
+    }
+
+    // 走到这里 ⇒ 本进程**就是**这份部署（`Owner` 是 `refusal_reason` 返回 `None` 的唯一输入）。
+    // 于是 `Stale`（任务指向别的 exe）**必须**夺回：安装根那一份是唯一合法的写者，
+    // 而副本在上一行就返回了，不可能反过来抢它。
     match query()? {
         TaskState::Current => Ok(Ensured::AlreadyCurrent),
         TaskState::Missing => {
@@ -129,38 +184,14 @@ pub fn ensure() -> Result<Ensured, String> {
     }
 }
 
-/// core 的 exe 是否位于**稳定位置**（安装根之下，或 `%LOCALAPPDATA%\BetterDesktop` 之下）。
-///
-/// 纯函数：不可注入 IO，因此两个"该拒绝"的分支可以被单测完整覆盖 ——
-/// 那正是这条守卫的价值所在（它防的是一个**没人会看到报错**的失败）。
-///
-/// `pub(crate)`：`autostart.rs`（HKCU\Run）**共用同一条守卫** ——
-/// 计划任务与 Run 键都是"持久化 core 启动路径"，把它们指向开发 bin 是同款负债，
-/// 守卫也必须只有一份（两套判据必然漂移）。
-pub(crate) fn is_stable_location(
-    exe: &Path,
-    install_root: Option<&Path>,
-    local_appdata: Option<&Path>,
-) -> bool {
-    let Some(dir) = exe.parent() else {
-        return false;
-    };
-    if let Some(root) = install_root
-        && crate::shellmenu::is_under(dir, root)
-    {
-        return true;
-    }
-    if let Some(base) = local_appdata
-        && crate::shellmenu::is_under(dir, &base.join(crate::shellmenu::PRODUCT_FOLDER))
-    {
-        return true;
-    }
-    false
-}
-
 /// 查询任务状态。
 ///
-/// 判定"是不是我们的"只看**两个字段**：`<Command>` 与 `<Interval>`。
+/// 判定"是不是我们的"看**三个字段**：`<Command>`、`<Arguments>` 与 `<Interval>`。
+///
+/// `<Arguments>` 是 2026-09-20 加进来的（见 [`LAUNCH_MARKER`]），它顺带解决了**迁移**：
+/// 旧定义没有这个元素 ⇒ 判为 [`TaskState::Stale`] ⇒ 下次 core 启动时被 `Repaired` 成新定义，
+/// 不需要任何手工步骤 —— 那正是 `classify` 存在的理由。
+///
 /// 不逐项比对全部设置 —— 那需要真正的 XML 解析与一个 XML 依赖；而本模块**生成**这份 XML，
 /// 知道它的确切形状，所以定点取字段是可靠的。完整配置校对由验证脚本（`schtasks /query /xml`
 /// + PowerShell `[xml]`）负责，那才是它该待的地方。
@@ -216,6 +247,94 @@ pub fn unregister() -> Result<(), String> {
         return Ok(());
     }
     run_schtasks(&["/delete", "/tn", TASK_NAME, "/f"]).map(|_| ())
+}
+
+// ───────────── 停止语义：崩溃 vs 用户主动退出（见模块头那一节） ─────────────
+
+/// 用户是否主动停止过 core。
+///
+/// # 做什么
+/// 判 `core-stopped.flag` 是否存在。
+///
+/// # 为什么
+/// 这是"崩溃 vs 正常退出"的**唯一判据**：崩溃不会留下标记（没有任何代码去写它），
+/// 于是兜底照常把它拉回来；正常退出会写标记（见 [`stop`]），兜底就被压制。
+///
+/// # 契约
+/// `true` = 用户停过、且此后没有显式启动过；`false` = 正常态（含"从未停过"）。
+///
+/// # 边界与失败路径
+/// `%LOCALAPPDATA%` 缺失时返回 `false`（读不到标记 ≠ 处于停止态）。
+/// 这是刻意的保守侧：宁可照常兜底，也不要因为读不到一个文件就让崩溃再也不被拉起。
+pub fn is_stopped() -> bool {
+    components::flag_exists(STOPPED_FLAG)
+}
+
+/// 撤掉兜底，并记住"这是用户要的"。调用方 = 托盘「退出」与 `task unregister` 动词。
+///
+/// # 做什么
+/// 写 [`STOPPED_FLAG`]，然后删除计划任务。
+///
+/// # 为什么
+/// 兜底的前提是"崩溃是意外"。用户主动退出不是意外，因此这个前提不再成立 ——
+/// 撤掉它既是**意图**的表达，也省掉此后每 5 分钟一次注定被拒的敲门。
+///
+/// # 契约
+/// `Ok(())` = 标记已写、任务已删（任务本来就不存在也算成功）。
+/// `Err(原因)` = 其中一步失败；原因点名是哪一步，**调用方必须如实记日志、不得当作成功**
+/// （"已停止"被静默推翻正是本仓反复强调的那类故障）。
+///
+/// # 边界与失败路径
+/// **先写标记、再删任务**：删任务依赖 `schtasks`，是两步里更可能失败的一步；
+/// 而标记一旦写下，"任务再敲门也被挡住"就已经成立。顺序理由同 `main::stop_component`
+/// （"先写标记、再停进程"）。因此删任务失败时返回的 `Err` 里明确写"标记已写"，
+/// 让调用方知道防线还剩一道。
+pub fn stop() -> Result<(), String> {
+    components::write_flag(STOPPED_FLAG)?;
+    match unregister() {
+        Ok(()) => Ok(()),
+        Err(e) => Err(format!(
+            "the stop flag '{STOPPED_FLAG}' was written (the task will now be refused), but \
+             removing the task failed: {e}"
+        )),
+    }
+}
+
+/// 解除"用户主动停止"。调用方 = `main` 的启动路径（确知本次启动不是兜底发起时）。
+///
+/// # 为什么返回 `bool` 而不是 `()`
+/// "本来就没停过"是最常见的情况，为它每次启动都记一行日志是噪声；调用方只该在**真的**
+/// 清掉了东西时说话。故返回"之前是否处于停止态"。
+///
+/// # 契约
+/// `Ok(true)` = 之前是停止态、现已解除；`Ok(false)` = 本来就没被停过（**不是错误**）；
+/// `Err(原因)` = 删标记失败（权限等），调用方必须记 ERROR —— 停止态会继续压制兜底。
+///
+/// # 调用方约束
+/// **只准在"本次启动不是兜底发起"时调用**（见 [`LAUNCH_MARKER`]）：否则兜底自己会把用户的
+/// 停止意图抹掉，那正是本模块要防的"退了又被拉回来"。
+pub fn resume() -> Result<bool, String> {
+    let was_stopped = is_stopped();
+    components::clear_flag(STOPPED_FLAG)?;
+    Ok(was_stopped)
+}
+
+/// 显式装回兜底（`task register` 动词）。调用方 = CLI / 安装器。
+///
+/// # 为什么不能只调 [`ensure`]
+/// `ensure()` 在停止态下会**正确地**拒绝 —— 所以"装回"这个意图必须先解除停止态。
+/// 顺序不可颠倒：反过来只会得到一个静默的 `Skipped`（命令"成功"了、任务却没回来）。
+///
+/// # 契约
+/// `Ok(outcome)` = 停止态已解除，`ensure()` 的结论原样返回给调用方；
+/// `Err(原因)` = 解除停止态失败，或 `ensure()` 失败。
+pub fn arm() -> Result<Ensured, String> {
+    if resume()? {
+        crate::log::info(format!(
+            "task register: cleared '{STOPPED_FLAG}' — the fallback was armed again by request"
+        ));
+    }
+    ensure()
 }
 
 // ───────────────────────────── 纯逻辑（可单测） ─────────────────────────────
@@ -277,6 +396,7 @@ fn build_xml(exe: &Path, sid: &str) -> String {
   <Actions Context="Author">
     <Exec>
       <Command>{command}</Command>
+      <Arguments>{LAUNCH_MARKER}</Arguments>
       <WorkingDirectory>{workdir}</WorkingDirectory>
     </Exec>
   </Actions>
@@ -306,6 +426,19 @@ fn classify(xml: &str, exe: &Path) -> TaskState {
         return TaskState::Stale {
             command,
             reason: format!("repeat interval is '{interval}', expected {REPEAT_INTERVAL}"),
+        };
+    }
+
+    // 标记缺失（老定义）⇒ 必须判过期：那样的任务拉起的 core 自报不出"我来自兜底"，
+    // 于是用户的停止标记会被绕过 —— 正是"退了又被拉回来"。这条也是**自动迁移**的落点。
+    let args = extract_tag(xml, "Arguments").unwrap_or_default();
+    if args != LAUNCH_MARKER {
+        return TaskState::Stale {
+            command,
+            reason: format!(
+                "action arguments are '{args}', expected '{LAUNCH_MARKER}' — a task without the \
+                 marker cannot be told apart from an explicit start of core"
+            ),
         };
     }
 
@@ -496,13 +629,68 @@ mod tests {
         );
     }
 
-    /// 动作**不得带参数**：有参数会让任务与 core 的启动路径分叉，以后加参数要改任务。
+    /// 动作**必须**带 `--from-task`：core 靠它把"兜底敲门"与"用户显式启动"分开 ——
+    /// 没有它，用户在托盘里按的「退出」会在 5 分钟内被兜底推翻。
+    ///
+    /// 这条测试此前断言的是**相反**的事（"动作必须无参数"）。改动的理由见模块头「停止语义」
+    /// 那一节：那个参数不是便利开关（`--ensure` 那类），而是 core 判断自己**来源**的唯一信息来源。
     #[test]
-    fn action_carries_no_arguments() {
+    fn action_carries_the_from_task_marker() {
         assert!(
-            !sample_xml().contains("<Arguments>"),
-            "任务动作必须是无参数的 core 本身（单实例即幂等，不需要 --ensure）"
+            sample_xml().contains(&format!("<Arguments>{LAUNCH_MARKER}</Arguments>")),
+            "任务动作必须带上标记，否则 core 分不出兜底启动与显式启动"
         );
+    }
+
+    /// 标记是**跨模块字面量**（`main.rs` 判定 argv 时引用本常量，不另抄一份）。
+    /// 钉住它 = 同时钉住"任务定义"与"启动判定"两侧 —— 改一处漏另一处的表现是
+    /// "任务带了标记但 core 认不出"，没有任何报错，且退回"退了又被拉回来"。
+    #[test]
+    fn launch_marker_is_the_cross_module_literal() {
+        assert_eq!(LAUNCH_MARKER, "--from-task");
+        assert!(LAUNCH_MARKER.is_ascii());
+        assert!(LAUNCH_MARKER.starts_with("--"));
+    }
+
+    /// 停止标记名是**跨进程字面量**（文档、排查的人、`%LOCALAPPDATA%` 路径都按它查找）。
+    #[test]
+    fn stopped_flag_name_is_pinned() {
+        assert_eq!(STOPPED_FLAG, "core-stopped.flag");
+        assert!(STOPPED_FLAG.is_ascii(), "flag 名要进文件路径，必须纯 ASCII");
+    }
+
+    // ───────────── 迁移与拒绝：任务定义里的标记 ─────────────
+
+    /// **迁移钉子**：老定义（没有 `<Arguments>`）必须判过期 —— 否则它会长期绕过用户的停止标记。
+    /// 判过期 ⇒ 下次 core 启动时被 `Repaired` 成新定义，不需要任何手工步骤。
+    #[test]
+    fn classify_rejects_a_task_without_the_marker() {
+        let xml = sample_xml().replace(&format!("<Arguments>{LAUNCH_MARKER}</Arguments>"), "");
+        assert!(!xml.contains("<Arguments>"), "测试前提：标记真的被摘掉了");
+
+        let TaskState::Stale { reason, .. } = classify(&xml, &sample_exe()) else {
+            panic!("a task without the launch marker must be judged stale");
+        };
+        assert!(reason.contains(LAUNCH_MARKER), "{reason}");
+    }
+
+    /// 反面：带**别的**参数也算过期（人手改过、或未来换了标记名）。
+    #[test]
+    fn classify_rejects_a_task_with_foreign_arguments() {
+        let xml = sample_xml().replace(LAUNCH_MARKER, "--something-else");
+        let TaskState::Stale { reason, .. } = classify(&xml, &sample_exe()) else {
+            panic!("foreign arguments must be judged stale");
+        };
+        assert!(reason.contains("--something-else"), "{reason}");
+    }
+
+    /// 停止态的判定只读、不改动任何东西（真机上"标记不存在"是绝大多数情况）。
+    ///
+    /// 单测**不得**制造真实的停止态（那会让用户机器上的 core 再也不被拉起），
+    /// 所以这里只断言"能给出结论、不 panic"；停止语义的真机验证见决策记录。
+    #[test]
+    fn probing_the_stop_flag_never_writes() {
+        let _ = is_stopped();
     }
 
     #[test]
@@ -628,59 +816,11 @@ mod tests {
         assert_eq!(classify(&xml, &exe), TaskState::Current);
     }
 
-    // ───────────── 稳定位置：拒绝把系统级任务指向开发目录 ─────────────
-
-    /// 三种"该接受"的位置：安装根之下 / `%LOCALAPPDATA%\BetterDesktop` 之下（含其子目录）。
-    #[test]
-    fn stable_location_accepts_install_root_and_production_folder() {
-        let base = Path::new(r"C:\Users\X\AppData\Local");
-        let root = Path::new(r"C:\Users\X\AppData\Local\BetterDesktop\app\2026.09.17.1610");
-
-        assert!(is_stable_location(
-            &root.join("betterdesktop-core.exe"),
-            Some(root),
-            Some(base)
-        ));
-        // 无 deployment.json（未用安装器装过）但仍在生产数据目录之下
-        assert!(is_stable_location(
-            &base.join(r"BetterDesktop\Standalone\betterdesktop-core.exe"),
-            None,
-            Some(base)
-        ));
-    }
-
-    /// **两个必须拒绝的位置** —— 这条守卫存在的全部理由。
-    ///
-    /// 开发 bin / dist 打包目录都是"一次 clean 就没了"的位置：把系统级任务指过去，
-    /// 任务会每 5 分钟失败一次，而那时 core 已经不在了、没有任何地方会报这条错。
-    #[test]
-    fn stable_location_rejects_build_and_packaging_directories() {
-        let base = Path::new(r"C:\Users\X\AppData\Local");
-        let root = Path::new(r"C:\Users\X\AppData\Local\BetterDesktop\app\2026.09.17.1610");
-
-        assert!(!is_stable_location(
-            Path::new(r"C:\dev\better-desktop\BetterDesktop.Cli\bin\Release\betterdesktop-core.exe"),
-            Some(root),
-            Some(base)
-        ));
-        assert!(!is_stable_location(
-            Path::new(r"C:\dev\better-desktop\core\target\release\betterdesktop-core.exe"),
-            Some(root),
-            Some(base)
-        ));
-        assert!(!is_stable_location(
-            Path::new(r"C:\dev\better-desktop\dist\modules\X\BetterDesktop\betterdesktop-core.exe"),
-            Some(root),
-            Some(base)
-        ));
-
-        // 防"字符串前缀"误判：BetterDesktopTrap 不是 BetterDesktop 的子目录
-        assert!(!is_stable_location(
-            &base.join(r"BetterDesktopTrap\bin\betterdesktop-core.exe"),
-            None,
-            Some(base)
-        ));
-    }
+    // ───────────── 写权：判据与测试都在 `crate::ownership` ─────────────
+    //
+    // 原先这里有两组 `is_stable_location` 的测试。它们随判据一起搬到了 `ownership.rs`
+    // （并在那里扩成三态：`Owner` / `Tenant` / `Rejected`）—— 规则的唯一性不止体现在实现上，
+    // 也体现在"测试跟着规则走"：判据搬走而测试留下，下一个人就会以为这里还有第二条规则。
 
     // ───────────── 真机：只读探测（不注册、不删除） ─────────────
 

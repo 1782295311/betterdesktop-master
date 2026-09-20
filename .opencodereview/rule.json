@@ -1,0 +1,18 @@
+{
+  "rules": [
+    {
+      "path": "**/*.cs",
+      "merge_system_rule": true,
+      "rule": "安全五层防线（判据与豁免写法见 docs/security-hardening.md，机器门禁 scripts/verify-security.ps1）：\n1) 命名管道：服务端 `new NamedPipeServerStream` 必须有**字节上限**（走 kernel 的 `BoundedPipeLine.TryRead`）与总超时，并校验协议 magic。无界 `ReadLine` 在实例数=1 时可被『只写不换行』打死整条命令通道 —— 这是安全缺陷不是风格问题。\n2) 进程启动：`UseShellExecute = false`（或未设置）时，`ProcessStartInfo.Arguments` **禁止字符串插值/拼接**，必须 `ArgumentList` 逐项传参；`Process.Start(exe, args + ...)` 两参重载同样禁止。壳动词调用（`explorer.exe \"路径\"`、`Verb = \"runas\"/\"properties\"/\"openas\"`）显式 `UseShellExecute = true` 是正确用法，不算违规。来自注册表（UninstallString / ShellNew\\Command）或本进程命令行的字符串尤须警惕参数注入。\n3) 反序列化：来自管道 / HTTP / 跨进程 stdio 的 JSON 必须显式设 `MaxDepth`（不得依赖库默认值）；禁止多态反序列化（`TypeNameHandling.All` / 从不可信来源 `JsonDerivedType`）。\n4) 原生与程序集加载：`LoadLibrary` / `NativeLibrary.TryLoad` / `Assembly.LoadFrom` 禁止传不含路径分隔符的字面量（会被当前目录劫持），必须用已绝对化的变量。\n5) 密钥：api key / token / secret 不得作为源码字面量或写入日志；敏感值走 DPAPI 或配置注入。\n6) 异常：禁止空 `catch { }`；catch 块至少记日志或写明『为何可以忽略』—— 静默吞掉的安全异常等于失效的防线。\n7) 路径：对来自清单/配置/外部的路径必须先用 `Path.GetFullPath` 规范化再做**按路径段**的前缀校验（字符串前缀判会把 `…\\BetterDesktopTrap\\bin` 误当成 `…\\BetterDesktop` 之下），并拒绝绝对路径与 `..`。\n豁免必须在同一行或上方 3 行内写 `SECURITY-EXEMPT: <理由>` —— 没有理由的豁免等于把红线变成装饰。"
+    },
+    {
+      "path": "**/CMakeLists.txt",
+      "merge_system_rule": true,
+      "rule": "原生安全加固：工程必须**显式**声明 `/guard:cf`（控制流保护，MSVC 默认关，不写就没有）、`/DYNAMICBASE`（ASLR）、`/NXCOMPAT`（DEP）、`/GS`（栈保护），链接期同样要有 `/guard:cf` `/DYNAMICBASE` `/NXCOMPAT`。依赖工具链默认值等于换个版本就失守。若目标 DLL 会被进程内加载（如进 explorer），这些项尤其必要。`/Qspectre` 需要额外的 Spectre 缓解库组件，未安装会导致链接失败，故本仓库有意不加 —— 见到缺失不要当缺陷。"
+    },
+    {
+      "path": "**/*.cs",
+      "rule": "跨进程协议：管道名与 magic 前缀必须**单点维护**（引用 `MenuCommandPipeClient` / `DesktopControlPipe` 等常量），禁止在调用方写字面量 —— 字面量副本漂移会让『谁该处理这条消息』变成不确定。管道读取必须同时具备**超时**与**字节上限**两项（缺一即留下可用性攻击面）。"
+    }
+  ]
+}

@@ -8,6 +8,7 @@ using System.Windows.Interop;
 using System.Windows.Media;
 using System.Windows.Threading;
 using BetterDesktop.Shell.Core.Native;
+using BetterDesktop.Shell.Core.Surface;
 using BetterDesktop.Shell.WindowTracker.Native;
 
 namespace BetterDesktop.Shell.WindowTracker.Thumbnail;
@@ -33,29 +34,63 @@ public sealed class ThumbnailWindow : Window
     private readonly List<DwmThumbnail> _thumbnails = new();
     private Point _anchorScreen;
 
-    // 悬停缩略图 → 对应窗口临时置顶（Aero Peek 语义）。本窗持有，关闭即还原。
+    // 2026-09-12：悬停缩略图 → 实时大图预览层（PreviewWindow，替代 DWM 透明化 Aero Peek）。
+    // DwmActivateLivePreview 会透明化 dock 与缩略图浮层（EXCLUDED_FROM_PEEK 实测无效），
+    // 用户"只能预览无法选择进入"；改 DwmRegisterThumbnail 大图预览（不透明化任何窗口）。
+    private PreviewWindow? _previewWindow;
+
+    /// <summary>
+    /// 【2026-09-14 用户决定：改回 v2】悬停格改为**原生 peek**
+    /// （<c>DwmActivateLivePreview</c> → DWM 合成器层「只亮出目标窗口」，免疫 UIPI，管理员窗口同样有效）。
+    /// <para>代价（已知且用户接受）：peek 会一并变暗 dock 与浮层本身——这正是当年否决 v2 的原因，
+    /// 现由「dock 挂桌面层」尝试规避（<c>BETTERDESKTOP_DOCK_DESKTOP_LAYER=1</c>）。</para>
+    /// <para>回退：<c>BETTERDESKTOP_DOCK_PEEK=v3</c> → 走原自绘大图预览层（不透明化任何窗口）。
+    /// 决策与验收见 docs/plans/2026-09-14-dock-desktop-layer-peek-v2.md。</para>
+    /// </summary>
+    private static readonly bool UseNativePeek = !string.Equals(
+        Environment.GetEnvironmentVariable("BETTERDESKTOP_DOCK_PEEK"),
+        "v3",
+        StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>当前 peek 的目标窗口句柄（<see cref="IntPtr.Zero"/> = 未在 peek）。</summary>
+    private IntPtr _peekTarget;
+
     private readonly WindowPeek _peek = new();
-    // 缩略图单元 → 源窗口句柄（供鼠标命中测试定位"该 peek 谁"）。
+
+    /// <summary>
+    /// peek 的 callingHwnd：**预览期间不被 DWM 透明化的那个窗口**（调用方传入，通常 = DockWindow）。
+    /// IntPtr.Zero 时退回本浮层自身句柄（旧行为）。
+    /// </summary>
+    private readonly IntPtr _callingHwnd;
+
+    private readonly ThumbnailQuality _quality;
+    // 缩略图单元 → 源窗口句柄（供关闭按钮/点击进入定位）。
     private readonly List<(Border Cell, IntPtr Hwnd)> _cells = new();
-    // 上一次 Begin 失败的句柄：避免高频 MouseMove 重复触发失败并狂刷诊断日志。
-    private IntPtr _peekFailure;
 
     // 单元描边：peek 生效时高亮，让用户一眼看出"哪个窗口被临时置顶了"。
-    private static readonly Brush CellIdleBrush = Frozen(Color.FromArgb(160, 255, 255, 255));
-    private static readonly Brush CellActiveBrush = Frozen(Color.FromArgb(255, 10, 132, 255));
-    private static readonly Brush CellIdleBackBrush = Frozen(Color.FromArgb(28, 255, 255, 255));
-    private static readonly Brush CellActiveBackBrush = Frozen(Color.FromArgb(64, 10, 132, 255));
+    // 颜色走主题令牌（前景白/强调色）实时取值，随亮暗模式与皮肤跟随。
+    private static Brush CellIdleBrush => ThemeBrushes.Tint("ThemeForeground", 0.63);
+    private static Brush CellActiveBrush => ThemeBrushes.Get("SkinAccentFromSkin");
+    private static Brush CellIdleBackBrush => ThemeBrushes.Tint("ThemeForeground", 0.11);
+    private static Brush CellActiveBackBrush => ThemeBrushes.AccentTint(0.25);
 
-    private static Brush Frozen(Color color)
-    {
-        var brush = new SolidColorBrush(color);
-        brush.Freeze();
-        return brush;
-    }
-
-    public ThumbnailWindow(Point anchorScreen, IReadOnlyList<RunningWindow> windows, ThumbnailQuality quality)
+    /// <param name="anchorScreen">屏幕锚点。</param>
+    /// <param name="windows">要展示缩略图的窗口集合。</param>
+    /// <param name="quality">缩略图质量档。</param>
+    /// <param name="callingHwnd">
+    /// peek 的 callingHwnd = **预览期间不被透明化的那个窗口**，必须传 **DockWindow 句柄**：
+    /// 传浮层自身会让 peek 把 dock（含运行区）一并变暗，用户观感即"运行区抽搐/闪"
+    /// （见 docs/plans/2026-09-11-host-elevation-dock-peek.md §7 Q1；该结论此前未落地到代码）。
+    /// </param>
+    public ThumbnailWindow(
+        Point anchorScreen,
+        IReadOnlyList<RunningWindow> windows,
+        ThumbnailQuality quality,
+        IntPtr callingHwnd)
     {
         _anchorScreen = anchorScreen;
+        _quality = quality;
+        _callingHwnd = callingHwnd;
 
         var (thumbW, thumbH) = quality switch
         {
@@ -146,10 +181,15 @@ public sealed class ThumbnailWindow : Window
 
             cell.Child = card;
 
+            cell.MouseEnter += (_, _) => OpenPreview(captured);
             cell.MouseLeftButtonUp += (_, _) =>
             {
-                // 点选 = 真正激活：放弃 peek 的还原动作（否则会被先收回最小化再激活，闪一下）。
+                // 点选 = 真正激活进入。
+                // 【v2 契约】激活前必须 Cancel()：否则 End() 会先把被预览窗口收回最小化，
+                // ActivateWindow 再把它还原 → 视觉上"闪一下"（WindowPeek 显式记录了这条）。
                 _peek.Cancel();
+                _peekTarget = IntPtr.Zero;
+                ClosePreview();
                 // 同 dock 运行区：MouseUp 处理中鼠标仍被本线程捕获，SetForegroundWindow 会被拒——延迟激活。
                 // 带 UIPI 回退（任务管理器这类高完整性窗口直连唤不动，交给应用自己唤醒）。
                 Dispatcher.BeginInvoke(
@@ -164,8 +204,8 @@ public sealed class ThumbnailWindow : Window
 
         var outer = new Border
         {
-            Background = new SolidColorBrush(Color.FromArgb(235, 26, 26, 30)),
-            BorderBrush = new SolidColorBrush(Color.FromArgb(180, 255, 255, 255)),
+            Background = new SolidColorBrush(Colors.Black) { Opacity = 0.92 },
+            BorderBrush = ThemeBrushes.Tint("ThemeForeground", 0.7),
             BorderThickness = new Thickness(1),
             CornerRadius = new CornerRadius(12),
             Child = wrap
@@ -175,110 +215,15 @@ public sealed class ThumbnailWindow : Window
         SourceInitialized += OnSourceInitialized;
 
         // 窗口显示后（Loaded）再定位：此时 ActualWidth/Height 已由 SizeToContent 结算完成。
-        Loaded += (_, _) =>
-        {
-            PositionAbove();
-            // 浮层可能正好盖在光标下弹出（贴屏幕顶时改为显示在图标下方）：此时光标不动就没有任何
-            // MouseMove，peek 永远不触发。用静态鼠标位置补一次命中测试，保证"落下即在"的缩略图立即置顶。
-            RefreshPeekFromCursor();
-        };
+        Loaded += (_, _) => PositionAbove();
         SizeChanged += (_, _) => PositionAbove();
 
-        // peek 由「鼠标移动 + 命中测试」驱动，不用 MouseEnter/MouseLeave：
-        // 分层透明窗跨窗口移动时 enter/leave 事件可能丢一次或滞留，丢一次就等于"这个功能随机失效"；
-        // 命中测试则每次移动都重算，天然自愈。MouseLeave 只作兜底。
-        MouseMove += OnPreviewMouseMove;
-        MouseLeave += (_, _) =>
-        {
-            _peekFailure = IntPtr.Zero;
-            _peek.End();
-            SyncPeekHighlight();
-        };
+        // 大图预览由 cell.MouseEnter 打开、PreviewWindow 自身 MouseLeave / 本浮层 MouseLeave 关闭
+        // （不用全局命中测试：PreviewWindow 是独立顶层窗，生命周期由自身鼠标事件管理更稳）。
+        MouseLeave += (_, _) => ClosePreview();
 
-        // 任何退出路径（点选/宿主关闭/退出）都必须还原被临时抬起的窗口，绝不把它留在最前。
-        Closed += (_, _) => _peek.End();
-    }
-
-    /// <summary>
-    /// 按光标命中测试决定"当前该 peek 谁"：命中某张缩略图 → 抬它（含最小化窗口）；
-    /// 命中浮层空白 → 全部还原。高亮同步反映 <see cref="WindowPeek.Target"/>（= 真正生效的目标）。
-    /// </summary>
-    private void OnPreviewMouseMove(object sender, MouseEventArgs e)
-    {
-        try
-        {
-            HitTestAndPeek(e.GetPosition(this));
-        }
-        catch
-        {
-            // 鼠标位置不可用时保持现状。
-        }
-    }
-
-    /// <summary>用当前光标位置（不经事件）补一次命中测试。</summary>
-    private void RefreshPeekFromCursor()
-    {
-        try
-        {
-            HitTestAndPeek(Mouse.GetPosition(this));
-        }
-        catch
-        {
-            // 窗口尚未建立 PresentationSource 时忽略。
-        }
-    }
-
-    private void HitTestAndPeek(Point pos)
-    {
-        if (_cells.Count == 0)
-        {
-            return;
-        }
-
-        var hit = IntPtr.Zero;
-        foreach (var (cell, hwnd) in _cells)
-        {
-            if (cell.ActualWidth <= 0 || cell.ActualHeight <= 0)
-            {
-                continue;
-            }
-
-            try
-            {
-                var origin = cell.TranslatePoint(new Point(0, 0), this);
-                if (new Rect(origin, new Size(cell.ActualWidth, cell.ActualHeight)).Contains(pos))
-                {
-                    hit = hwnd;
-                    break;
-                }
-            }
-            catch
-            {
-                // 单个单元换算失败不阻断其它单元判定。
-            }
-        }
-
-        if (hit == IntPtr.Zero)
-        {
-            if (_peek.IsActive)
-            {
-                _peek.End();
-                SyncPeekHighlight();
-            }
-
-            return;
-        }
-
-        // 仅在目标切换时才 Begin：MouseMove 是高频事件，重复调 Begin 会重复写诊断日志。
-        if (_peek.Target != hit && hit != _peekFailure)
-        {
-            if (!_peek.Begin(hit))
-            {
-                _peekFailure = hit;
-            }
-
-            SyncPeekHighlight();
-        }
+        // 任何退出路径（点选/宿主关闭/退出）都关闭大图预览层。
+        Closed += (_, _) => ClosePreview();
     }
 
     // 关闭按钮所在顶栏高度：撑开一条与缩略图互斥的区域（按钮不可与缩略图矩形重叠）。
@@ -292,8 +237,8 @@ public sealed class ThumbnailWindow : Window
     /// </summary>
     private static Border BuildCloseButton(Action onClick)
     {
-        var idle = new SolidColorBrush(Color.FromArgb(64, 255, 255, 255));
-        var hover = new SolidColorBrush(Color.FromArgb(230, 232, 17, 35));
+        var idle = ThemeBrushes.Tint("ThemeForeground", 0.25);
+        var hover = ThemeBrushes.Tint("StatusDanger", 0.9);
 
         var mark = new TextBlock
         {
@@ -338,11 +283,8 @@ public sealed class ThumbnailWindow : Window
     {
         try
         {
-            // 窗口即将消失：放弃 peek 的还原动作（还原一个不存在的窗口没有意义）。
-            if (_peek.Target == window.Hwnd)
-            {
-                _peek.Cancel();
-            }
+            // 窗口即将消失：关闭大图预览（预览一个不存在的窗口没有意义）。
+            ClosePreview();
 
             DebugLog.Trace("Preview", $"close request hwnd=0x{(long)window.Hwnd:X} title={window.Title}");
             RunningAppDetector.CloseWindow(window.Hwnd);
@@ -366,16 +308,81 @@ public sealed class ThumbnailWindow : Window
         }
     }
 
-    /// <summary>把"哪张缩略图正处于临时置顶态"画出来（描边加粗 + 强调色）。</summary>
-    private void SyncPeekHighlight()
+    /// <summary>
+    /// 悬停缩略图 → 打开（或切换到）该窗口的实时大图预览层。
+    /// 目标相同则不重复打开；目标不同先关旧的再开新的。
+    /// </summary>
+    private void OpenPreview(RunningWindow window)
     {
-        var active = _peek.Target;
-        foreach (var (cell, hwnd) in _cells)
+        try
         {
-            var on = active != IntPtr.Zero && hwnd == active;
-            cell.BorderBrush = on ? CellActiveBrush : CellIdleBrush;
-            cell.BorderThickness = on ? new Thickness(2) : new Thickness(1);
-            cell.Background = on ? CellActiveBackBrush : CellIdleBackBrush;
+            // 【v2 默认路径】原生 peek：让系统亮出**真窗口**，不再是我们的自绘层。
+            if (UseNativePeek)
+            {
+                if (_peekTarget == window.Hwnd)
+                {
+                    return;
+                }
+
+                ClosePreview();
+                _peekTarget = window.Hwnd;
+                _peek.Begin(
+                    window.Hwnd,
+                    _callingHwnd != IntPtr.Zero
+                        ? _callingHwnd
+                        : new System.Windows.Interop.WindowInteropHelper(this).Handle);
+                DebugLog.Trace("Peek", $"native peek begin hwnd=0x{(long)window.Hwnd:X} title={window.Title}");
+                return;
+            }
+
+            if (_previewWindow is not null)
+            {
+                if (_previewWindow.Target == window.Hwnd)
+                {
+                    return;
+                }
+                ClosePreview();
+            }
+
+            _previewWindow = new PreviewWindow(window, _quality);
+            _previewWindow.Closed += (_, _) => _previewWindow = null;
+            _previewWindow.Show();
+            DebugLog.Trace("Preview", $"large preview open hwnd=0x{(long)window.Hwnd:X} title={window.Title}");
+        }
+        catch
+        {
+            // 预览层打开失败不阻断浮层（缩略图浮层仍可用）。
+        }
+    }
+
+    /// <summary>关闭大图预览层（幂等）。</summary>
+    private void ClosePreview()
+    {
+        try
+        {
+            // v2 路径：结束原生 peek（幂等；未在 peek 时无副作用）。
+            // 用 End() 而非 Cancel()：正常关闭要**原样收回**被预览窗口的最小化状态。
+            if (_peekTarget != IntPtr.Zero)
+            {
+                _peekTarget = IntPtr.Zero;
+                _peek.End();
+            }
+
+            if (_previewWindow is null)
+            {
+                return;
+            }
+
+            var p = _previewWindow;
+            _previewWindow = null;
+            if (p.IsVisible)
+            {
+                p.Close();
+            }
+        }
+        catch
+        {
+            // 关闭失败不阻断浮层。
         }
     }
 

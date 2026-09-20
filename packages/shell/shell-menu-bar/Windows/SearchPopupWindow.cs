@@ -22,6 +22,9 @@ using System.Windows.Media.Imaging;
 using System.Windows.Shapes;
 using System.Windows.Threading;
 using BetterDesktop.Shell.AppSource.Contracts;
+using BetterDesktop.Shell.AppSource.Models;
+using BetterDesktop.Shell.ContextMenus.Contracts;
+using BetterDesktop.Shell.Core.Services;
 using BetterDesktop.Shell.Core.Surface;
 using BetterDesktop.Shell.Core.Vibrancy;
 using BetterDesktop.Shell.MenuBar.Contracts;
@@ -33,7 +36,7 @@ namespace BetterDesktop.Shell.MenuBar.Windows;
 // ── 本文件方法级白话索引（全局搜索面板，白话 → 方法）──
 //   "面板整体 / 执行搜索 / 渲染结果" → BuildContent / RunSearchAsync / RenderResults
 //   "分组标题 / 单条结果行 / 详情文案" → CreateGroupHeader / CreateResultRow / ResolveDetailText；结果图标异步加载 LoadResultIconAsync
-//   "结果右键菜单 / 打开 / 在资源管理器定位" → ShowResultMenu（AddMenuItem 加项）/ Launch / RevealInExplorer / ResolveRevealPath
+//   "结果右键菜单 / 打开 / 在资源管理器定位" → ShowResultMenu（AppendAppEntryItems 走共用构建器）/ Launch / ResolveRevealPath（系统级动作在 shell-core/Services/AppEntryActions.cs）
 //   "空结果态 / 类型字形"             → ShowEmpty / CreateSettingsGlyph / CreateFolderGlyph
 //   搜索数据源（应用/设置/文件）在 StartMenuService.SearchAsync 与各搜索 Provider。
 // ────────────────────────────────────
@@ -46,15 +49,28 @@ internal sealed class SearchPopupWindow : MenuBarPopupWindow
 
     private const double DefaultWidth = 440;
 
+    /// <summary>组内默认展示条数（2026-09-17 分组展示改造）：超过即折叠，组尾提供「展开全部」入口——
+    /// 所有适配结果全量返回，展示层默认收敛，由用户主动展开/筛选减少显示。</summary>
+    private const int CollapsedGroupMax = 8;
+
     private readonly IStartMenuSearchService? _search;
     private readonly IAppIconService? _appIcon;
+    /// <summary>固定服务。已由 <c>MenuBarPlugin.Inject</c> 声明为硬依赖 → 正常路径恒非 null；
+    /// 可空只作兜底（依赖未满足时面板仍可用，仅省略固定项，不整面板失效）。</summary>
     private readonly IPinningService? _pinning;
+    /// <summary>应用源服务（LNK/URL/EXE → AppItem，<c>ResolveFromPath</c>）：搜索结果右键把
+    /// 文件类命中的程序（如引擎索引出的 MAA.exe）解析成应用条目，补上「固定到 Dock」（2026-09-17）。</summary>
+    private readonly IAppSourceService? _appSource;
     private readonly BetterDesktop.Shell.Clipboard.Contracts.IClipboardService? _clipboard;
     private readonly DispatcherTimer _debounce;
     private TextBox? _queryBox;
     private StackPanel? _resultHost;
     private FrameworkElement? _recentClipboardBlock;
+    private Border? _filterBar;
     private int _generation; // 丢弃过期结果：每次新搜索递增，异步回写前比对
+    private IReadOnlyList<SearchResult>? _lastResults; // 最近一次渲染的结果集（筛选/展开重渲染用）
+    private string? _activeCategoryFilter;             // null=全部；"App"/"Settings"/"File"=只看该类
+    private readonly HashSet<string> _expandedCategories = new(StringComparer.OrdinalIgnoreCase);
 
     public SearchPopupWindow(
         IStartMenuSearchService? search,
@@ -62,13 +78,15 @@ internal sealed class SearchPopupWindow : MenuBarPopupWindow
         IVibrancyService vibrancy,
         IAppearanceService? appearance = null,
         IPinningService? pinning = null,
-        BetterDesktop.Shell.Clipboard.Contracts.IClipboardService? clipboard = null)
+        BetterDesktop.Shell.Clipboard.Contracts.IClipboardService? clipboard = null,
+        IAppSourceService? appSource = null)
         : base(vibrancy, appearance)
     {
         _search = search;
         _appIcon = appIcon;
         _pinning = pinning;
         _clipboard = clipboard;
+        _appSource = appSource;
         Width = DefaultWidth;
         MinWidth = DefaultWidth;
         SizeToContent = SizeToContent.Height;
@@ -101,12 +119,12 @@ internal sealed class SearchPopupWindow : MenuBarPopupWindow
         {
             Height = 30,
             FontSize = 13,
-            Foreground = new SolidColorBrush(Color.FromRgb(0x20, 0x20, 0x20)),
+            Foreground = Brushes.Black,
             Background = Brushes.Transparent,
             BorderThickness = new Thickness(0),
             VerticalContentAlignment = VerticalAlignment.Center,
             Padding = new Thickness(8, 0, 8, 0),
-            CaretBrush = new SolidColorBrush(Color.FromRgb(0x20, 0x20, 0x20))
+            CaretBrush = Brushes.Black
         };
         var inputBorder = new Border
         {
@@ -147,6 +165,18 @@ internal sealed class SearchPopupWindow : MenuBarPopupWindow
 
         // ---- 结果区 ----
         _resultHost = new StackPanel { Orientation = Orientation.Vertical };
+
+        // 类别筛选条（2026-09-17）：全部 / 应用 / 设置 / 文件 + 计数，点击切换只看某类。
+        // 全量结果由这里交给用户主动收敛，而不是引擎/聚合层替他截断。
+        _filterBar = new Border
+        {
+            Margin = new Thickness(0, 2, 0, 6),
+            Padding = new Thickness(2, 0, 2, 0),
+            Visibility = Visibility.Collapsed,
+            Child = new WrapPanel { Orientation = Orientation.Horizontal }
+        };
+        column.Children.Add(_filterBar);
+
         var scroll = new ScrollViewer
         {
             Content = _resultHost,
@@ -198,39 +228,204 @@ internal sealed class SearchPopupWindow : MenuBarPopupWindow
     }
 
     /// <summary>
-    /// 渲染结果：**全局按 Score 排序**（聚合层已降序排好），只在类别切换处插入分组标题。
-    /// 刻意不按"应用→设置→文件"固定分组渲染——那会让分组顺序压过置信度
-    /// （搜 maa 时强匹配的 MAA 文件被无关应用组压在下面，正是用户反馈的问题）。
+    /// 渲染结果：**按组渲染**（2026-09-17 分组展示改造）。聚合层已按「App 固定第一 →
+    /// 其余类别按命中数升序」排好组序，组内 Score 降序；本方法保持该顺序逐组渲染：
+    /// 组标题（名称 + 计数 + 折叠/展开箭头，可点击切换）、组内行（默认前
+    /// <see cref="CollapsedGroupMax"/> 条，组尾「展开全部 N 条」）、顶部筛选条（全部/应用/设置/文件）。
+    /// 全量结果不做截断——展示层默认收敛 + 用户主动筛选/展开。
     /// </summary>
     private void RenderResults(IReadOnlyList<SearchResult> results)
     {
         if (_resultHost is null) return;
+        _lastResults = results;
         _resultHost.Children.Clear();
 
-        string? lastCategory = null;
-        foreach (var result in results)
+        // 类别计数（全量，非筛选后）——筛选条显示真实规模
+        var counts = results
+            .GroupBy(x => x.Category, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(g => g.Key, g => g.Count(), StringComparer.OrdinalIgnoreCase);
+        RenderFilterBar(counts);
+
+        var filtered = _activeCategoryFilter is null
+            ? results
+            : results.Where(r => string.Equals(r.Category, _activeCategoryFilter, StringComparison.OrdinalIgnoreCase)).ToList();
+        if (filtered.Count == 0)
         {
-            if (!string.Equals(result.Category, lastCategory, StringComparison.OrdinalIgnoreCase))
+            // 保留筛选条：用户可切回「全部」或其它类别（此时不隐藏，避免回到无结果的死胡同）
+            ShowEmpty(_activeCategoryFilter is null ? "没有找到匹配结果" : "该类别没有匹配结果", keepFilterBar: true);
+            return;
+        }
+
+        // 保持聚合层组序（GroupBy 保序），逐组渲染
+        string? currentCategory = null;
+        var bucket = new List<SearchResult>();
+        void Flush()
+        {
+            if (bucket.Count > 0)
             {
-                lastCategory = result.Category;
-                _resultHost.Children.Add(CreateGroupHeader(CategoryDisplayName(result.Category)));
+                RenderCategory(currentCategory!, bucket);
             }
-            _resultHost.Children.Add(CreateResultRow(result));
+        }
+
+        foreach (var result in filtered)
+        {
+            if (!string.Equals(result.Category, currentCategory, StringComparison.OrdinalIgnoreCase))
+            {
+                Flush();
+                currentCategory = result.Category;
+                bucket.Clear();
+            }
+
+            bucket.Add(result);
+        }
+
+        Flush();
+    }
+
+    /// <summary>渲染单个类别组：标题（计数 + 折叠箭头）→ 组内行（默认前 N 条）→ 展开入口。</summary>
+    private void RenderCategory(string category, List<SearchResult> items)
+    {
+        _resultHost!.Children.Add(CreateGroupHeader(category, items.Count));
+
+        var expanded = _expandedCategories.Contains(category);
+        var visibleCount = expanded ? items.Count : Math.Min(CollapsedGroupMax, items.Count);
+        for (var i = 0; i < visibleCount; i++)
+        {
+            _resultHost.Children.Add(CreateResultRow(items[i]));
+        }
+
+        if (!expanded && items.Count > CollapsedGroupMax)
+        {
+            _resultHost.Children.Add(CreateExpandRow(category, items.Count));
         }
     }
 
-    /// <summary>分组标题（类别切换处显示，次要色）。</summary>
-    private FrameworkElement CreateGroupHeader(string text)
+    /// <summary>组尾「展开全部 N 条」入口（组内超过折叠上限时显示）。</summary>
+    private FrameworkElement CreateExpandRow(string category, int totalCount)
     {
-        var header = new TextBlock
+        var row = new Border
         {
-            Text = text,
+            MinHeight = 30,
+            Margin = new Thickness(2, 1, 2, 1),
+            Padding = new Thickness(12, 4, 8, 4),
+            CornerRadius = new CornerRadius(6),
+            Cursor = System.Windows.Input.Cursors.Hand,
+            Background = Brushes.Transparent
+        };
+        var label = new TextBlock
+        {
+            Text = $"展开全部 {totalCount} 条",
+            FontSize = 11,
+            TextTrimming = TextTrimming.CharacterEllipsis
+        };
+        SetThemeBinding(label, TextBlock.ForegroundProperty, "ThemeMutedForeground");
+        row.Child = label;
+        row.MouseEnter += (_, _) => row.Background = MenuBarTheme.Hover;
+        row.MouseLeave += (_, _) => row.Background = Brushes.Transparent;
+        row.MouseLeftButtonUp += (_, _) =>
+        {
+            _expandedCategories.Add(category);
+            if (_lastResults is not null)
+            {
+                RenderResults(_lastResults);
+            }
+        };
+        return row;
+    }
+
+    /// <summary>分组标题（可点击展开/折叠该组）：显示「▸/▾ 类别名 (计数)」。</summary>
+    private FrameworkElement CreateGroupHeader(string category, int count)
+    {
+        var expanded = _expandedCategories.Contains(category);
+        var label = new TextBlock
+        {
+            Text = $"{(expanded ? "▾ " : "▸ ")}{CategoryDisplayName(category)} ({count})",
             FontSize = 11,
             FontWeight = FontWeights.SemiBold,
-            Margin = new Thickness(4, 8, 0, 2)
+            Margin = new Thickness(4, 8, 0, 2),
+            Cursor = System.Windows.Input.Cursors.Hand,
+            ToolTip = "点击展开 / 折叠该类别"
         };
-        SetThemeBinding(header, TextBlock.ForegroundProperty, "ThemeMutedForeground");
-        return header;
+        SetThemeBinding(label, TextBlock.ForegroundProperty, "ThemeMutedForeground");
+        label.MouseLeftButtonUp += (_, _) =>
+        {
+            if (expanded)
+            {
+                _expandedCategories.Remove(category);
+            }
+            else
+            {
+                _expandedCategories.Add(category);
+            }
+
+            if (_lastResults is not null)
+            {
+                RenderResults(_lastResults);
+            }
+        };
+        return label;
+    }
+
+    /// <summary>渲染类别筛选条（全部/应用/设置/文件 + 计数），点击切换当前类别过滤。</summary>
+    private void RenderFilterBar(IReadOnlyDictionary<string, int> counts)
+    {
+        if (_filterBar is null || _filterBar.Child is not WrapPanel panel)
+        {
+            return;
+        }
+
+        panel.Children.Clear();
+        var total = counts.Values.Sum();
+        AddFilterChip(panel, "全部", null, total);
+        AddFilterChip(panel, "应用", "App", counts.TryGetValue("App", out var a) ? a : 0);
+        AddFilterChip(panel, "设置", "Settings", counts.TryGetValue("Settings", out var s) ? s : 0);
+        AddFilterChip(panel, "文件", "File", counts.TryGetValue("File", out var f) ? f : 0);
+        _filterBar.Visibility = Visibility.Visible;
+    }
+
+    /// <summary>单个筛选 Chip：选中高亮（主题强调背景 + 加粗），点击切换过滤类别（null=全部）。</summary>
+    private void AddFilterChip(WrapPanel panel, string name, string? category, int count)
+    {
+        var selected = string.Equals(category ?? string.Empty, _activeCategoryFilter ?? string.Empty, StringComparison.OrdinalIgnoreCase);
+        var chip = new Border
+        {
+            Margin = new Thickness(0, 0, 6, 4),
+            Padding = new Thickness(8, 2, 8, 2),
+            CornerRadius = new CornerRadius(10),
+            Background = selected ? MenuBarTheme.Hover : Brushes.Transparent,
+            Cursor = System.Windows.Input.Cursors.Hand
+        };
+        var label = new TextBlock
+        {
+            Text = $"{name} ({count})",
+            FontSize = 11,
+            FontWeight = selected ? FontWeights.Bold : FontWeights.Normal
+        };
+        SetThemeBinding(label, TextBlock.ForegroundProperty, "ThemeForeground");
+        chip.Child = label;
+        chip.MouseEnter += (_, _) =>
+        {
+            if (!selected)
+            {
+                chip.Background = MenuBarTheme.Hover;
+            }
+        };
+        chip.MouseLeave += (_, _) =>
+        {
+            if (!selected)
+            {
+                chip.Background = Brushes.Transparent;
+            }
+        };
+        chip.MouseLeftButtonUp += (_, _) =>
+        {
+            _activeCategoryFilter = category;
+            if (_lastResults is not null)
+            {
+                RenderResults(_lastResults);
+            }
+        };
+        panel.Children.Add(chip);
     }
 
     private static string CategoryDisplayName(string category) => category.ToLowerInvariant() switch
@@ -341,47 +536,55 @@ internal sealed class SearchPopupWindow : MenuBarPopupWindow
     //  结果右键菜单（"谁的菜单谁管理"：本面板自建 WPF ContextMenu）
     // ============================================================
 
-    /// <summary>按结果类别给右键菜单：打开（默认）→ 固定/取消固定（应用）→ 位置与路径（有真实路径的）。</summary>
+    /// <summary>
+    /// 结果右键菜单。**应用类**走共用构建器 <see cref="AppEntryMenuBuilder"/>（与 dock 应用提取器同一套
+    /// 项集与出现条件，2026-09-14 S3）；**设置 / 文件类不是「应用条目」**，保留本面板自己的通用项
+    /// （打开 / 位置 / 复制路径 / 复制链接）。
+    /// </summary>
     private void ShowResultMenu(FrameworkElement anchor, SearchResult result)
     {
         var menu = new ContextMenu();
         var hasItem = false;
 
-        // 1) 打开（默认动作，加粗；与左键行为一致）
-        hasItem |= AddMenuItem(menu, "打开", isDefault: true, () =>
+        if (result.AppItem is not null)
         {
-            Launch(result);
-            Hide();
-        });
-
-        // 2) 应用类：固定到 Dock / 从 Dock 取消固定（固定服务缺失则跳过，M10）
-        if (result.AppItem is not null && _pinning is not null)
-        {
-            var pinned = false;
-            try { pinned = _pinning.IsPinned("dock", result.AppItem.Id); } catch { /* 判定失败按未固定处理 */ }
-
-            if (pinned)
-            {
-                var appId = result.AppItem.Id;
-                hasItem |= AddMenuItem(menu, "从 Dock 取消固定", isDefault: false, () => _pinning.Unpin("dock", appId));
-            }
-            else
-            {
-                var appItem = result.AppItem;
-                hasItem |= AddMenuItem(menu, "固定到 Dock", isDefault: false, () => _pinning.Pin("dock", appItem));
-            }
+            hasItem |= AppendAppEntryItems(menu, result);
         }
+        else
+        {
+            // 非应用条目：打开（默认动作，加粗；与左键行为一致）+ 位置/路径
+            hasItem |= AddMenuItem(menu, "打开", isDefault: true, () =>
+            {
+                Launch(result);
+                Hide();
+            });
 
-        // 3) 有真实文件路径的结果：打开所在位置 / 复制路径；设置类给复制链接
-        var path = ResolveRevealPath(result);
-        if (!string.IsNullOrEmpty(path))
-        {
-            hasItem |= AddMenuItem(menu, "打开所在位置", isDefault: false, () => RevealInExplorer(path));
-            hasItem |= AddMenuItem(menu, "复制路径", isDefault: false, () => System.Windows.Clipboard.SetText(path));
-        }
-        else if (result.LaunchPath is not null && result.LaunchPath.StartsWith("ms-settings:", StringComparison.OrdinalIgnoreCase))
-        {
-            hasItem |= AddMenuItem(menu, "复制链接", isDefault: false, () => System.Windows.Clipboard.SetText(result.LaunchPath));
+            // 文件类命中里的「程序」（.exe/.lnk/.url）解析成应用条目 → 补「固定到 Dock」
+            //（2026-09-17：引擎索引命中的 MAA.exe 等此前只有文件分支三项，无法固定；规划
+            //  2026-09-13 D3「搜一个应用→右键有固定到 Dock」对文件来源的程序同样生效）。
+            var fileAsApp = _appSource?.ResolveFromPath(result.LaunchPath ?? string.Empty);
+            if (fileAsApp is not null && _pinning is not null)
+            {
+                if (IsPinnedInDock(fileAsApp))
+                {
+                    hasItem |= AddMenuItem(menu, "从 Dock 移除", isDefault: false, () => _pinning.Unpin("dock", fileAsApp.Id));
+                }
+                else
+                {
+                    hasItem |= AddMenuItem(menu, "固定到 Dock", isDefault: false, () => _pinning.Pin("dock", fileAsApp));
+                }
+            }
+
+            var path = ResolveRevealPath(result);
+            if (!string.IsNullOrEmpty(path))
+            {
+                hasItem |= AddMenuItem(menu, "打开所在位置", isDefault: false, () => AppEntryActions.RevealInExplorer(path));
+                hasItem |= AddMenuItem(menu, "复制路径", isDefault: false, () => AppEntryActions.CopyToClipboard(path));
+            }
+            else if (result.LaunchPath is not null && result.LaunchPath.StartsWith("ms-settings:", StringComparison.OrdinalIgnoreCase))
+            {
+                hasItem |= AddMenuItem(menu, "复制链接", isDefault: false, () => AppEntryActions.CopyToClipboard(result.LaunchPath));
+            }
         }
 
         if (!hasItem)
@@ -399,6 +602,119 @@ internal sealed class SearchPopupWindow : MenuBarPopupWindow
         menu.HorizontalOffset = physical.X / dpi;
         menu.VerticalOffset = physical.Y / dpi;
         menu.IsOpen = true;
+    }
+
+    /// <summary>
+    /// 应用类结果 → 共用构建器的项集并渲染。事实（路径 / 固定态 / 卸载命令）在这里采集，
+    /// 动作回调由本面板实现（构建器不含 UI，也不执行动作）。
+    /// </summary>
+    private bool AppendAppEntryItems(ContextMenu menu, SearchResult result)
+    {
+        var appItem = result.AppItem!;
+        var path = ResolveRevealPath(result);
+        var pinning = _pinning;
+
+        var items = AppEntryMenuBuilder.Build(new AppEntryMenuContext
+        {
+            Path = path,
+            IsPinned = IsPinnedInDock(appItem),
+            // 搜索结果的默认动作叫「打开」（加粗）；dock 图标叫「启动」——语义确有差异，故可配。
+            LaunchText = "打开",
+            LaunchIsDefault = true,
+            UninstallCommand = appItem.UninstallCommand,
+            Actions = new AppEntryMenuActions
+            {
+                Launch = () =>
+                {
+                    Launch(result);
+                    Hide();
+                },
+                // 固定服务缺失（兜底路径）时传 null → 构建器整项省略，不显示点了没反应的项
+                Pin = pinning is null ? null : () => pinning.Pin("dock", appItem),
+                Unpin = pinning is null ? null : () => pinning.Unpin("dock", appItem.Id),
+                // 系统级动作统一走 shell-core 公共实现（与 dock 应用提取器同一套行为）
+                RevealInExplorer = path is null ? null : () => AppEntryActions.RevealInExplorer(path),
+                CopyPath = path is null ? null : () => AppEntryActions.CopyToClipboard(path),
+                RunAsAdmin = () => AppEntryActions.RunAsAdmin(path),
+                OpenInTerminal = () => AppEntryActions.OpenInTerminal(path),
+                ShowProperties = () => AppEntryActions.ShowProperties(path),
+                // 卸载：命令与动作需同时具备（构建器负责该判定），无命令的搜索结果不会出现该项
+                Uninstall = string.IsNullOrWhiteSpace(appItem.UninstallCommand)
+                    ? null
+                    : () => AppEntryActions.RunUninstaller(appItem.UninstallCommand),
+            },
+        });
+
+        var added = false;
+        foreach (var item in items)
+        {
+            added |= AddMenuItemDef(menu, item);
+        }
+
+        return added;
+    }
+
+    /// <summary>已固定判定：服务缺失或判定抛异常一律按「未固定」处理（不因此让整个菜单失效）。</summary>
+    private bool IsPinnedInDock(AppItem appItem)
+    {
+        if (_pinning is null)
+        {
+            return false;
+        }
+
+        try
+        {
+            return _pinning.IsPinned("dock", appItem.Id);
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    /// <summary>把构建器产出的 <see cref="MenuItemDef"/> 渲染成 WPF 菜单项（渲染仍由本面板自理）。</summary>
+    private static bool AddMenuItemDef(ContextMenu menu, MenuItemDef def)
+    {
+        var item = new MenuItem { Header = def.Text };
+        if (def.IsDefault)
+        {
+            item.FontWeight = FontWeights.Bold;
+        }
+
+        if (def.Kind == MenuItemKind.Submenu)
+        {
+            foreach (var child in def.Children ?? Array.Empty<MenuItemDef>())
+            {
+                item.Items.Add(BuildCommandItem(child));
+            }
+        }
+        else
+        {
+            item.Click += (_, _) => InvokeSafely(def.Command);
+        }
+
+        _ = menu.Items.Add(item);
+        return true;
+    }
+
+    /// <summary>二级子菜单项（构建器目前只产出命令类子项）。</summary>
+    private static MenuItem BuildCommandItem(MenuItemDef def)
+    {
+        var item = new MenuItem { Header = def.Text };
+        item.Click += (_, _) => InvokeSafely(def.Command);
+        return item;
+    }
+
+    private static void InvokeSafely(Action? action)
+    {
+        try
+        {
+            action?.Invoke();
+        }
+        catch
+        {
+            // 菜单动作失败静默（M10）
+        }
     }
 
     private static bool AddMenuItem(ContextMenu menu, string header, bool isDefault, Action action)
@@ -442,16 +758,7 @@ internal sealed class SearchPopupWindow : MenuBarPopupWindow
         return null;
     }
 
-    /// <summary>在资源管理器中定位文件（目录则直接打开该目录）。</summary>
-    private static void RevealInExplorer(string path)
-    {
-        if (Directory.Exists(path))
-        {
-            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("explorer.exe", $"\"{path}\""));
-            return;
-        }
-        System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("explorer.exe", $"/select,\"{path}\""));
-    }
+
 
     /// <summary>
     /// 异步提取结果图标（大图标缩小显示，保证清晰）：应用走 IAppIconService（ExtraLarge/Jumbo 高清源），
@@ -643,10 +950,15 @@ internal sealed class SearchPopupWindow : MenuBarPopupWindow
         }
     }
 
-    private void ShowEmpty(string text)
+    private void ShowEmpty(string text, bool keepFilterBar = false)
     {
         if (_resultHost is null) return;
         _resultHost.Children.Clear();
+        if (!keepFilterBar && _filterBar is not null)
+        {
+            _filterBar.Visibility = Visibility.Collapsed;
+        }
+
         var hint = new TextBlock
         {
             Text = text,
@@ -710,13 +1022,13 @@ internal sealed class SearchPopupWindow : MenuBarPopupWindow
         {
             Text = "最近复制",
             FontSize = 10,
-            Foreground = new SolidColorBrush(Color.FromRgb(0x8A, 0x8A, 0x8A)),
+            Foreground = Brushes.Gray,
         });
         textColumn.Children.Add(new TextBlock
         {
             Text = preview.Replace('\n', ' '),
             FontSize = 12,
-            Foreground = new SolidColorBrush(Color.FromRgb(0x20, 0x20, 0x20)),
+            Foreground = Brushes.Black,
             TextTrimming = TextTrimming.CharacterEllipsis,
             MaxWidth = 300,
             Margin = new Thickness(0, 2, 0, 0),
@@ -727,7 +1039,7 @@ internal sealed class SearchPopupWindow : MenuBarPopupWindow
         {
             Text = "查看历史 →",
             FontSize = 10,
-            Foreground = new SolidColorBrush(Color.FromRgb(0x4A, 0x90, 0xD9)),
+            Foreground = ThemeBrushes.Get("SkinAccentFromSkin"),
             VerticalAlignment = VerticalAlignment.Center,
             Margin = new Thickness(10, 0, 0, 0),
         };

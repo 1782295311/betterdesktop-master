@@ -4,12 +4,12 @@
 
 ## 职责
 
-- `StartMenuPlugin`：插件入口，注册 6 种布局（Win11Layout / AllAppsLayout / Win10Layout / Win7Layout / ClassicLayout）与 3 个分区（RecentSectionProvider / PlacesSectionProvider / PowerSectionProvider）。
+- `StartMenuPlugin`：插件入口，注册 5 种布局（Win11Layout / AllAppsLayout / Win10Layout / Win7Layout / ClassicLayout）与 3 个分区（RecentSectionProvider / PlacesSectionProvider / PowerSectionProvider）。
 - `StartMenuService`：数据聚合核心，整合 AppSource（应用源）、WindowTracker（窗口追踪）、Pinning（固定应用）、Search（搜索）、Recent（最近项目）等服务，构建菜单数据模型。
 - `StartMenuPopup` / `StartMenuWindow`：弹出窗口管理，支持多显示器定位（`MonitorInterop`）与毛玻璃效果。
 - `StartKeyHook`：Win 键全局钩子，拦截并切换开始菜单显隐。
 - `StartMenuServiceBridge`：与 Dock / 菜单栏等外部触发方的桥接，订阅内核事件总线 `shell.start.toggle` 与 `shell.start.show-all-apps`。
-- `PowerCommands`：电源操作（关机/重启/睡眠/注销），`AppItemActions`：应用条目操作（打开/固定/卸载/以管理员运行）。
+- `PowerCommands`：电源操作（关机/重启/睡眠/注销），`AppItemActions`：开始菜单条目**右键分流到系统原生菜单**（`AttachNative` + `NativePaths`：优先 .lnk、回退目标路径；UWP 无路径项不弹菜单，2026-09-05 收口）。
 - 布局系统：`IStartMenuLayoutHost` + `IStartMenuLayoutProvider` 契约，`StartMenuAppRowBuilder` 构建应用行，`PinnedFolder` 固定文件夹视图。
 
 ## 依赖

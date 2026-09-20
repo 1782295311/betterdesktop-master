@@ -6,6 +6,7 @@
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
+using BetterDesktop.Shell.Core.Surface;
 using BetterDesktop.Shell.Settings.Contracts;
 using BetterDesktop.Shell.Settings.Surface;
 using BetterDesktop.Shell.StartMenu.Contracts;
@@ -241,7 +242,7 @@ public sealed class StartMenuSection : ISettingsSection
         }
         else if (element is Control control)
         {
-            control.Foreground = new SolidColorBrush(Color.FromRgb(0xEC, 0xEC, 0xEC));
+            control.Foreground = ThemeBrushes.Get("ControlForeground");
         }
 
         return element;

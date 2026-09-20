@@ -11,6 +11,13 @@ namespace BetterDesktop.Shell.Clipboard.Contracts;
 /// </summary>
 public sealed class ClipboardEntry
 {
+    /// <summary>
+    /// 列表预览截断长度（字符）。
+    /// 【2026-09-12 用户要求】长文本要多显示文字以区分"开头相同"的条目：200 → 500 字；
+    /// 列表行最多显示 6 行（RecentStrip.PreviewMaxHeight ≈ 170 字），500 留足余量。
+    /// </summary>
+    private const int PreviewMaxChars = 500;
+
     /// <summary>稳定标识（GUID N 格式）。</summary>
     public string Id { get; set; } = string.Empty;
 
@@ -35,8 +42,31 @@ public sealed class ClipboardEntry
     /// <summary>是否收藏（收藏条目不参与驱逐/过期）。</summary>
     public bool IsPinned { get; set; }
 
+    /// <summary>
+    /// 是否表情包（**与收藏同级的独立标记**，2026-09-13）。
+    /// <para>
+    /// 用户口径："跟收藏一样的机制，这样就不管是图片还是颜文字都可以了" —— 因此本标记可打在
+    /// **任何类型**的条目上（文字颜文字 / 静态图 / 动图 / 文件），被打标记的条目：
+    /// ① 出现在「表情包」筛选里；② 与收藏一样**豁免驱逐与「清理未收藏」**。
+    /// </para>
+    /// <para>
+    /// 历史沿革：此前表情包是 <see cref="ContentCategory.Sticker"/> **分类**，且只能靠"导入本地文件"产生 ——
+    /// 文字颜文字永远无法成为表情包。旧数据由引擎启动迁移转换为本标记。
+    /// </para>
+    /// </summary>
+    public bool IsSticker { get; set; }
+
     /// <summary>图片落盘相对路径（相对存储根，如 clipboard\images\{id}.png）。</summary>
     public string ImagePath { get; set; } = string.Empty;
+
+    /// <summary>
+    /// 内容哈希（引擎写入：图片=像素级指纹、表情包=文件字节 sha256 前 16 hex；旧数据为空字符串）。
+    /// <para>
+    /// 【2026-09-12 补齐】引擎早已在 JSON 里写该字段，而 C# 模型缺这一项 → 反序列化时被静默丢弃；
+    /// 补齐后 legacy 后端可据此做表情包内容去重，图片条目也能暴露指纹供诊断。
+    /// </para>
+    /// </summary>
+    public string ContentHash { get; set; } = string.Empty;
 
     /// <summary>图片宽度（px，0=非图片）。</summary>
     public int ImageWidth { get; set; }
@@ -62,6 +92,12 @@ public sealed class ClipboardEntry
     /// <summary>标签（可搜索，空格分隔）。</summary>
     public string Tags { get; set; } = string.Empty;
 
+    /// <summary>
+    /// OCR 识别文本（2026-09-14 截图+OCR 接入；引擎摘要返回 ocrText，参与 keyword 搜索命中）。
+    /// 仅图片条目可能非空；面板/宿主可直接展示。
+    /// </summary>
+    public string OcrText { get; set; } = string.Empty;
+
     /// <summary>混合内容标记：含图片（&lt;img / data URI）。</summary>
     public bool HasImages { get; set; }
 
@@ -71,7 +107,25 @@ public sealed class ClipboardEntry
     /// <summary>代码标记（粘贴强制纯文本）。</summary>
     public bool IsCode { get; set; }
 
-    /// <summary>列表预览（[图片]/[文件]/[HTML] 前缀 + 截断 200 字）。</summary>
+    /// <summary>
+    /// 命名格式载荷（2026-09-13 P1-4 命名格式透传）。
+    /// <para>
+    /// Excel / WPS 表格的"可编辑表格"数据只存在于应用自定义的命名格式里 —— 引擎捕获后放在本字段，
+    /// 复制时按同名还原，粘回表格仍是可编辑表格。**列表摘要载荷由引擎剥离该字段**（base64 较大），
+    /// 因此列表条目拿到的通常是空集合，写回由引擎侧完成。
+    /// </para>
+    /// </summary>
+    public List<ClipboardNamedFormat> NamedFormats { get; set; } = new();
+
+    /// <summary>
+    /// 内容是否命中敏感信息（2026-09-13 P2-2：手机号 / 身份证 / 邮箱 / 银行卡 / 密钥）。
+    /// <para>
+    /// **只用于预览遮罩，不改变内容** —— 用户粘贴时仍是全文（见 <see cref="BuildMaskedPreview"/>）。
+    /// </para>
+    /// </summary>
+    public bool IsSensitive { get; set; }
+
+    /// <summary>列表预览（[图片]/[文件]/[HTML] 前缀 + 截断 <see cref="PreviewMaxChars"/> 字）。</summary>
     [JsonIgnore]
     public string Preview
     {
@@ -85,9 +139,9 @@ public sealed class ClipboardEntry
                     return FilePaths.Length > 0 ? $"[文件] {System.IO.Path.GetFileName(FilePaths[0])}" : "[文件]";
                 case ClipboardItemKind.Html:
                 case ClipboardItemKind.RichText:
-                    return string.IsNullOrWhiteSpace(PlainText) ? "[HTML]" : Truncate(PlainText, 200);
+                    return string.IsNullOrWhiteSpace(PlainText) ? "[HTML]" : Truncate(PlainText, PreviewMaxChars);
                 default:
-                    return Truncate(Content, 200);
+                    return Truncate(Content, PreviewMaxChars);
             }
         }
     }
@@ -119,6 +173,21 @@ public sealed class ClipboardEntry
                 return $"{ImageWidth}×{ImageHeight}";
             }
 
+            // 【表情包 · 2026-09-12】显示"格式 · 尺寸"（如 "GIF · 300×300"）——
+            // 比通用的"N 个文件"有用得多：用户挑表情包时会看动图格式与画面尺寸。
+            // 【2026-09-13】判据改为**标记** —— 表情包已不是分类，旧判据永不成立，会让本属性退化成"1 个文件"；
+            // 保留旧分类值作遗留数据兜底。
+            if (IsSticker || Category == ContentCategory.Sticker)
+            {
+                string ext = FilePaths.Length > 0
+                    ? System.IO.Path.GetExtension(FilePaths[0]).TrimStart('.').ToUpperInvariant()
+                    : string.Empty;
+                string size = ImageWidth > 0 && ImageHeight > 0
+                    ? $"{ImageWidth}×{ImageHeight}"
+                    : "尺寸未知";
+                return ext.Length > 0 ? $"{ext} · {size}" : size;
+            }
+
             if (ContentType == ClipboardItemKind.Files)
             {
                 return $"{FilePaths.Length} 个文件";
@@ -146,6 +215,7 @@ public sealed class ClipboardEntry
                 ContentCategory.RichText => "富文本",
                 ContentCategory.Image => "图片",
                 ContentCategory.File => "文件",
+                ContentCategory.Sticker => "表情包",
                 _ => "文字",
             };
 
@@ -189,6 +259,71 @@ public sealed class ClipboardEntry
         ClipboardItemKind.RichText => "RTF",
         _ => "文本",
     };
+
+    /// <summary>
+    /// 敏感条目的**遮罩预览**（2026-09-13 P2-2）：保留前 <paramref name="leading"/> / 后
+    /// <paramref name="trailing"/> 个字符，中间以 <c>••••</c> 替代；非敏感或过短则原样返回预览。
+    /// <para>
+    /// 仅作用于**展示**：拿本属性渲染列表，实际复制/粘贴仍走完整内容（用户要能原样粘出全文）。
+    /// </para>
+    /// </summary>
+    public string BuildMaskedPreview(int leading, int trailing)
+    {
+        var text = Preview;
+        if (!IsSensitive || text.Length == 0)
+        {
+            return text;
+        }
+
+        leading = Math.Max(0, leading);
+        trailing = Math.Max(0, trailing);
+        // 太短则不遮（否则整条只剩点，反而无法辨识是什么内容）
+        if (text.Length <= leading + trailing + 2)
+        {
+            return text;
+        }
+
+        return $"{CutHead(text, leading)}••••{CutTail(text, trailing)}";
+    }
+
+    /// <summary>取前 <paramref name="count"/> 个字符（不切断 UTF-16 代理对）。</summary>
+    private static string CutHead(string text, int count)
+    {
+        if (count <= 0)
+        {
+            return string.Empty;
+        }
+
+        if (count >= text.Length)
+        {
+            return text;
+        }
+
+        var cut = char.IsHighSurrogate(text[count - 1]) ? count - 1 : count;
+        return text[..cut];
+    }
+
+    /// <summary>取后 <paramref name="count"/> 个字符（不切断 UTF-16 代理对）。</summary>
+    private static string CutTail(string text, int count)
+    {
+        if (count <= 0)
+        {
+            return string.Empty;
+        }
+
+        if (count >= text.Length)
+        {
+            return text;
+        }
+
+        var start = text.Length - count;
+        if (char.IsLowSurrogate(text[start]))
+        {
+            start++;
+        }
+
+        return text[start..];
+    }
 
     /// <summary>内部生成：捕获完成后补齐元数据（分类已计算时保留）。</summary>
     public void FinalizeMetadata()
@@ -236,7 +371,19 @@ public sealed class ClipboardEntry
             return string.Empty;
         }
 
-        return text.Length <= max ? text : text[..max] + "…";
+        if (text.Length <= max)
+        {
+            return text;
+        }
+
+        // 【2026-09-12 修复】不切在 UTF-16 代理对中间：切在中间会产生孤立代理项
+        //（emoji / 扩展汉字显示为乱码方块）。若第 max 位是高代理，则少切一位。
+        var cut = max;
+        if (char.IsHighSurrogate(text[cut - 1]))
+        {
+            cut--;
+        }
+        return text[..cut] + "…";
     }
 
     private static string StripHtml(string html)

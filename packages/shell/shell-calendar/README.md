@@ -8,8 +8,8 @@
 
 | 文件 | 职责 |
 |---|---|
-| `Contracts/ICalendarEntryProvider.cs` | **唯一扩展点**：条目提供者 + `ICalendarService` 聚合契约 + `CalendarDayInfo` |
-| `Contracts/CalendarEntry.cs` | 条目模型与种类（Holiday/Workday/SolarTerm/Festival/Event/Weather/**Note**） |
+| `packages/api/Calendar/ICalendarEntryProvider.cs` | **唯一扩展点**：条目提供者 + `ICalendarService` 聚合契约 + `CalendarDayInfo`（契约已迁 BetterDesktop.Api） |
+| `packages/api/Calendar/CalendarEntry.cs` | 条目模型与种类（Holiday/Workday/SolarTerm/Festival/Event/Weather/**Note**） |
 | `Services/SolarTermCalculator.cs` | 24 节气（Meeus 太阳视黄经 + 牛顿迭代，非查表常数） |
 | `Services/LunarInfo.cs` | 农历月日 / 闰月 / 干支 / 生肖 |
 | `Services/SolarTermProvider.cs` | 节气条目（按年缓存） |
@@ -23,7 +23,7 @@
 
 ## 依赖
 
-- `kernel`（IPlugin/IContext/IKernelLogger）、`shell-settings`（预留设置键）
+- `kernel`（IPlugin/IContext/IKernelLogger）、`BetterDesktop.Api`（Calendar 契约）、`shell-settings`（预留设置键）
 - 被 `shell-menu-bar` 消费（`CalendarPopupWindow` 月视图 + `CalendarDayPopupWindow` 日详情）
 
 ## 节假日年表怎么填

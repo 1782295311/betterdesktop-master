@@ -12,16 +12,6 @@ public interface IClipboardService
 {
     // ---------- 查询 ----------
 
-    /// <summary>按类型/分类/关键词/来源过滤历史条目（时间倒序）。</summary>
-    IReadOnlyList<ClipboardEntry> GetFilteredEntries(
-        ClipboardItemKind? kind = null,
-        ContentCategory? category = null,
-        string? keyword = null,
-        string? sourceApp = null);
-
-    /// <summary>来源应用列表（按出现次数降序，面板筛选栏用）。</summary>
-    IReadOnlyList<string> GetSourceApps();
-
     /// <summary>最近复制内容（1301 融合；timeLimit 为空则最近一条）。</summary>
     LastCopiedContent? GetLastCopiedContent(TimeSpan? timeLimit = null);
 
@@ -33,8 +23,14 @@ public interface IClipboardService
     /// <summary>取消收藏。</summary>
     void UnpinEntry(ClipboardEntry entry);
 
-    /// <summary>切换收藏。</summary>
-    void TogglePin(ClipboardEntry entry);
+    /// <summary>
+    /// 设置/取消「表情包」标记（**与收藏同级的独立标记**，2026-09-13）。
+    /// <para>
+    /// 用户口径："跟收藏一样的机制，这样就不管是图片还是颜文字都可以了" —— 任何条目都能被标记。
+    /// 标记不改变条目内容，只让它出现在「表情包」筛选里、并豁免驱逐与「清理未收藏」。
+    /// </para>
+    /// </summary>
+    void SetSticker(ClipboardEntry entry, bool value);
 
     /// <summary>删除单条。</summary>
     void DeleteEntry(ClipboardEntry entry);
@@ -59,14 +55,18 @@ public interface IClipboardService
     /// <summary>写回并粘贴到前台窗口（基础路径；大段自动分段，代码/图片/文件单次）。</summary>
     void PasteEntryToActiveWindow(ClipboardEntry entry);
 
-    /// <summary>纯文本写回并粘贴到前台窗口（面板 Ctrl+Enter 路径）。</summary>
-    void PasteEntryAsPlainTextToActiveWindow(ClipboardEntry entry);
+    /// <summary>
+    /// 临时粘贴：写回并粘贴到前台窗口，随后**还原**用户原剪贴板（2026-09-13 P2-3）。
+    /// <para>
+    /// 用于"只想粘一下、不想污染剪贴板"的场景。原剪贴板快照在引擎侧（纯内存、不落盘）；
+    /// 超过有效期（10s）则不复原（避免覆盖用户期间的新复制）。还原失败不影响已完成的粘贴。
+    /// </para>
+    /// <para>契约可加性：本成员为新增，不改动既有成员（旧消费方零影响）。</para>
+    /// </summary>
+    void PasteEntryTemporarilyToActiveWindow(ClipboardEntry entry);
 
     /// <summary>多选合并粘贴：多条纯文本以分隔符拼接后一次粘贴（面板多选合并）。</summary>
     void MergePasteToActiveWindow(IEnumerable<ClipboardEntry> entries, string? separator = null);
-
-    /// <summary>文件条目：在资源管理器中打开位置并选中。</summary>
-    void OpenFileLocation(ClipboardEntry entry);
 
     // ---------- L 按序粘贴状态机（v1.3；消费方按 Enter 依次触发 PasteNextSequential） ----------
 
@@ -85,18 +85,21 @@ public interface IClipboardService
     /// <summary>取消按序粘贴会话。</summary>
     void CancelSequentialPaste();
 
-    /// <summary>重置按序粘贴会话（无日志，程序化复位用）。</summary>
-    void ResetSequentialPaste();
+    // ---------- 表情包（用户主动填入的动图；2026-09-12 新增） ----------
 
-    // ---------- 录入（OCR/外部来源，M1 契约预留） ----------
-
-    /// <summary>批量录入外部条目（复用去重/分类/落盘管线）。</summary>
-    int ImportEntries(IEnumerable<ClipboardImportItem> items);
+    /// <summary>
+    /// 导入表情包：把本地动图文件（gif/webp/apng/png/jpg/bmp）**原文件字节级复制**进剪贴板存储，
+    /// 条目归入 <see cref="ContentCategory.Sticker"/>；之后可像普通条目一样复制/粘贴跨应用使用。
+    /// <para>
+    /// 语义：① **内容哈希去重** —— 同一张图重复导入计入 <see cref="StickerImportResult.Skipped"/>，
+    /// 不产生副本堆积；② 表情包是用户珍藏 —— **不参与**过期/容量驱逐，也**不被**「清理未收藏」删除；
+    /// ③ 失败**逐条回报**（<see cref="StickerImportResult.Errors"/>），绝不静默跳过。
+    /// </para>
+    /// <para>契约可加性：本成员为新增，不改动既有成员（旧消费方零影响）。</para>
+    /// </summary>
+    StickerImportResult AddStickers(IEnumerable<string> filePaths);
 
     // ---------- 状态与控制 ----------
-
-    /// <summary>监控是否开启（扩展中心开关控制监控活性，服务本体常驻）。</summary>
-    bool IsMonitoringEnabled { get; }
 
     /// <summary>当前是否处于临时暂停。</summary>
     bool IsTemporarilyPaused { get; }
@@ -110,14 +113,8 @@ public interface IClipboardService
     /// <summary>立即恢复监控。</summary>
     void Resume();
 
-    /// <summary>打开历史面板（懒创建单实例）。</summary>
+    /// <summary>打开历史面板（engine 后端 = 拉起面板 exe）。</summary>
     void OpenHistoryWindow();
-
-    /// <summary>关闭历史面板。</summary>
-    void CloseHistoryWindow();
-
-    /// <summary>收藏视图开关（面板打开时同步）。</summary>
-    bool ShowFavoritesOnly { get; set; }
 
     // ---------- 事件 ----------
 
@@ -126,7 +123,4 @@ public interface IClipboardService
 
     /// <summary>暂停状态变更。</summary>
     event Action<bool>? PauseStateChanged;
-
-    /// <summary>监控状态变更。</summary>
-    event Action<bool>? MonitoringStateChanged;
 }

@@ -90,6 +90,47 @@ public sealed class AppearanceService : IAppearanceService, IThemeTokens
         set => SetDouble("appearance.contentOpacity", value, args: new() { ContentOpacityChanged = true });
     }
 
+    /// <summary>
+    /// 是否启用"非分层玻璃窗"（毛玻璃走 DWM 玻璃区而不是分层自绘）。
+    /// <para>
+    /// 【为什么需要】accent 模糊画在常规 DWM 重定向位图的透明像素后面；分层窗口
+    ///（WPF <c>AllowsTransparency=true</c>）走另一条合成路径，模糊不被支持/不稳定。
+    /// 关 = 现行行为（零回归）；开 = 需要毛玻璃的窗口改为非分层 + DWM 玻璃区。
+    /// </para>
+    /// <para>**该键在窗口构造期读取，改动后需重开相关窗口才生效**（WPF 不允许运行时切换
+    /// <c>AllowsTransparency</c>）。默认关，待真机 A/B 结果决定是否转为默认。</para>
+    /// </summary>
+    public bool GlassBackdrop => _settings.Get("appearance.material.glass", false);
+
+    /// <summary>
+    /// 无色模式是否"零色"：窗口层/面板层完全不铺颜色，视觉由 DWM 无色模糊单独承担。
+    /// <para>
+    /// 【2026-09-18 用户口径】Dark = 叠加透黑（保留）、Light = 叠加透白（保留）、**无色 = 什么颜色都不要**。
+    /// </para>
+    /// <para>
+    /// 但"零色"只有在模糊真能画出来时才叫"无色纯模糊"；模糊不可用时零色会退化成
+    /// "整窗透明 + 桌面上的裸文字"（可读性事故）。故用 <see cref="BlurCapability"/> 的能力结论做闸门：
+    /// 环境不允许模糊时，无色模式退回中性深底（比"什么都没有"更可用），并可由设置页一键开启系统透明效果。
+    /// </para>
+    /// </summary>
+    public bool ZeroTintMode => Mode == ThemeMode.None && BlurCapability.Current.ColorlessBlurExpected;
+
+    /// <summary>
+    /// 零色模式的"透明地板"：alpha = 1/255（视觉等同全透明，但保留鼠标命中）。
+    /// <para>
+    /// 【为什么不直接用 Transparent】分层窗口下完全透明会让窗口区域**鼠标穿透**；
+    /// 1/255 是"看不见但仍可命中"的最小值（与 <c>ShellWindow</c> 构造期的默认背景同一取值）。
+    /// </para>
+    /// </summary>
+    private static readonly Brush ZeroTintFloor = CreateZeroTintFloor();
+
+    private static Brush CreateZeroTintFloor()
+    {
+        var brush = new SolidColorBrush(Color.FromArgb(1, 0, 0, 0));
+        brush.Freeze();
+        return brush;
+    }
+
     // ---- 几何尺度 ----
     public double CornerRadius
     {
@@ -357,6 +398,14 @@ public sealed class AppearanceService : IAppearanceService, IThemeTokens
     /// <summary>色调托盘回退 Brush：按 (Tint, Opacity) 签名缓存，避免重复创建。</summary>
     private Brush FallbackTintBrush()
     {
+        // 【2026-09-18 无色主题零色】无色模式下窗口层**不铺任何颜色**——否则再好的模糊也被托盘色压掉。
+        // 原实现会给无色模式铺 "#1F1F22" @ WindowOpacity(0.35)，与同文件 ThemeWindowBackground
+        // （无色 = #01000000 近透明）自相矛盾，实际观感是"一块死灰"，正是"毛玻璃很生硬"的来源。
+        if (ZeroTintMode)
+        {
+            return ZeroTintFloor;
+        }
+
         var curTint = WindowTint;
         var curOpacity = WindowOpacity;
         if (_tintBrushCache is not null
@@ -692,7 +741,9 @@ public sealed class AppearanceService : IAppearanceService, IThemeTokens
 
     public Brush PanelBackground => HasSkin
         ? new SolidColorBrush(Color.FromArgb(0x1F, 0x00, 0x00, 0x00))   // 半透明黑叠层，皮肤透出
-        : MakeBrush(Lighten(WindowTint, 0.06), Math.Min(1, WindowOpacity + 0.05));
+        : ZeroTintMode
+            ? ZeroTintFloor                                             // 无色 = 不铺色（同上，模糊才是视觉主体）
+            : MakeBrush(Lighten(WindowTint, 0.06), Math.Min(1, WindowOpacity + 0.05));
 
     public Brush ContentBackground => HasSkin
         ? new SolidColorBrush(Color.FromArgb(0x0F, 0x00, 0x00, 0x00))   // 更浅叠层，内容区更透
@@ -831,6 +882,10 @@ public sealed class AppearanceService : IAppearanceService, IThemeTokens
     {
         // 违规1修复：经内核事件总线广播（单监听器异常隔离由 EventBus 内核保障，不再手动 try-catch 循环）。
         Emit(args);
+
+        // 【2026-09-18】同时走**进程内广播**：没拿到事件总线的 ShellWindow（子类构造期漏传，例如
+        // MenuBarWindow / PopupWindowBase 历史上都漏过）也能跟随主题，不再"卡在旧主题"。
+        BetterDesktop.Shell.Core.Surface.AppearanceHub.Raise(args);
     }
 
     private static Brush MakeBrush(Color c, double alpha)

@@ -76,26 +76,26 @@ Assert-PlainAscii $uninstallRel $uninstall
 # ---- 2. 跨进程字面量一致 ----
 $kernelAutostart = Read-RepoFile 'packages/kernel/kernel/Deployment/AutostartRegistrar.cs'
 $kernelDeployment = Read-RepoFile 'packages/kernel/kernel/Deployment/DeploymentInfo.cs'
-$trayAppPaths = Read-RepoFile 'tray/AppPaths.cs'
-$traySettings = Read-RepoFile 'tray/SettingsBridge.cs'
-$trayMenu = Read-RepoFile 'tray/TrayApplicationContext.cs'
-$cli = Read-RepoFile 'BetterDesktop.Cli/Program.cs'
+$trayAppPaths = Read-RepoFile 'packages/entry/tray/AppPaths.cs'
+$traySettings = Read-RepoFile 'packages/entry/tray/SettingsBridge.cs'
+$trayMenu = Read-RepoFile 'packages/entry/tray/TrayApplicationContext.cs'
+$cli = Read-RepoFile 'packages/entry/cli/Program.cs'
 
 foreach ($pair in @(
         @{ Rel = 'packages/kernel/kernel/Deployment/AutostartRegistrar.cs'; Text = $kernelAutostart; Needle = 'BetterDesktop.Tray' },
-        @{ Rel = 'tray/SettingsBridge.cs'; Text = $traySettings; Needle = 'BetterDesktop.Tray' },
+        @{ Rel = 'packages/entry/tray/SettingsBridge.cs'; Text = $traySettings; Needle = 'BetterDesktop.Tray' },
         @{ Rel = $installRel; Text = $install; Needle = 'BetterDesktop.Tray' },
         @{ Rel = $uninstallRel; Text = $uninstall; Needle = 'BetterDesktop.Tray' },
         @{ Rel = 'packages/kernel/kernel/Deployment/DeploymentInfo.cs'; Text = $kernelDeployment; Needle = 'deployment.json' },
-        @{ Rel = 'tray/AppPaths.cs'; Text = $trayAppPaths; Needle = 'deployment.json' },
+        @{ Rel = 'packages/entry/tray/AppPaths.cs'; Text = $trayAppPaths; Needle = 'deployment.json' },
         @{ Rel = $installRel; Text = $install; Needle = 'deployment.json' },
         @{ Rel = $uninstallRel; Text = $uninstall; Needle = 'deployment.json' },
         @{ Rel = 'packages/kernel/kernel/Deployment/DeploymentInfo.cs'; Text = $kernelDeployment; Needle = 'installRoot' },
-        @{ Rel = 'tray/AppPaths.cs'; Text = $trayAppPaths; Needle = 'installRoot' },
+        @{ Rel = 'packages/entry/tray/AppPaths.cs'; Text = $trayAppPaths; Needle = 'installRoot' },
         @{ Rel = $installRel; Text = $install; Needle = 'installRoot' },
         @{ Rel = $uninstallRel; Text = $uninstall; Needle = 'installRoot' },
-        @{ Rel = 'BetterDesktop.Cli/Program.cs'; Text = $cli; Needle = '--system-integration' },
-        @{ Rel = 'tray/TrayApplicationContext.cs'; Text = $trayMenu; Needle = '--system-integration' },
+        @{ Rel = 'packages/entry/cli/Program.cs'; Text = $cli; Needle = '--system-integration' },
+        @{ Rel = 'packages/entry/tray/TrayApplicationContext.cs'; Text = $trayMenu; Needle = '--system-integration' },
         @{ Rel = $installRel; Text = $install; Needle = '--system-integration' },
         @{ Rel = $uninstallRel; Text = $uninstall; Needle = '--system-integration' }
     )) {
@@ -104,7 +104,7 @@ foreach ($pair in @(
 
 # ---- 3. Cli 四个子命令 ----
 foreach ($verb in @('status', 'register', 'repair', 'unregister')) {
-    Assert-Contains 'BetterDesktop.Cli/Program.cs' $cli "case `"$verb`""
+    Assert-Contains 'packages/entry/cli/Program.cs' $cli "case `"$verb`""
 }
 
 # ---- 4b. core 兜底计划任务：名字跨进程一致 + 安装器必须走委派 ----
@@ -113,11 +113,11 @@ foreach ($verb in @('status', 'register', 'repair', 'unregister')) {
 # 每次都以"文件不存在"失败，而那时已经没有任何地方会报这条错（core 已被删）。
 # 这正是"最该被门禁钉住"的一类字面量：错了没人会立刻发现。
 $coreTaskRs = Read-RepoFile 'core/src/task.rs'
-$recoveryProgram = Read-RepoFile 'recovery/Program.cs'
+$recoveryProgram = Read-RepoFile 'packages/entry/recovery/Program.cs'
 foreach ($pair in @(
         @{ Rel = 'core/src/task.rs'; Text = $coreTaskRs; Needle = 'BetterDesktop Core Ensure' },
         @{ Rel = $uninstallRel; Text = $uninstall; Needle = 'BetterDesktop Core Ensure' },
-        @{ Rel = 'recovery/Program.cs'; Text = $recoveryProgram; Needle = 'BetterDesktop Core Ensure' }
+        @{ Rel = 'packages/entry/recovery/Program.cs'; Text = $recoveryProgram; Needle = 'BetterDesktop Core Ensure' }
     )) {
     Assert-Contains $pair.Rel $pair.Text $pair.Needle
 }

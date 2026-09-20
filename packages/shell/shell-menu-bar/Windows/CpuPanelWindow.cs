@@ -23,6 +23,21 @@ internal sealed class CpuPanelWindow : MenuBarPopupWindow
         MinWidth = NativePanelStyles.DefaultWidth;
         SizeToContent = SizeToContent.Height;
         Closed += (_, _) => _vm?.CloseSelf();
+
+        // 【2026-09-18 电源管理】面板收起走的是基类 HidePopup()（只 Hide、不触发 Closed）：
+        // 不在这里停表的话，用户点过一次 CPU 面板之后，本进程整个生命周期都在每秒一次
+        // 原生 CPU/温度读取 + 长期持有 LibreHardwareMonitor 句柄（原生传感器轮询）。
+        IsVisibleChanged += (_, _) =>
+        {
+            if (IsVisible)
+            {
+                _vm?.Resume();
+            }
+            else
+            {
+                _vm?.Pause();
+            }
+        };
     }
 
     public FrameworkElement BuildPreviewContent() => BuildContent();
@@ -216,6 +231,25 @@ internal sealed class CpuPanelWindow : MenuBarPopupWindow
         public void CloseSelf()
         {
             try { _timer.Stop(); _lhm.Close(); } catch { /* ignore */ }
+        }
+
+        /// <summary>面板隐藏：停表（隐藏期间不做任何原生采样）。</summary>
+        public void Pause()
+        {
+            try { _timer.Stop(); } catch { /* ignore */ }
+        }
+
+        /// <summary>面板重新显示：恢复采样。</summary>
+        public void Resume()
+        {
+            try
+            {
+                if (!_timer.IsEnabled)
+                {
+                    _timer.Start();
+                }
+            }
+            catch { /* ignore */ }
         }
 
         public void AttachRefresh(Action refresh)

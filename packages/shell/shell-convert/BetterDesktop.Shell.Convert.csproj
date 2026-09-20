@@ -1,11 +1,6 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <TargetFramework>net8.0-windows10.0.19041.0</TargetFramework>
-    <Nullable>enable</Nullable>
-    <ImplicitUsings>enable</ImplicitUsings>
-    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
-    <Platforms>x64</Platforms>
     <UseWPF>true</UseWPF>
     <RootNamespace>BetterDesktop.Shell.Convert</RootNamespace>
     <AssemblyName>BetterDesktop.Shell.Convert</AssemblyName>
@@ -43,5 +38,24 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\api\BetterDesktop.Api.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!--
+      Rust 转换引擎（native/convert-engine 的 cargo 产物）随引用方输出一起落位。
+      【为什么必须有这一条 · 2026-09-17 用户实测】RustConvertRunner.LocateEngine() 只认
+      AppContext.BaseDirectory\convert-engine.exe（或 env BETTERDESKTOP_CONVERT_ENGINE），
+      而部署链里**此前没有任何一处**把它拷过去（全仓 csproj/脚本对 convert-engine 的引用数 = 0；
+      clipboard / index 各有 deploy 脚本，convert 缺）→ 转换功能在 dev 输出与发布目录一律报
+      "Rust 转换引擎未部署（convert-engine.exe 缺失）"。
+      放在本工程 = 单点：host / Cli / agent 等所有引用 shell-convert 的宿主自动带上
+      （Content + CopyToOutputDirectory 会流到引用方输出与 publish）。
+      cargo 构建是**显式步骤**（本仓不代跑 cargo，engine / engine-index 同规矩）；
+      Condition 保证没编过时不至于让整个 .NET 构建失败。
+    -->
+    <Content Include="..\..\..\native\convert-engine\target\release\convert-engine.exe"
+             Link="convert-engine.exe"
+             CopyToOutputDirectory="PreserveNewest"
+             Condition="Exists('..\..\..\native\convert-engine\target\release\convert-engine.exe')" />
   </ItemGroup>
 </Project>

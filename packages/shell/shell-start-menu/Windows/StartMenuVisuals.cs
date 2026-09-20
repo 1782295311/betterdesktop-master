@@ -1,5 +1,6 @@
 using System.Windows;
 using System.Windows.Media;
+using BetterDesktop.Shell.Core.Surface;
 using BetterDesktop.Shell.Settings.Contracts;
 
 namespace BetterDesktop.Shell.StartMenu.Windows;
@@ -25,7 +26,10 @@ internal sealed class StartMenuPalette
         CornerRadius = tokens.CornerRadius > 0 ? tokens.CornerRadius : 8;
 
         // 主题强调色：转成 Color 供后续按需叠加透明度生成磁贴/悬浮/选中底。
-        _accentSolid = (tokens.Accent as SolidColorBrush) ?? new SolidColorBrush(Color.FromRgb(0x33, 0x77, 0xEF));
+        // 兜底不再自配色，改取全局强调色令牌（与设置中心一致）。
+        _accentSolid = (tokens.Accent as SolidColorBrush)
+            ?? (ThemeBrushes.Get("SkinAccentFromSkin") as SolidColorBrush)
+            ?? new SolidColorBrush(Color.FromRgb(0x33, 0x77, 0xEF));
         AccentColor = _accentSolid.Color;
         Accent = _accentSolid;
     }
@@ -107,9 +111,8 @@ internal sealed class StartMenuPalette
             }
         }
 
-        var fallback = new SolidColorBrush(Color.FromRgb(0x20, 0x20, 0x20));
-        fallback.Freeze();
-        return fallback;
+        // 兜底走全局面板背景令牌（与设置中心一致），不再自配色。
+        return ThemeBrushes.Get("ThemePanelBackground");
     }
 
     /// <summary>主题令牌缺失时的兜底（保证布局仍可构建渲染）。</summary>
@@ -123,18 +126,13 @@ internal sealed class StartMenuPalette
 
         static FallbackTokens()
         {
-            Bg = FreezeBrush(Color.FromRgb(0x24, 0x26, 0x2B));
-            Fg = FreezeBrush(Color.FromRgb(0xF3, 0xF3, 0xF3));
-            Muted = FreezeBrush(Color.FromRgb(0xB0, 0xB0, 0xB0));
-            Sep = FreezeBrush(Color.FromRgb(0x6A, 0x6A, 0x6A));
-            Acc = FreezeBrush(Color.FromRgb(0x33, 0x77, 0xEF));
-        }
-
-        private static SolidColorBrush FreezeBrush(Color c)
-        {
-            var b = new SolidColorBrush(c);
-            b.Freeze();
-            return b;
+            // 兜底一律取 App 级主题令牌（Theme* / SkinAccentFromSkin），与设置中心同一来源；
+            // 令牌缺失时 ThemeBrushes 自带中性回退。
+            Bg = ThemeBrushes.Get("ThemeWindowBackground");
+            Fg = ThemeBrushes.Get("ThemeForeground");
+            Muted = ThemeBrushes.Get("ThemeMutedForeground");
+            Sep = ThemeBrushes.Get("ThemeSeparator");
+            Acc = ThemeBrushes.Get("SkinAccentFromSkin");
         }
 
         public Brush WindowBackground => Bg;

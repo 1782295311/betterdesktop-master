@@ -6,6 +6,7 @@
 
 using System;
 using System.Windows;
+using BetterDesktop.Kernel.Contracts;
 using BetterDesktop.Shell.AppSource.Contracts;
 using BetterDesktop.Shell.Core.Contracts;
 using BetterDesktop.Shell.Core.Surface;
@@ -40,8 +41,11 @@ internal sealed class StatusBarMenuBarExtension : IMenuBarExtension, IDisposable
     private readonly BetterDesktop.Shell.Calendar.Contracts.ICalendarService? _calendar;
     private readonly BetterDesktop.Shell.Pinning.Contracts.IPinningService? _pinning;
     private readonly BetterDesktop.Shell.Clipboard.Contracts.IClipboardService? _clipboard;
+    private readonly BetterDesktop.Shell.Music.Contracts.IMediaPlaybackService? _media;
+    private readonly IAppSourceService? _appSource;
 
     private MenuBarStatusStrip? _strip;
+    private readonly IEventBus? _events;
     private SearchPopupWindow? _searchPopup;
     private ImePopupWindow? _imePopup;
     private ExtensionsCenterWindow? _extensionsCenterPopup;
@@ -74,7 +78,10 @@ internal sealed class StatusBarMenuBarExtension : IMenuBarExtension, IDisposable
         IAppIconService? appIcon = null,
         BetterDesktop.Shell.Calendar.Contracts.ICalendarService? calendar = null,
         BetterDesktop.Shell.Pinning.Contracts.IPinningService? pinning = null,
-        BetterDesktop.Shell.Clipboard.Contracts.IClipboardService? clipboard = null)
+        BetterDesktop.Shell.Clipboard.Contracts.IClipboardService? clipboard = null,
+        BetterDesktop.Shell.Music.Contracts.IMediaPlaybackService? media = null,
+        IEventBus? events = null,
+        IAppSourceService? appSource = null)
     {
         _vol = vol;
         _mic = mic;
@@ -92,6 +99,9 @@ internal sealed class StatusBarMenuBarExtension : IMenuBarExtension, IDisposable
         _calendar = calendar;
         _pinning = pinning;
         _clipboard = clipboard;
+        _media = media;
+        _events = events;
+        _appSource = appSource;
     }
 
     public FrameworkElement GetVisual()
@@ -155,15 +165,15 @@ internal sealed class StatusBarMenuBarExtension : IMenuBarExtension, IDisposable
                         // 面板当前为空态占位（未接系统通知源，见 NotificationCenterWindow 头注释）。
                         _strip?.ToggleNotificationSwitch();
                         ShowPopup(ref _notificationCenterPopup,
-                            () => new NotificationCenterWindow(_vibrancy, _appearance),
+                            () => new NotificationCenterWindow(_vibrancy, _appearance, _events),
                             e.Source, buttonWidth, new Size(320, 400));
                     }
                     else
                     {
                         ShowPopup(ref _controlCenterPopup,
                             () => new ControlCenterWindow(
-                                ControlCenterFeatureCatalog.Build(_vibrancy, _appearance, _net, _vol, _mic, _bat, _brightness),
-                                _vol, _mic, _brightness, _vibrancy, _appearance),
+                                ControlCenterFeatureCatalog.Build(_vibrancy, _appearance, _net, _vol, _mic, _bat, _brightness, _media),
+                                _vol, _mic, _brightness, _vibrancy, _appearance, _media),
                             e.Source, buttonWidth, new Size(400, 420));
                     }
                     break;
@@ -171,7 +181,7 @@ internal sealed class StatusBarMenuBarExtension : IMenuBarExtension, IDisposable
                 case MenuBarStatusButtonId.Search:
                     // 搜索：弹出搜索面板（程序/设置/文件）。服务缺失时面板内显示"不可用"占位（M10）。
                     ShowPopup(ref _searchPopup,
-                        () => new SearchPopupWindow(_search, _appIcon, _vibrancy, _appearance, _pinning, _clipboard),
+                        () => new SearchPopupWindow(_search, _appIcon, _vibrancy, _appearance, _pinning, _clipboard, _appSource),
                         e.Source, buttonWidth, new Size(440, 500));
                     break;
 
@@ -222,7 +232,7 @@ internal sealed class StatusBarMenuBarExtension : IMenuBarExtension, IDisposable
                     break;
 
                 case MenuBarStatusButtonId.Volume:
-                    ShowPopup(ref _soundPopup, () => new SoundPanelWindow(_vibrancy, _appearance),
+                    ShowPopup(ref _soundPopup, () => new SoundPanelWindow(_vibrancy, _appearance, _media),
                         e.Source, buttonWidth, new Size(320, 420));
                     break;
 

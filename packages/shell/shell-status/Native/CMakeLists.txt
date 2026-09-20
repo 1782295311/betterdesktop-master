@@ -17,12 +17,25 @@ set(NATIVE_COMPILE_DEFS
 
 set(NATIVE_COMPILE_OPTS /W4 /permissive- /utf-8)
 
+# ---- 安全加固（C1 第五层：原生安全；机检 = scripts/verify-security.ps1 第 7 条）----
+# 这几项不是"可选优化"，而是**降低内存破坏/劫持可利用性**的基础项：
+#   /GS            栈保护 cookie（MSVC 默认开；显式写以固化契约，防被 /GS- 悄悄关掉）
+#   /guard:cf      控制流保护（间接调用目标校验）—— MSVC 默认**关**，必须显式开
+#   /DYNAMICBASE   ASLR（链接器默认开；显式写）
+#   /NXCOMPAT      DEP（链接器默认开；显式写）
+#   /HIGHENTROPYVA 64 位高熵 ASLR
+# 刻意**不加** /Qspectre：它要求机器上装有「C++ Spectre 缓解库」组件（VS 安装器里的可选项），
+# 未装即链接失败 —— 让构建取决于"这台机器装了哪个 VS 组件"是更坏的结果。
+set(NATIVE_HARDEN_COMPILE /GS /guard:cf)
+set(NATIVE_HARDEN_LINK /DYNAMICBASE /NXCOMPAT /HIGHENTROPYVA /guard:cf)
+
 # Windows 子系统、无窗口、输出到统一 bin 目录。
 function(betterdesktop_native_target NAME SRCS INCLUDES LIBS OUTPUT)
     add_library(${NAME} SHARED ${SRCS})
     target_include_directories(${NAME} PRIVATE ${INCLUDES})
     target_compile_definitions(${NAME} PRIVATE ${NATIVE_COMPILE_DEFS})
-    target_compile_options(${NAME} PRIVATE ${NATIVE_COMPILE_OPTS})
+    target_compile_options(${NAME} PRIVATE ${NATIVE_COMPILE_OPTS} ${NATIVE_HARDEN_COMPILE})
+    target_link_options(${NAME} PRIVATE ${NATIVE_HARDEN_LINK})
     if(NOT LIBS STREQUAL "")
         target_link_libraries(${NAME} PRIVATE ${LIBS})
     endif()
@@ -90,10 +103,18 @@ betterdesktop_native_target(memory_core
     MemoryCore
 )
 
-# ---- MediaCore：SMTC（媒体会话 + 控制），动态加载 combase，不静态依赖 winrt 库 ----
+# ---- ImeCore：输入法循环切换按键模拟（Win+Space / Ctrl+Shift） ----
+betterdesktop_native_target(ime_core
+    src/ime_core.cpp
+    include
+    ""
+    ImeCore
+)
+
+# ---- MediaCore：SMTC（媒体会话 + 控制），C++/WinRT 真实实现（winrt 投影头随 Windows SDK 提供） ----
 betterdesktop_native_target(media_core
     src/media_core.cpp
     include
-    ""
+    "runtimeobject"
     MediaCore
 )

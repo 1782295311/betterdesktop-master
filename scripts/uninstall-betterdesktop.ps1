@@ -83,7 +83,10 @@ function Get-RunningOrNull([string]$name) {
 }
 
 # All our component names (also used to wait for a clean exit before touching files).
-$componentNames = @('BetterDesktop.Watchdog', 'BetterDesktop.Tray', 'BetterDesktop.Host',
+# 'betterdesktop-core' is lower-case/hyphenated because that is the actual process name (= the
+# cargo crate name). Leaving it out was a real defect: core stays running, keeps its exe mapped,
+# and the install folder then cannot be deleted in step 5.
+$componentNames = @('betterdesktop-core', 'BetterDesktop.Watchdog', 'BetterDesktop.Tray', 'BetterDesktop.Host',
                     'BetterDesktop.DesktopControl', 'BetterDesktop.Clipboard.Panel',
                     'BetterDesktop.Clipboard.Engine', 'BetterDesktop.Index.Engine',
                     'BetterDesktop.Capture', 'BetterDesktop.Settings')
@@ -193,6 +196,27 @@ $cli = if ($root) { Join-Path $root 'BetterDesktop.Cli.exe' } else { '' }
 $desktopExe = if ($root) { Join-Path $root 'BetterDesktop.DesktopControl.exe' } else { '' }
 $recoveryExe = if ($root) { Join-Path $root 'BetterDesktop.Recovery.exe' } else { '' }
 
+# ---- 0. stop the lifecycle owner FIRST ----
+# core is the supervisor: it (a) pulls supervised components back within seconds and (b) is itself
+# restarted by the 'BetterDesktop Core Ensure' scheduled task every 5 minutes. Stopping the other
+# components while a supervisor is still alive means racing a respawn; and leaving core alive keeps
+# betterdesktop-core.exe mapped, which makes the install-folder delete in step 5 fail (the folder
+# looks empty but cannot be removed).
+# Order: delete the task by name (so nothing can start core again) -> stop core -> then the rest.
+Step "removing the core ensure task ($coreTaskName) before stopping anything..."
+try {
+    $out = & schtasks /delete /tn $coreTaskName /f 2>&1
+    if ($LASTEXITCODE -eq 0) { Step "core ensure task removed: $coreTaskName" }
+    else { Warn "core ensure task not present or not removable: $coreTaskName" }
+}
+catch { Warn "core ensure task removal failed: $($_.Exception.Message)" }
+
+$coreProcs = Get-RunningOrNull 'betterdesktop-core'
+if ($coreProcs) {
+    Step "  stopping core ($($coreProcs.Count) instance(s))"
+    $coreProcs | Stop-Process -Force -ErrorAction SilentlyContinue
+}
+
 # ---- 1. stop every component (graceful first) ----
 Step 'stopping components...'
 if ($desktopExe -and (Test-Path $desktopExe)) {
@@ -249,17 +273,13 @@ foreach ($value in $startupValueNames) {
 Step 'autostart values removed'
 
 # ---- 2c. core ensure task (S3-4) ----
-# Deleted by NAME via schtasks, deliberately NOT via `Cli --core task unregister`: that path
+# Already removed in STEP 0 - it must happen before the processes are stopped, otherwise the task
+# restarts core in the middle of the uninstall. Kept as a pointer here so the removal is not
+# duplicated, and so the reason it lives in step 0 stays discoverable from this spot.
+# Removal is by NAME via schtasks, deliberately NOT via `Cli --core task unregister`: that path
 # "ensures core" first, i.e. it would start the very process this uninstaller is removing - and
 # after step 5 the CLI is gone, so the removal must not depend on any BetterDesktop binary.
 # Deleting by name generates no task definition, so it is not a second implementation of the task.
-Step "removing the core ensure task ($coreTaskName)..."
-try {
-    $out = & schtasks /delete /tn $coreTaskName /f 2>&1
-    if ($LASTEXITCODE -eq 0) { Step "core ensure task removed: $coreTaskName" }
-    else { Warn "core ensure task not present or not removable: $coreTaskName" }
-}
-catch { Warn "core ensure task removal failed: $($_.Exception.Message)" }
 
 # ---- 3. A route package ----
 Step "removing appx package $packageName ..."
