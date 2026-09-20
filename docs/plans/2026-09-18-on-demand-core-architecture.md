@@ -891,7 +891,7 @@ B1 从 **3/8** 变 **8/8**。
 | D12 | **端到端 A（系统右键全链）**：关主程序 → 桌面右键 .zip → 菜单出现「解压到 ▸」带图标 → 点击 → 解压成功 | 真机实走 |
 | D13 | **端到端 B（按需壳）**：空闲（仅 core）→ 托盘点「启动主程序」→ 菜单栏 + Dock 出现 → 关壳 → 回落到 1 进程 | 真机实走 |
 | D14 | **端到端 C（热键→一次性进程）**：按截图热键 → `Capture.exe` 起来 → 截完退出 | 真机实走 |
-| D15 | 老装机 Upgrade 后 Run 键无死值；计划任务仅一条 | 注册表 + `schtasks /query` |
+| D15 | 老装机 Upgrade 后 Run 键无死值；计划任务仅一条 —— ✅ **2026-09-20**，且**超出判据**：从"查无死值"变成"**core 每次启动主动清死值**" | 见下方 §13.26 |
 | D16 | 核心单测：supervisor 退避/degraded/reconcile、组件表校验、控制协议兼容、热键 spec | `cd core; cargo test` |
 | D17 | 回归绿：`Shell.ContextMenu.Tests` 113 / `Shell.Core.Tests` 138 / `Cli.Tests` 52 | `dotnet test` |
 | D18 | 全仓构建 0 警告 0 错误 + 门禁全绿 | `dotnet build` + `run-gates.ps1` |
@@ -2981,6 +2981,66 @@ B2 记着那已经搞坏过一次面板（多副本偏斜 + 跨版本替换）�
   需要改 `host/` ⇒ 卡在归属（§7.2 依赖 3）。
 
 ⇒ **本条必须这样记成半成品** —— 否则下一轮会以为"验证过了"。
+
+### 13.26 D15 侦察揪出一个活跃故障：Run 键的两个"活死值"（2026-09-20）
+
+**D15 原本只是"查一下"**（老装机 Run 键无死值 / 计划任务仅一条），结果查到**真故障**。
+
+#### 事实
+
+本机 `HKCU\...\Run` 里有：
+
+```text
+BetterDesktop.Tray     = ...\better-desktop-cordis\dist\modules\...\01-主程序\BetterDesktop.Tray.exe
+BetterDesktop.Watchdog = ...\better-desktop-cordis\dist\modules\...\01-主程序\BetterDesktop.Watchdog.exe
+```
+
+**关键**：这两个目标 exe **都还在磁盘上**（旧版 `dist\modules\...` 目录完整）⇒ 它们不是"死值"，
+而是**活死值** —— **每次开机都会真的把旧托盘与旧守护者拉起来**。
+
+⇒ 这几乎肯定就是 §7.1 记的"**今天三次遇到旧守护者**"的来源：
+core 的 gate 关掉某个组件，旧守护者开机后被拉起来又把它拉回去 —— **两者对同一件事给相反答案**。
+
+#### 根因：一个"交给手动入口"的假设
+
+`core/src/autostart.rs` 的模块头原先写着：
+
+> 历史上写过的 `BetterDesktop.Tray` / `.Watchdog` / `BetterDesktop` 由**卸载程序与恢复程序**负责清理。
+
+**这个假设是错的**，而且是结构性错的：卸载器只在**卸载时**跑，`recovery --clean-autostart` 要用户**主动点**。
+两者都是**手动入口**，而这个问题**每次开机复现** ——
+⇒ **把"清理历史遗留"派给手动入口，等于假设用户会主动来清。**
+对**用户不可见**的遗留（开机自启正是典型：它失败时没有任何提示），这个假设永远不成立。
+
+#### 修复
+
+| 步 | 动作 |
+|---|---|
+| **止血** | 手动删掉那两个 Run 值 |
+| **永久** | 新增 `autostart::clean_legacy_values()`，**core 启动时调用**（core 由计划任务拉起，5 分钟内必跑一次 ⇒ 唯一能覆盖"没去点应急恢复的机器"的地方）|
+| **守边界** | `LEGACY_VALUE_NAMES` **不含**裸名 `BetterDesktop` —— 它可能指向**现役 launcher**，删它会破坏正在用的功能。判据是"**目标组件是否已退役**"，不是"名字像不像旧的"。**单测专门钉这一条**（防手滑）|
+| **自律** | 幂等、**不建键**（`RegOpenKeyExW` 而非 `Create`）、**失败不阻塞启动**、返回被清名单供日志**如实记录** |
+
+#### 真机验证（完整闭环）
+
+1. 模拟旧机器：把 `BetterDesktop.Watchdog` 写回 Run 键；
+2. 单拷部署新 core（§13.24 流程）；
+3. core 启动日志：
+
+```text
+[WARN] removed 1 legacy Run value(s) from HKCU\...\Run: BetterDesktop.Watchdog
+       — they pointed at components removed in S4-4 and would otherwise be launched at every boot
+```
+
+4. Run 键：**已无 `BetterDesktop` 相关值** ✓
+
+**单测 191 → 192**（新增"历史值不含现役名"那条）；clippy 0。
+
+#### 顺带核销的 D8
+
+同一轮里做了 **D8（kill 任意按需进程不触发守护复活）**：启动 `BetterDesktop.Settings.exe`（on-demand）
+→ kill → 等 12 秒 → **实例数 0** ⇒ core **不复活**它 ✓
+（对照：`desired=running` 的组件被 kill 会在 3 秒内拉回 —— 这正是"删掉不等于停掉"的分工。）
 
 ### 13.15 S4-2 第 2 步：core 的注册**触发** + `RepairGate`（2026-09-19）
 

@@ -133,6 +133,20 @@ fn main() -> ExitCode {
     // 组件表：core 的唯一业务数据（新增能力只加表项）。
     let table = components::load();
     log::info(format!("component table: {} entries", table.len()));
+
+    // 清掉**历史遗留的开机自启值**（指向 S4-4 删除的两个组件）。
+    // 必须在这里：真机实测它们**每次开机都会把旧托盘/旧守护者拉起来**，
+    // 而卸载器与应急恢复都是手动入口 —— 覆盖不到"没去点它们的机器"。
+    // 详见 `autostart` 模块头的实证修正。
+    let cleaned = autostart::clean_legacy_values();
+    if !cleaned.is_empty() {
+        log::warn(format!(
+            "removed {} legacy Run value(s) from HKCU\\...\\Run: {} — they pointed at components \
+             removed in S4-4 and would otherwise be launched at every boot",
+            cleaned.len(),
+            cleaned.join(", ")
+        ));
+    }
     // 逐条记录 **tier 分派结果 + 开关求值结果** —— "为什么 X 没在跑" 是最高频的排查问题，
     // 启动日志必须直接给出答案（gate 关 = 用户主动关掉的，core 不许拉回）。
     let settings = settings::Settings::load();

@@ -18,7 +18,23 @@
 //! # 值名是跨进程契约
 //!
 //! 只留 [`VALUE_NAME`] 一个值名。历史上写过的 `BetterDesktop.Tray` / `.Watchdog` / `BetterDesktop`
-//! 由卸载程序与恢复程序负责**清理**（它们只按名字删，不生成定义，因此不构成第二份实现）。
+//! 由卸载程序、恢复程序 **以及 core 自己**负责**清理**（前两者只按名字删，不生成定义，
+//! 因此不构成第二份实现；core 的清理见 [`clean_legacy_values`]）。
+//!
+//! # 【2026-09-20 实证修正】"交给卸载器与恢复程序"**不够**
+//!
+//! 本模块头原先只写了前两者（卸载程序 / 恢复程序）。真机实测推翻了它：
+//! 本机 `HKCU\...\Run` 里 `BetterDesktop.Tray` 与 `BetterDesktop.Watchdog` **都还在**，
+//! 而且它们指向的 exe **也还在磁盘上**（旧版 `dist\modules\...` 目录）
+//! ⇒ **每次开机都会把旧托盘与旧守护者拉起来**，与 core 的 gate 打架
+//!（计划 §7.1 记的"今天三次遇到旧守护者"，几乎肯定就是这个）。
+//!
+//! 原因是结构性的：**卸载器与应急恢复都是手动入口** —— 前者只在卸载时跑、
+//! 后者要用户主动点"应急恢复"。而这个问题**每次开机复现**，
+//! 需要一个**每次开机都会执行**的地方 ⇒ core 自己（它由计划任务拉起，5 分钟内必跑一次）。
+//!
+//! **教训**：把"清理历史遗留"的职责派给**手动入口**，等于假设用户会主动来清 ——
+//! 而对**用户不可见**的遗留（开机自启正是典型），这个假设永远不成立。
 
 use std::path::{Path, PathBuf};
 
@@ -31,6 +47,17 @@ use windows::core::PCWSTR;
 
 /// `HKCU\...\Run` 下的值名（**跨进程契约**：卸载程序 / `recovery --clean-autostart` 按它清理）。
 pub const VALUE_NAME: &str = "BetterDesktop.Core";
+
+/// **历史遗留**的 Run 值名 —— 指向 S4-4 之前的组件，由 [`clean_legacy_values`] 清掉。
+///
+/// # 为什么只收这两个，而**不含** `BetterDesktop`
+///
+/// `BetterDesktop.Tray` / `BetterDesktop.Watchdog` 指向的组件**已随 S4-4 删除** ⇒ 删值无副作用。
+///
+/// 而裸名 `BetterDesktop` **不能**收进来：它可能指向**现役的 launcher**
+///（`BetterDesktop.exe` 是用户双击的入口）⇒ 删掉它会破坏一个正在用的功能。
+/// 判据是"**目标组件是否已退役**"，不是"名字看起来旧不旧"。
+pub const LEGACY_VALUE_NAMES: &[&str] = &["BetterDesktop.Tray", "BetterDesktop.Watchdog"];
 
 /// `HKCU` 下的 Run 键路径。
 const RUN_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
@@ -73,6 +100,46 @@ pub fn disable() -> Result<(), String> {
             result.0
         ))
     }
+}
+
+/// 清掉[历史遗留的 Run 值](LEGACY_VALUE_NAMES)，返回**实际删掉**的值名。
+///
+/// 启动时调用一次（见模块头的实证修正）。设计上有三条自律：
+///
+/// - **幂等**：没有可清的就算成功（返回空表）。
+/// - **不建键**：Run 键不存在就什么都不做（用 `RegOpenKeyExW`，不是 `Create`）——
+///   "清一次遗留"不该顺手造出一个空键。
+/// - **失败不阻塞启动**：删不掉（权限/被占用）不该让 core 起不来。
+///   这是启动路径上的一步**尽力而为**的清理，不是一个必须成功的动作。
+///   返回值让调用方**如实记录**"清了什么"，而不是静默。
+pub fn clean_legacy_values() -> Vec<String> {
+    let mut removed = Vec::new();
+
+    // 需要 KEY_SET_VALUE（删除是写操作）；读值那条路只求 KEY_QUERY_VALUE，故不复用它。
+    let subkey = to_wide(RUN_KEY);
+    let mut key = HKEY::default();
+    let opened = unsafe {
+        RegOpenKeyExW(
+            HKEY_CURRENT_USER,
+            PCWSTR(subkey.as_ptr()),
+            0,
+            KEY_SET_VALUE | KEY_QUERY_VALUE,
+            &mut key,
+        )
+    };
+    if opened != ERROR_SUCCESS {
+        return removed; // 键不存在 / 打不开 ⇒ 没有可清的
+    }
+    let key = OwnedKey(key);
+
+    for name in LEGACY_VALUE_NAMES {
+        let wide = to_wide(name);
+        if unsafe { RegDeleteValueW(key.0, PCWSTR(wide.as_ptr())) } == ERROR_SUCCESS {
+            removed.push((*name).to_string());
+        }
+    }
+
+    removed
 }
 
 /// 翻转自启并返回**翻转后**的状态（`true` = 已启用）。
@@ -283,6 +350,26 @@ mod tests {
         assert!(!value_matches_path(r"C:\Other\betterdesktop-core.exe", exe));
         assert!(!value_matches_path("", exe), "空值不得被当成等价");
         assert!(!value_matches_path(r#""""#, exe));
+    }
+
+    /// **历史值的判据是"目标组件是否已退役"，不是"名字看起来旧"**。
+    ///
+    /// 这条单测存在的唯一理由是**防手滑**：往 [`LEGACY_VALUE_NAMES`] 里加名字是"清理工作"，
+    /// 看起来永远安全 —— 但只要加错一个，core 就会在每次开机时**删掉一个正在用的自启项**。
+    #[test]
+    fn legacy_names_exclude_the_live_launcher() {
+        assert!(LEGACY_VALUE_NAMES.contains(&"BetterDesktop.Tray"));
+        assert!(LEGACY_VALUE_NAMES.contains(&"BetterDesktop.Watchdog"));
+
+        assert!(
+            !LEGACY_VALUE_NAMES.contains(&"BetterDesktop"),
+            "裸名 `BetterDesktop` 可能指向**现役的 launcher**（用户双击的入口）—— \
+             删它 = 破坏一个正在用的功能。它的归属要靠实际目标判断，不能靠名字像不像旧的"
+        );
+        assert!(
+            !LEGACY_VALUE_NAMES.contains(&VALUE_NAME),
+            "现役值名绝不能被当成遗留值清掉 —— 那会把 core 自己的开机自启删了"
+        );
     }
 
     /// 只读探测本机一次：不写、不删任何东西（单测不该改动真机系统状态）。
