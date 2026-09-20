@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <UseWPF>false</UseWPF>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>BetterDesktop.Recovery</RootNamespace>
+    <AssemblyName>BetterDesktop.Recovery</AssemblyName>
+    <WindowsApplication>true</WindowsApplication>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!--
+      跨进程统一日志：共享源。本工程有"零依赖（不引用任何 BetterDesktop 工程）"硬约束，
+      故以 <Compile Include Link> 编译同一份实现，而不是加项目引用。
+    -->
+    <Compile Include="..\..\..\shared\logging\*.cs" LinkBase="Logging" />
+  </ItemGroup>
+</Project>

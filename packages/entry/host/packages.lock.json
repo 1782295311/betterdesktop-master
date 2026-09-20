@@ -1,0 +1,581 @@
+{
+  "version": 1,
+  "dependencies": {
+    "net8.0-windows10.0.19041": {
+      "BlackSharp.Core": {
+        "type": "Transitive",
+        "resolved": "1.0.7",
+        "contentHash": "LbEc4w0oZ7w4p6+8OjPZgwsJW470aQRuYZgZ9aMN2PW9R79pW3OnZQ32AVVx/21rstX9mKbXaOLWpSAxoANYxQ=="
+      },
+      "DiskInfoToolkit": {
+        "type": "Transitive",
+        "resolved": "1.1.2",
+        "contentHash": "vN46svt1hQDkm269p6CzfwDpb/fbyp8oNQuePcvjNSryPLfsxIJZU8amEhir+x5bsKd0ymOXTySzPwFO8o0dpw==",
+        "dependencies": {
+          "BlackSharp.Core": "1.0.7"
+        }
+      },
+      "HidSharp": {
+        "type": "Transitive",
+        "resolved": "2.6.4",
+        "contentHash": "UcGvtnXFcatwHBXr+ei8GEXvg//wjGmDGQ6Xvb+7M4vHjURAhSLIJ+dSZv0BnAhQEpNlH8G4P7JxYnMH8Aph4g=="
+      },
+      "HtmlAgilityPack": {
+        "type": "Transitive",
+        "resolved": "1.11.57",
+        "contentHash": "zDxnHcAvi+qhZG602eKaPJKmzm0T8npKVML0RMwjrRBabpmTRtu2OVpfNkMUfYMgQ+5EllOkSeGxu0uFVV2zFw=="
+      },
+      "LibreHardwareMonitorLib": {
+        "type": "Transitive",
+        "resolved": "0.9.6",
+        "contentHash": "W4hQ5Ja51/1cEDZnh9kG5UHFBwjjY2+oIpSUhSsgeYXKRKezrkw3sEFrhQkrOuo53xkXyfWV8ZErMqQuGqWIMQ==",
+        "dependencies": {
+          "DiskInfoToolkit": "1.1.2",
+          "HidSharp": "2.6.4",
+          "Mono.Posix.NETStandard": "1.0.0",
+          "RAMSPDToolkit-NDD": "1.4.2",
+          "System.IO.Ports": "10.0.3",
+          "System.Management": "10.0.2",
+          "System.Threading.AccessControl": "10.0.3"
+        }
+      },
+      "ManagedShell": {
+        "type": "Transitive",
+        "resolved": "0.0.370",
+        "contentHash": "I0rcPWD60u+andebkwM2AMXPwzKuOVxVrBsSBzg1OEl2Szi4u7iAM0lQScyh9xkeVgnLo8+Tk07WtalDkFMPpw==",
+        "dependencies": {
+          "System.Data.OleDb": "8.0.1",
+          "System.ServiceProcess.ServiceController": "8.0.1"
+        }
+      },
+      "Markdig": {
+        "type": "Transitive",
+        "resolved": "0.37.0",
+        "contentHash": "biiu4MTPFjW55qw6v5Aphtj0MjDLJ14x8ndZwkJUHIeqvaSGKeqhLY7S7Vu/S3k7/c9KwhhnaCDP9hdFNUhcNA=="
+      },
+      "Microsoft.Extensions.DependencyInjection.Abstractions": {
+        "type": "Transitive",
+        "resolved": "8.0.2",
+        "contentHash": "3iE7UF7MQkCv1cxzCahz+Y/guQbTqieyxyaWKhrRO91itI9cOKO76OHeQDahqG4MmW5umr3CcCvGmK92lWNlbg=="
+      },
+      "Microsoft.Extensions.Logging.Abstractions": {
+        "type": "Transitive",
+        "resolved": "8.0.3",
+        "contentHash": "dL0QGToTxggRLMYY4ZYX5AMwBb+byQBd/5dMiZE07Nv73o6I5Are3C7eQTh7K2+A4ct0PVISSr7TZANbiNb2yQ==",
+        "dependencies": {
+          "Microsoft.Extensions.DependencyInjection.Abstractions": "8.0.2"
+        }
+      },
+      "Microsoft.Win32.SystemEvents": {
+        "type": "Transitive",
+        "resolved": "8.0.0",
+        "contentHash": "9opKRyOKMCi2xJ7Bj7kxtZ1r9vbzosMvRrdEhVhDz8j8MoBGgB+WmC94yH839NPH+BclAjtQ/pyagvi/8gDLkw=="
+      },
+      "Mono.Posix.NETStandard": {
+        "type": "Transitive",
+        "resolved": "1.0.0",
+        "contentHash": "vSN/L1uaVwKsiLa95bYu2SGkF0iY3xMblTfxc8alSziPuVfJpj3geVqHGAA75J7cZkMuKpFVikz82Lo6y6LLdA=="
+      },
+      "PDFsharp": {
+        "type": "Transitive",
+        "resolved": "6.2.4",
+        "contentHash": "GhTr9F1uOYXHCIEOB5PXIgqn5a8WLsJL2m0eewTA0IvY1j6N4HGXHKKmEyB90/N6vrjmYamf41V9zbmdW2HY3g==",
+        "dependencies": {
+          "Microsoft.Extensions.Logging.Abstractions": "8.0.3",
+          "System.Security.Cryptography.Pkcs": "8.0.1"
+        }
+      },
+      "RAMSPDToolkit-NDD": {
+        "type": "Transitive",
+        "resolved": "1.4.2",
+        "contentHash": "pqIwn/HqXFnW4FVKybq6gZh3YK14OOLGWkgZzDdewjAInCOu86EO2L+FCQo8j1/v1sKwv+vgX5pnehxyrlJYJw==",
+        "dependencies": {
+          "BlackSharp.Core": "1.0.4",
+          "System.Management": "10.0.0"
+        }
+      },
+      "ReverseMarkdown": {
+        "type": "Transitive",
+        "resolved": "4.3.0",
+        "contentHash": "KykyBe7Q26pkYbmMP7zwRgAy74xglCCU4lPilii0Vj++LMdvTcm2EZ6EvzaNKvaBNhWQtcI69V/4tW52sceEOw==",
+        "dependencies": {
+          "HtmlAgilityPack": "1.11.57"
+        }
+      },
+      "runtime.android-arm.runtime.native.System.IO.Ports": {
+        "type": "Transitive",
+        "resolved": "10.0.3",
+        "contentHash": "6W4qZX0X7FF+PHM9Kaa5ZsTLcGJAzCU7FB4Tjy1vTg2rUIEjDqijWTtpz8vY6gBzZaG+tD0/EKUyGnfq6d/d/Q=="
+      },
+      "runtime.android-arm64.runtime.native.System.IO.Ports": {
+        "type": "Transitive",
+        "resolved": "10.0.3",
+        "contentHash": "4OdNg2Du1kvm0b4tSErkA4wfH32YmgUqeSLzekk6NdCR61brCp4vttTJl0epZMwbRppXuy/jY7pV0WtP4ymnfQ=="
+      },
+      "runtime.android-x64.runtime.native.System.IO.Ports": {
+        "type": "Transitive",
+        "resolved": "10.0.3",
+        "contentHash": "nP7xJSDSqRktV4kEd0kr4n0xhzJFuQjh7L/AgrKB3C4QK5TA/8NimJmTl1ogngvnXn2vilH2Hk+keBIvuoGWCA=="
+      },
+      "runtime.android-x86.runtime.native.System.IO.Ports": {
+        "type": "Transitive",
+        "resolved": "10.0.3",
+        "contentHash": "f/neqijoVpgl/PcrXYeLNfCC2t74XYIcaHvtSaF3zaIdJ3hf5wrwRC9gzYLXHRLg/j4DRsCHEw8rlux/dNh7XA=="
+      },
+      "runtime.linux-arm.runtime.native.System.IO.Ports": {
+        "type": "Transitive",
+        "resolved": "10.0.3",
+        "contentHash": "cwiQmy95Zd42K4kMzDt8GkXNKHWDkRZIIyb3MteRrgJKubH2DMA6VY3JiFeR+1hQ7i31Ck+dYyt8wUkElZ/NrQ=="
+      },
+      "runtime.linux-arm64.runtime.native.System.IO.Ports": {
+        "type": "Transitive",
+        "resolved": "10.0.3",
+        "contentHash": "cEx+Xm0ZNPsuoYTFwXZ6qRstwXQ7vJjbb3jWzo5s5xIeEgpTDdfiUjTgK3Gl618mWgb7+Gn6Vt5pT07RxFC28Q=="
+      },
+      "runtime.linux-bionic-arm64.runtime.native.System.IO.Ports": {
+        "type": "Transitive",
+        "resolved": "10.0.3",
+        "contentHash": "kB21sNzlKgTj3V/LZhnTLFuViiGKtkiUG2GdEW+z3jdeUtRoxqBBXryzMqy0oUOy5idBW2pA6bh+iLGaj+GThA=="
+      },
+      "runtime.linux-bionic-x64.runtime.native.System.IO.Ports": {
+        "type": "Transitive",
+        "resolved": "10.0.3",
+        "contentHash": "/Ud7EYdpnBGJ/x7DdqVFEJOQtEcf9rsD6/1iyUBJNfhhs8JljZLewJHp1cXr1DVCaWWc9jSWIc4g+QpMct/22A=="
+      },
+      "runtime.linux-musl-arm.runtime.native.System.IO.Ports": {
+        "type": "Transitive",
+        "resolved": "10.0.3",
+        "contentHash": "pBubukkmXD9e4Ju004bEHL3TE5mYahONCVwrJ5b+7/cj8smSY2H5sKTyURiVF1EfX55yORKyTyQ3dALA5yTTlg=="
+      },
+      "runtime.linux-musl-arm64.runtime.native.System.IO.Ports": {
+        "type": "Transitive",
+        "resolved": "10.0.3",
+        "contentHash": "+FR6SvpZya66Wv26MVEK4l2gnjfZnBVUz675eaTcMQ/KWAy+GMaPyhRaBIMnQJf5gfuu3x1qgeAzpmeFkOPGBw=="
+      },
+      "runtime.linux-musl-x64.runtime.native.System.IO.Ports": {
+        "type": "Transitive",
+        "resolved": "10.0.3",
+        "contentHash": "Ee1XnOSKgeJGBcnd7LLLkyXEbE/JcpQ3pUlbPXqugl0YD55jVubpYebzGYI+ilrnBLCRiV0BR822b2XmerIKGw=="
+      },
+      "runtime.linux-x64.runtime.native.System.IO.Ports": {
+        "type": "Transitive",
+        "resolved": "10.0.3",
+        "contentHash": "U+Zr1KuBDIIwgR2gTMFbBAtkr4WnKdEXxmknPa3X8Qy6oCi4+MTRmq2zmTh7wxXQXTdmhfXg2tyy7DuVHtB+xQ=="
+      },
+      "runtime.maccatalyst-arm64.runtime.native.System.IO.Ports": {
+        "type": "Transitive",
+        "resolved": "10.0.3",
+        "contentHash": "9yTgh3ZKCBTGEO4YS76g/K15s2qSdeEZDqWteixUPeRsETsuBUwUPF39Fk39OPlRgwhqEuhtHy1Hf6BSOETfAg=="
+      },
+      "runtime.maccatalyst-x64.runtime.native.System.IO.Ports": {
+        "type": "Transitive",
+        "resolved": "10.0.3",
+        "contentHash": "0gxqUZYQ1T1o5VzgyEMKiSPKJtPbleF2nbjZa5QKZQvPgSlrZFL+FrW4LywIk2scOpXu+Vd5Mv8AGGV7slhYWA=="
+      },
+      "runtime.native.System.IO.Ports": {
+        "type": "Transitive",
+        "resolved": "10.0.3",
+        "contentHash": "7U3HW0JzAeg9PWaYBcyWLFMq2RSexgJ8uVCR3E2QVJJ/IZnRT0wYRhyEx3zBSbKYzN3KE6MDiRd6CN4hR7YkqA==",
+        "dependencies": {
+          "runtime.android-arm.runtime.native.System.IO.Ports": "10.0.3",
+          "runtime.android-arm64.runtime.native.System.IO.Ports": "10.0.3",
+          "runtime.android-x64.runtime.native.System.IO.Ports": "10.0.3",
+          "runtime.android-x86.runtime.native.System.IO.Ports": "10.0.3",
+          "runtime.linux-arm.runtime.native.System.IO.Ports": "10.0.3",
+          "runtime.linux-arm64.runtime.native.System.IO.Ports": "10.0.3",
+          "runtime.linux-bionic-arm64.runtime.native.System.IO.Ports": "10.0.3",
+          "runtime.linux-bionic-x64.runtime.native.System.IO.Ports": "10.0.3",
+          "runtime.linux-musl-arm.runtime.native.System.IO.Ports": "10.0.3",
+          "runtime.linux-musl-arm64.runtime.native.System.IO.Ports": "10.0.3",
+          "runtime.linux-musl-x64.runtime.native.System.IO.Ports": "10.0.3",
+          "runtime.linux-x64.runtime.native.System.IO.Ports": "10.0.3",
+          "runtime.maccatalyst-arm64.runtime.native.System.IO.Ports": "10.0.3",
+          "runtime.maccatalyst-x64.runtime.native.System.IO.Ports": "10.0.3",
+          "runtime.osx-arm64.runtime.native.System.IO.Ports": "10.0.3",
+          "runtime.osx-x64.runtime.native.System.IO.Ports": "10.0.3"
+        }
+      },
+      "runtime.osx-arm64.runtime.native.System.IO.Ports": {
+        "type": "Transitive",
+        "resolved": "10.0.3",
+        "contentHash": "qnEjXlIazxaRAhBet0EupWoJQ9PKsXjThpMKGP/ZsCjZgHEb+zs9wft82wY27OagyPOCg9D4hJHWKt5LTbJNZg=="
+      },
+      "runtime.osx-x64.runtime.native.System.IO.Ports": {
+        "type": "Transitive",
+        "resolved": "10.0.3",
+        "contentHash": "L1gcOL5kcfeeujKQbqJmpeTLsT0c6DeaJ9w6PY9oZ+/WESyya+Zj7StKguXR5j93o3o86FjcN05yufpoCz7R2g=="
+      },
+      "SkiaSharp": {
+        "type": "Transitive",
+        "resolved": "2.88.9",
+        "contentHash": "3MD5VHjXXieSHCleRLuaTXmL2pD0mB7CcOB1x2kA1I4bhptf4e3R27iM93264ZYuAq6mkUyX5XbcxnZvMJYc1Q==",
+        "dependencies": {
+          "SkiaSharp.NativeAssets.Win32": "2.88.9",
+          "SkiaSharp.NativeAssets.macOS": "2.88.9"
+        }
+      },
+      "SkiaSharp.NativeAssets.macOS": {
+        "type": "Transitive",
+        "resolved": "2.88.9",
+        "contentHash": "Nv5spmKc4505Ep7oUoJ5vp3KweFpeNqxpyGDWyeEPTX2uR6S6syXIm3gj75dM0YJz7NPvcix48mR5laqs8dPuA=="
+      },
+      "SkiaSharp.NativeAssets.Win32": {
+        "type": "Transitive",
+        "resolved": "2.88.9",
+        "contentHash": "wb2kYgU7iy84nQLYZwMeJXixvK++GoIuECjU4ECaUKNuflyRlJKyiRhN1MAHswvlvzuvkrjRWlK0Za6+kYQK7w=="
+      },
+      "System.CodeDom": {
+        "type": "Transitive",
+        "resolved": "10.0.2",
+        "contentHash": "eih1MnL4tnSjHUhzae0dmpu50Sm0s54faHZc8yhzYfmubAubkBIIulYYN28fasD1m41mhl6Cenhs9/F0aLv3FA=="
+      },
+      "System.Configuration.ConfigurationManager": {
+        "type": "Transitive",
+        "resolved": "8.0.1",
+        "contentHash": "gPYFPDyohW2gXNhdQRSjtmeS6FymL2crg4Sral1wtvEJ7DUqFCDWDVbbLobASbzxfic8U1hQEdC7hmg9LHncMw==",
+        "dependencies": {
+          "System.Diagnostics.EventLog": "8.0.1",
+          "System.Security.Cryptography.ProtectedData": "8.0.0"
+        }
+      },
+      "System.Data.OleDb": {
+        "type": "Transitive",
+        "resolved": "8.0.1",
+        "contentHash": "RO+/y2ggU5956uQDRXdjA1e2l5yJ4rTWNX76eZ+3sgtYGqGapCe2kQCyiUci+/y6Fyb21Irp4RQEdfrIiuYrxQ==",
+        "dependencies": {
+          "System.Configuration.ConfigurationManager": "8.0.1",
+          "System.Diagnostics.PerformanceCounter": "8.0.1"
+        }
+      },
+      "System.Diagnostics.EventLog": {
+        "type": "Transitive",
+        "resolved": "8.0.1",
+        "contentHash": "n1ZP7NM2Gkn/MgD8+eOT5MulMj6wfeQMNS2Pizvq5GHCZfjlFMXV2irQlQmJhwA2VABC57M0auudO89Iu2uRLg=="
+      },
+      "System.Diagnostics.PerformanceCounter": {
+        "type": "Transitive",
+        "resolved": "8.0.1",
+        "contentHash": "9RfEDiEjlUADeThs8IPdDVTXSnPRSqjfgTQJALpmGFPKC0k2mbdufOXnb/9JZ4I0TkmxOfy3VTJxrHOJSs8cXg==",
+        "dependencies": {
+          "System.Configuration.ConfigurationManager": "8.0.1"
+        }
+      },
+      "System.Drawing.Common": {
+        "type": "Transitive",
+        "resolved": "8.0.8",
+        "contentHash": "4ZM1wvLjz9nVVExsfPAaSl/qOvU+QNedJL5rQ+2Wbow+iGeyO0e7XN07707rMBgaffEeeLrCZBwC0oHUuvRdPw==",
+        "dependencies": {
+          "Microsoft.Win32.SystemEvents": "8.0.0"
+        }
+      },
+      "System.IO.Ports": {
+        "type": "Transitive",
+        "resolved": "10.0.3",
+        "contentHash": "Zs04mZ/dQtaFQ+hpQNDtijBs+6aM9j2fQPp8zNZTfh8DboVNNv7Sw6gH00hT+PVcAhEozlfT+n59Svm6Ug8ROA==",
+        "dependencies": {
+          "runtime.native.System.IO.Ports": "10.0.3"
+        }
+      },
+      "System.Management": {
+        "type": "Transitive",
+        "resolved": "10.0.2",
+        "contentHash": "eFftuy3i844lVKCb4lJvvjKfcvPVcW8KrAdSaIOcRL42/Fisj46hwUs8Bky+4avzMe5Snm5t7aSayOI1mybYXg==",
+        "dependencies": {
+          "System.CodeDom": "10.0.2"
+        }
+      },
+      "System.Security.Cryptography.Pkcs": {
+        "type": "Transitive",
+        "resolved": "8.0.1",
+        "contentHash": "CoCRHFym33aUSf/NtWSVSZa99dkd0Hm7OCZUxORBjRB16LNhIEOf8THPqzIYlvKM0nNDAPTRBa1FxEECrgaxxA=="
+      },
+      "System.Security.Cryptography.ProtectedData": {
+        "type": "Transitive",
+        "resolved": "8.0.0",
+        "contentHash": "+TUFINV2q2ifyXauQXRwy4CiBhqvDEDZeVJU7qfxya4aRYOKzVBpN+4acx25VcPB9ywUN6C0n8drWl110PhZEg=="
+      },
+      "System.ServiceProcess.ServiceController": {
+        "type": "Transitive",
+        "resolved": "8.0.1",
+        "contentHash": "02I0BXo1kmMBgw03E8Hu4K6nTqur4wpQdcDZrndczPzY2fEoGvlinE35AWbyzLZ2h2IksEZ6an4tVt3hi9j1oA==",
+        "dependencies": {
+          "System.Diagnostics.EventLog": "8.0.1"
+        }
+      },
+      "System.Threading.AccessControl": {
+        "type": "Transitive",
+        "resolved": "10.0.3",
+        "contentHash": "PO3IM2ZXOJTjuuFDYMP62i290J41y891C+ytTa1HCDUo5FdywK/Ro6jflWHmbgZ2tz62EhRDa8WIT2vVJX45AQ=="
+      },
+      "TinyPinyin.Net": {
+        "type": "Transitive",
+        "resolved": "1.0.2",
+        "contentHash": "dbQcaukn7DEOsgFJn4YFQT0zfbALWHZiZMIvsvLOaMQRnCnOfYPE5Fq4PoIqCgGMnPt21NsLxEuXYRq4QQSnDA=="
+      },
+      "YamlDotNet": {
+        "type": "Transitive",
+        "resolved": "16.0.0",
+        "contentHash": "kZ4jR5ltFhnjaUqK9x81zXRIUTH4PTXTTEmJDNQdkDLQhcv+2Nl19r0dCSvPW1mstOYBfXTnjdieRbUO6gHMDw=="
+      },
+      "betterdesktop.api": {
+        "type": "Project"
+      },
+      "betterdesktop.kernel": {
+        "type": "Project"
+      },
+      "betterdesktop.kernel.hmr": {
+        "type": "Project",
+        "dependencies": {
+          "BetterDesktop.Kernel": "[1.3.0, )"
+        }
+      },
+      "betterdesktop.kernel.loader": {
+        "type": "Project",
+        "dependencies": {
+          "BetterDesktop.Kernel": "[1.3.0, )",
+          "YamlDotNet": "[16.0.0, )"
+        }
+      },
+      "betterdesktop.kernel.timer": {
+        "type": "Project",
+        "dependencies": {
+          "BetterDesktop.Kernel": "[1.3.0, )"
+        }
+      },
+      "betterdesktop.shell.appsource": {
+        "type": "Project",
+        "dependencies": {
+          "BetterDesktop.Api": "[1.3.0, )",
+          "BetterDesktop.Kernel": "[1.3.0, )",
+          "BetterDesktop.Shell.IndexIpc": "[1.3.0, )",
+          "ManagedShell": "[0.0.370, )"
+        }
+      },
+      "betterdesktop.shell.calendar": {
+        "type": "Project",
+        "dependencies": {
+          "BetterDesktop.Api": "[1.3.0, )",
+          "BetterDesktop.Kernel": "[1.3.0, )",
+          "BetterDesktop.Shell.Settings": "[1.3.0, )"
+        }
+      },
+      "betterdesktop.shell.clipboard": {
+        "type": "Project",
+        "dependencies": {
+          "BetterDesktop.Api": "[1.3.0, )",
+          "BetterDesktop.Kernel": "[1.3.0, )",
+          "BetterDesktop.Shell.Clipboard.Ipc": "[1.3.0, )",
+          "BetterDesktop.Shell.Core": "[1.3.0, )",
+          "BetterDesktop.Shell.Settings": "[1.3.0, )"
+        }
+      },
+      "betterdesktop.shell.clipboard.ipc": {
+        "type": "Project",
+        "dependencies": {
+          "BetterDesktop.Api": "[1.3.0, )",
+          "BetterDesktop.Kernel": "[1.3.0, )"
+        }
+      },
+      "betterdesktop.shell.contextmenu": {
+        "type": "Project",
+        "dependencies": {
+          "BetterDesktop.Api": "[1.3.0, )",
+          "BetterDesktop.Kernel": "[1.3.0, )",
+          "BetterDesktop.Shell.AppSource": "[1.3.0, )",
+          "BetterDesktop.Shell.Core": "[1.3.0, )",
+          "BetterDesktop.Shell.Settings": "[1.3.0, )"
+        }
+      },
+      "betterdesktop.shell.convert": {
+        "type": "Project",
+        "dependencies": {
+          "BetterDesktop.Api": "[1.3.0, )",
+          "BetterDesktop.Kernel": "[1.3.0, )",
+          "BetterDesktop.Shell.ContextMenu": "[1.3.0, )",
+          "BetterDesktop.Shell.Settings": "[1.3.0, )",
+          "Markdig": "[0.37.0, )",
+          "PDFsharp": "[6.2.4, )",
+          "ReverseMarkdown": "[4.3.0, )",
+          "SkiaSharp": "[2.88.9, )",
+          "System.Drawing.Common": "[8.0.8, )",
+          "YamlDotNet": "[16.0.0, )"
+        }
+      },
+      "betterdesktop.shell.core": {
+        "type": "Project",
+        "dependencies": {
+          "BetterDesktop.Api": "[1.3.0, )",
+          "BetterDesktop.Kernel": "[1.3.0, )",
+          "BetterDesktop.Shell.Clipboard.Ipc": "[1.3.0, )"
+        }
+      },
+      "betterdesktop.shell.desktop": {
+        "type": "Project",
+        "dependencies": {
+          "BetterDesktop.Api": "[1.3.0, )",
+          "BetterDesktop.Kernel": "[1.3.0, )",
+          "BetterDesktop.Shell.AppSource": "[1.3.0, )",
+          "BetterDesktop.Shell.ContextMenu": "[1.3.0, )",
+          "BetterDesktop.Shell.Convert": "[1.3.0, )",
+          "BetterDesktop.Shell.Core": "[1.3.0, )",
+          "BetterDesktop.Shell.Settings": "[1.3.0, )",
+          "ManagedShell": "[0.0.370, )"
+        }
+      },
+      "betterdesktop.shell.dock": {
+        "type": "Project",
+        "dependencies": {
+          "BetterDesktop.Api": "[1.3.0, )",
+          "BetterDesktop.Kernel": "[1.3.0, )",
+          "BetterDesktop.Shell.AppSource": "[1.3.0, )",
+          "BetterDesktop.Shell.ContextMenu": "[1.3.0, )",
+          "BetterDesktop.Shell.Core": "[1.3.0, )",
+          "BetterDesktop.Shell.Pinning": "[1.3.0, )",
+          "BetterDesktop.Shell.Settings": "[1.3.0, )",
+          "BetterDesktop.Shell.WindowTracker": "[1.3.0, )",
+          "ManagedShell": "[0.0.370, )",
+          "System.Drawing.Common": "[8.0.8, )",
+          "TinyPinyin.Net": "[1.0.2, )"
+        }
+      },
+      "betterdesktop.shell.hotkeypanel": {
+        "type": "Project",
+        "dependencies": {
+          "BetterDesktop.Api": "[1.3.0, )",
+          "BetterDesktop.Kernel": "[1.3.0, )",
+          "BetterDesktop.Shell.Clipboard.Ipc": "[1.3.0, )",
+          "BetterDesktop.Shell.Core": "[1.3.0, )",
+          "BetterDesktop.Shell.Settings": "[1.3.0, )"
+        }
+      },
+      "betterdesktop.shell.indexipc": {
+        "type": "Project",
+        "dependencies": {
+          "BetterDesktop.Kernel": "[1.3.0, )"
+        }
+      },
+      "betterdesktop.shell.island": {
+        "type": "Project",
+        "dependencies": {
+          "BetterDesktop.Api": "[1.3.0, )",
+          "BetterDesktop.Kernel": "[1.3.0, )",
+          "BetterDesktop.Shell.Core": "[1.3.0, )"
+        }
+      },
+      "betterdesktop.shell.menubar": {
+        "type": "Project",
+        "dependencies": {
+          "BetterDesktop.Api": "[1.3.0, )",
+          "BetterDesktop.Kernel": "[1.3.0, )",
+          "BetterDesktop.Shell.AppSource": "[1.3.0, )",
+          "BetterDesktop.Shell.Calendar": "[1.3.0, )",
+          "BetterDesktop.Shell.Core": "[1.3.0, )",
+          "BetterDesktop.Shell.Desktop": "[1.3.0, )",
+          "BetterDesktop.Shell.Pinning": "[1.3.0, )",
+          "BetterDesktop.Shell.Search": "[1.3.0, )",
+          "BetterDesktop.Shell.Settings": "[1.3.0, )",
+          "BetterDesktop.Shell.StartMenu": "[1.3.0, )",
+          "BetterDesktop.Shell.Status": "[1.3.0, )",
+          "BetterDesktop.Shell.WindowTracker": "[1.3.0, )",
+          "LibreHardwareMonitorLib": "[0.9.6, )",
+          "ManagedShell": "[0.0.370, )",
+          "System.Drawing.Common": "[8.0.8, )"
+        }
+      },
+      "betterdesktop.shell.notification": {
+        "type": "Project",
+        "dependencies": {
+          "BetterDesktop.Api": "[1.3.0, )",
+          "BetterDesktop.Kernel": "[1.3.0, )",
+          "BetterDesktop.Shell.AppSource": "[1.3.0, )",
+          "BetterDesktop.Shell.Core": "[1.3.0, )",
+          "BetterDesktop.Shell.Pinning": "[1.3.0, )"
+        }
+      },
+      "betterdesktop.shell.pinning": {
+        "type": "Project",
+        "dependencies": {
+          "BetterDesktop.Kernel": "[1.3.0, )",
+          "BetterDesktop.Shell.AppSource": "[1.3.0, )"
+        }
+      },
+      "betterdesktop.shell.quicknote": {
+        "type": "Project",
+        "dependencies": {
+          "BetterDesktop.Kernel": "[1.3.0, )",
+          "BetterDesktop.Shell.Core": "[1.3.0, )",
+          "BetterDesktop.Shell.Settings": "[1.3.0, )"
+        }
+      },
+      "betterdesktop.shell.recent": {
+        "type": "Project",
+        "dependencies": {
+          "BetterDesktop.Api": "[1.3.0, )",
+          "BetterDesktop.Kernel": "[1.3.0, )",
+          "BetterDesktop.Shell.AppSource": "[1.3.0, )",
+          "BetterDesktop.Shell.Core": "[1.3.0, )",
+          "BetterDesktop.Shell.WindowTracker": "[1.3.0, )"
+        }
+      },
+      "betterdesktop.shell.search": {
+        "type": "Project",
+        "dependencies": {
+          "BetterDesktop.Api": "[1.3.0, )",
+          "BetterDesktop.Kernel": "[1.3.0, )",
+          "BetterDesktop.Shell.AppSource": "[1.3.0, )",
+          "BetterDesktop.Shell.IndexIpc": "[1.3.0, )"
+        }
+      },
+      "betterdesktop.shell.settings": {
+        "type": "Project",
+        "dependencies": {
+          "BetterDesktop.Api": "[1.3.0, )",
+          "BetterDesktop.Kernel": "[1.3.0, )",
+          "BetterDesktop.Kernel.Hmr": "[1.3.0, )",
+          "BetterDesktop.Shell.Core": "[1.3.0, )"
+        }
+      },
+      "betterdesktop.shell.startmenu": {
+        "type": "Project",
+        "dependencies": {
+          "BetterDesktop.Api": "[1.3.0, )",
+          "BetterDesktop.Kernel": "[1.3.0, )",
+          "BetterDesktop.Shell.AppSource": "[1.3.0, )",
+          "BetterDesktop.Shell.ContextMenu": "[1.3.0, )",
+          "BetterDesktop.Shell.Core": "[1.3.0, )",
+          "BetterDesktop.Shell.Pinning": "[1.3.0, )",
+          "BetterDesktop.Shell.Recent": "[1.3.0, )",
+          "BetterDesktop.Shell.Search": "[1.3.0, )",
+          "BetterDesktop.Shell.Settings": "[1.3.0, )",
+          "BetterDesktop.Shell.WindowTracker": "[1.3.0, )"
+        }
+      },
+      "betterdesktop.shell.status": {
+        "type": "Project",
+        "dependencies": {
+          "BetterDesktop.Api": "[1.3.0, )",
+          "BetterDesktop.Kernel": "[1.3.0, )",
+          "BetterDesktop.Shell.Core": "[1.3.0, )"
+        }
+      },
+      "betterdesktop.shell.taskbar": {
+        "type": "Project",
+        "dependencies": {
+          "BetterDesktop.Api": "[1.3.0, )",
+          "BetterDesktop.Kernel": "[1.3.0, )",
+          "BetterDesktop.Shell.Core": "[1.3.0, )",
+          "BetterDesktop.Shell.Settings": "[1.3.0, )"
+        }
+      },
+      "betterdesktop.shell.windowtracker": {
+        "type": "Project",
+        "dependencies": {
+          "BetterDesktop.Api": "[1.3.0, )",
+          "BetterDesktop.Kernel": "[1.3.0, )",
+          "BetterDesktop.Shell.AppSource": "[1.3.0, )",
+          "BetterDesktop.Shell.Core": "[1.3.0, )"
+        }
+      }
+    }
+  }
+}

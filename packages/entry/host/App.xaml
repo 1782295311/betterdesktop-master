@@ -1,0 +1,15 @@
+<Application x:Class="BetterDesktop.Host.App"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <Application.Resources>
+        <ResourceDictionary>
+            <!-- 【2026-09-17 抽取】主题令牌兜底画刷 + macOS 风控件样式（MacToggle/MacCombo/MacButton/
+                 MacAccentButton/MacSlider）+ 描边/阴影/滚动条规范，统一搬到 shell-core/Surface/ShellTheme.xaml。
+                 原因：独立设置进程（BetterDesktop.Settings.exe）要显示同一套设置分区，样式不能再"各存一份"
+                 （本仓已有"三处映射漂移"的教训）。宿主改为引用共享字典，外观与行为不变。 -->
+            <ResourceDictionary.MergedDictionaries>
+                <ResourceDictionary Source="pack://application:,,,/BetterDesktop.Shell.Core;component/Surface/ShellTheme.xaml" />
+            </ResourceDictionary.MergedDictionaries>
+        </ResourceDictionary>
+    </Application.Resources>
+</Application>

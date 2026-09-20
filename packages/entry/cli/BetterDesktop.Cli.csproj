@@ -1,0 +1,33 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <UseWPF>true</UseWPF>
+    <UseWindowsForms>true</UseWindowsForms>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>BetterDesktop.Cli</RootNamespace>
+    <AssemblyName>BetterDesktop.Cli</AssemblyName>
+    <WindowsApplication>true</WindowsApplication>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- 单测需要访问 internal 测试缝（SuppressUserFeedback：抑制通知气泡/弹框，避免测试挂起）。 -->
+    <InternalsVisibleTo Include="BetterDesktop.Cli.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\kernel\kernel\BetterDesktop.Kernel.csproj" />
+    <ProjectReference Include="..\..\shell\shell-convert\BetterDesktop.Shell.Convert.csproj" />
+    <!-- 「桌面控制」开关目录 + 免宿主原生层原语（2026-09-17 独立化：键名单点 + 无宿主要真的生效）。 -->
+    <ProjectReference Include="..\..\shell\shell-core\BetterDesktop.Shell.Core.csproj" />
+    <ProjectReference Include="..\..\api\BetterDesktop.Api.csproj" />
+  </ItemGroup>
+
+  <!-- 2026-09-20 convert-lite 迁移：**删掉了原来那条把整个 engines\ 树复制进构建输出的 glob**：
+       <Content Include="..\..\..\engines\**\*" Link="engines\..." CopyToOutputDirectory="PreserveNewest" />
+       它把 2.8GB 第三方引擎（pandoc/libreoffice/calibre/poppler/tesseract/ffmpeg）复制进 CLI 与宿主的
+       **构建输出**，而 publish.ps1 会把 CLI 的输出并进最终 dist ⇒ 全量 dist 高达 3035MB 的主因就是它。
+       现状：格式转换的文档/表格/电子书族已由**进程内 lite** 承担（native/convert-lite，零外部 exe）；
+       仍保留的三棵树（tesseract=OCR / ffmpeg=音视频 / poppler=PDF）是**运行时资产**，由安装器的
+       可选引擎步骤落位（06-可选引擎 模块），**不该混进构建产物**。
+       纪律：以后任何引擎树都不许通过 csproj Content 复制进 bin —— 只走 06 模块 + install-betterdesktop.ps1。 -->
+</Project>
