@@ -854,6 +854,40 @@ fn copy_wide(dst: &mut [u16], s: &str) {
     }
 }
 
+// ───────────── id 区间关系：**编译期**断言（S5-5 顺带修正） ─────────────
+//
+// 【为什么不是 `assert!`】它们描述的是**常量之间**的关系，就该在**编译期**报错 ——
+// 而不是等某天有人跑 `cargo test` 才发现，更不是被优化器看穿后变成一句空话。
+// `const _: () = assert!(...)` 才是"设计意图落到语法上"。
+// （原先写在对应测试用例里，clippy 如实指出那是运行时断言：`assertions_on_constants`。）
+const _: () = assert!(
+    CMD_START_BASE + 64 < CMD_STOP_BASE,
+    "启动区间（1000..）必须与停止区间（1200..）留出余量"
+);
+const _: () = assert!(
+    CMD_STOP_BASE + 64 < CMD_RESTART_BASE,
+    "停止区间必须与重启区间留出余量"
+);
+const _: () = assert!(
+    CMD_RESTART_BASE + 64 < CMD_TOGGLE_BASE,
+    "重启区间必须与开关区间（2000..）留出余量"
+);
+// S5-4：开关区间与 3000+ 的固定/子菜单 id 之间也必须留出余量 ——
+// 挨在一起时，将来多加一个开关就会撞进"暂停监护"的 id。
+const _: () = assert!(
+    CMD_TOGGLE_BASE + 200 < CMD_PAUSE_TOGGLE,
+    "开关区间必须与 S5-4 的固定 id（3000..）留出余量"
+);
+const _: () = assert!(CMD_PAUSE_TOGGLE < CMD_SYSINT_BASE);
+const _: () = assert!(
+    CMD_SYSINT_BASE + 16 < CMD_UPDATE_BASE,
+    "系统集成 4 项必须与更新区间留出余量"
+);
+const _: () = assert!(
+    CMD_UPDATE_BASE + 16 < CMD_RECOVERY,
+    "更新 2 项必须与一次性动作（3300..）留出余量"
+);
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -909,36 +943,14 @@ mod tests {
         assert_eq!(sorted.len(), keys.len(), "开关键必须唯一");
     }
 
-    /// id 区间不得重叠 —— 否则开关项会被"启动组件"分支接走（那条按组件数判界 ⇒ 开关被静默丢弃）。
+    /// 固定 id 必须两两不同 —— 否则开关项会被"启动组件"分支接走（那条按组件数判界 ⇒ 开关被静默丢弃）。
+    ///
+    /// # 区间之间的**大小关系**去哪了
+    ///
+    /// 已提到模块级的 `const _: () = assert!(...)`（**编译期**）。这里只保留集合判据 ——
+    /// "两两不同"不是常量之间的关系，编译期表达不了。
     #[test]
-    fn menu_id_ranges_do_not_overlap() {
-        assert!(
-            CMD_START_BASE + 64 < CMD_STOP_BASE,
-            "启动区间（1000..）必须与停止区间（1200..）留出余量"
-        );
-        assert!(
-            CMD_STOP_BASE + 64 < CMD_RESTART_BASE,
-            "停止区间必须与重启区间留出余量"
-        );
-        assert!(
-            CMD_RESTART_BASE + 64 < CMD_TOGGLE_BASE,
-            "重启区间必须与开关区间（2000..）留出余量"
-        );
-        // S5-4：开关区间与 3000+ 的固定/子菜单 id 之间也必须留出余量 ——
-        // 挨在一起时，将来多加一个开关就会撞进"暂停监护"的 id。
-        assert!(
-            CMD_TOGGLE_BASE + 200 < CMD_PAUSE_TOGGLE,
-            "开关区间必须与 S5-4 的固定 id（3000..）留出余量"
-        );
-        assert!(CMD_PAUSE_TOGGLE < CMD_SYSINT_BASE);
-        assert!(
-            CMD_SYSINT_BASE + 16 < CMD_UPDATE_BASE,
-            "系统集成 4 项必须与更新区间留出余量"
-        );
-        assert!(
-            CMD_UPDATE_BASE + 16 < CMD_RECOVERY,
-            "更新 2 项必须与一次性动作（3300..）留出余量"
-        );
+    fn menu_ids_are_pairwise_distinct() {
 
         // 固定 id 必须两两不同（复制粘贴最容易撞，而且撞了不会报错、只会"点 A 弹出 B"）
         let fixed = [

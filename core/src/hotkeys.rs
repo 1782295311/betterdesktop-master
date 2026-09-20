@@ -104,6 +104,17 @@ pub fn refresh_force(reason: &str) {
     refresh_inner(reason, true);
 }
 
+/// "配置未变 ⇒ 空转"的短路判据（**纯函数**，故可单测）。
+///
+/// # 为什么把它抽出来
+///
+/// 原先的测试写的是 `assert!(!(!true && unchanged), ...)` —— 那是**恒真式**（化简后恒为 `true`）：
+/// 它看起来在验证"force=true 绕过短路"，实际**什么都没验证**（clippy 也如实指出）。
+/// 判据提到一个函数里之后，实现与测试钉的是**同一份**逻辑，测试才真的在测东西。
+fn should_skip_refresh(force: bool, active_canonical: Option<&str>, desired: &str) -> bool {
+    !force && active_canonical == Some(desired)
+}
+
 fn refresh_inner(reason: &str, force: bool) {
     let Some(hwnd) = crate::window() else {
         log::warn(format!(
@@ -137,11 +148,8 @@ fn refresh_inner(reason: &str, force: bool) {
 
     {
         let state = lock();
-        if !force
-            && state.active
-                .as_ref()
-                .is_some_and(|(_, _, canonical)| *canonical == binding.canonical)
-        {
+        let active = state.active.as_ref().map(|(_, _, canonical)| canonical.as_str());
+        if should_skip_refresh(force, active, &binding.canonical) {
             return; // 配置未变，空转
         }
     }
@@ -425,16 +433,21 @@ mod tests {
     /// 唤醒后的强制刷新必须能通过"配置未变"这道短路 —— 否则睡眠中丢掉的热键永远补不回来。
     #[test]
     fn force_refresh_is_distinguishable_from_a_regular_one() {
-        // 直接验证短路条件本身（不碰真 HWND）：canonical 相同则普通刷新跳过、强制刷新不跳过。
-        let binding = betterdesktop_hotkey_spec::parse("Win+Shift+B").unwrap();
-        let active = Some((ID_CAPTURE, Action::Capture, binding.canonical.clone()));
+        let canonical = "Win+Shift+B";
 
-        let unchanged = active
-            .as_ref()
-            .is_some_and(|(_, _, canonical)| *canonical == binding.canonical);
-        assert!(unchanged, "配置未变 → 普通刷新应空转");
+        // ① 配置未变 + 普通刷新 → 空转。
         assert!(
-            !(!true && unchanged),
+            should_skip_refresh(false, Some(canonical), canonical),
+            "配置未变 → 普通刷新应空转"
+        );
+        // ② 配置**变了** → 不空转。没有这一条，③ 就没有说服力：判据若恒为真，单独的 force 断言也能过。
+        assert!(
+            !should_skip_refresh(false, Some("Ctrl+Alt+A"), canonical),
+            "配置变了 → 必须重注册"
+        );
+        // ③ force=true → 绕过短路。
+        assert!(
+            !should_skip_refresh(true, Some(canonical), canonical),
             "force=true 时必须绕过这道短路"
         );
     }
