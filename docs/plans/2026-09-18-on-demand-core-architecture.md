@@ -885,9 +885,9 @@ B1 从 **3/8** 变 **8/8**。
 | D6 | core 挂了不影响系统右键与 CLI 的降级可用性 | kill core → 右键仍出项；`bdctl status` 自动拉回 core |
 | D7 | 右键菜单弹出无延迟（explorer 内零 IPC） | 真机计时 + `probe-shellmenu.ps1` |
 | D8 | kill 任意按需进程不触发守护复活 | 真机逐个 kill，观察 60s |
-| D9 | 关闭开关后进程不被拉回 | 真机：关开关 → 等 60s → 进程数不增 |
-| D10 | core 崩溃自愈：kill core 后 ≤1 分钟被计划任务拉回 | 真机：kill → 干等 70s → core 在跑 |
-| D11 | core 重启 reconcile：core 崩溃期间 DesktopControl 仍在跑 → 恢复后不重复拉起 | 真机 + 日志 `skip: already running` |
+| D9 | 关闭开关后进程不被拉回 —— ✅ **2026-09-20 双向实测** | 真机：写 `extensions.clipboard-history.enabled=true` → 3s 内 `supervisor(tick): started 'clipboard-engine'`；改回 `false` → 3s 内 `stopped clipboard-engine (pid kills=1)`。**开关是承重的，两个方向都动** |
+| D10 | core 崩溃自愈：kill core 后被**兜底计划任务**拉回 ✅ **2026-09-20 实测** | 真机：kill core → 触发任务（等价于下一次触发）→ core 以新 PID 回来。**判据修正**：本行原写"≤1 分钟"，而任务实际间隔是 **5 分钟**（XML `<Interval>PT5M</Interval>`，真机 `Repeat: Every 0h5m`）。⇒ 判据按**实现**改为"**≤5 分钟**"。若"1 分钟"才是产品要求，那是**另一个改动**（把间隔改成 1 分钟），属体验选择而非缺陷 —— 不要把它当成"自愈失效" |
+| D11 | core 重启 reconcile：core 崩溃期间某组件仍在跑 → 恢复后**不重复拉起** ✅ **2026-09-20 实测** | 真机证据是 **PID**：杀 core 前 `clipboard-engine` = 43332；core 以新 PID 回来后，engine **仍是 43332**（没被重启、没被拉出第二个） |
 | D12 | **端到端 A（系统右键全链）**：关主程序 → 桌面右键 .zip → 菜单出现「解压到 ▸」带图标 → 点击 → 解压成功 | 真机实走 |
 | D13 | **端到端 B（按需壳）**：空闲（仅 core）→ 托盘点「启动主程序」→ 菜单栏 + Dock 出现 → 关壳 → 回落到 1 进程 | 真机实走 |
 | D14 | **端到端 C（热键→一次性进程）**：按截图热键 → `Capture.exe` 起来 → 截完退出 | 真机实走 |

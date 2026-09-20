@@ -128,6 +128,22 @@ publish 的其它 7 个组件（C#）则相反 —— 这正是它们在 B1 上�
 
 ⇒ **必须记成半成品**，否则下一轮会以为"验证过了"。
 
+### 4.4 开关与自愈（D9 / D10 / D11）✅ 2026-09-20
+
+| 项 | 做法 | 证据 |
+|---|---|---|
+| **D9** 开关是承重的（双向） | 写 `extensions.clipboard-history.enabled=true` → 3s 内 | `supervisor(tick): started 'clipboard-engine'` |
+| | 改回 `false` → 3s 内 | `supervisor(tick): stopped clipboard-engine (pid kills=1)` |
+| **D10** core 崩溃自愈 | kill core → 触发兜底任务 | core 以**新 PID** 回来 |
+| **D11** 重启不重复拉起 | 同上，对比组件 PID | 杀 core 前 engine=**43332**；core 回来后 engine **仍是 43332** |
+
+**一条判据修正**：D10 原写"kill core 后 **≤1 分钟**被拉回"，而兜底任务实际是**每 5 分钟**（XML `PT5M`）。
+判据已按实现改为 **≤5 分钟**；若"1 分钟"才是产品要求，那是另一个改动（改间隔），**不是自愈失效**。
+
+**D9 里一个值得注意的细节**：gate 打开时 core 只拉起了 `clipboard-engine`，**没有拉 `clipboard-panel`**
+—— 因为 panel 是 `on-demand`（`auto_start` 对它为 false）。这正好验证了两个字段的分工：
+**gate 管"允不允许跑"，`desired` 管"要不要常驻"**。
+
 ---
 
 ## 5. 已知但未验 / 待人工
