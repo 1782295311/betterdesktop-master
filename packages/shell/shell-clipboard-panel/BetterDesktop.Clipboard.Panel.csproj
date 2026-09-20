@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>    <UseWPF>true</UseWPF>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <RootNamespace>BetterDesktop.Clipboard.Panel</RootNamespace>
+    <AssemblyName>BetterDesktop.Clipboard.Panel</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\api\BetterDesktop.Api.csproj" />
+    <!-- 2026-09-16：按序粘贴会话进度上报要走既有 MenuCmd 命名管道（CLI/tray 同款通道，协议单点维护），故需要 kernel。 -->
+    <ProjectReference Include="..\..\kernel\kernel\BetterDesktop.Kernel.csproj" />
+    <ProjectReference Include="..\shell-core\BetterDesktop.Shell.Core.csproj" />
+    <ProjectReference Include="..\shell-clipboard-ipc\BetterDesktop.Shell.Clipboard.Ipc.csproj" />
+  </ItemGroup>
+
+</Project>

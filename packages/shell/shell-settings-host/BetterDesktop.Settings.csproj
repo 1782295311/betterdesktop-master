@@ -1,0 +1,34 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <UseWPF>true</UseWPF>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <RootNamespace>BetterDesktop.Shell.SettingsHost</RootNamespace>
+    <AssemblyName>BetterDesktop.Settings</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\api\BetterDesktop.Api.csproj" />
+    <!-- 事件总线（AppearanceService→ShellWindow 的外观变更通知）+ DiagnosticLog -->
+    <ProjectReference Include="..\..\kernel\kernel\BetterDesktop.Kernel.csproj" />
+    <!-- 共享外观字典（ShellTheme.xaml）+ ShellWindow 基类 + NullVibrancyService -->
+    <ProjectReference Include="..\shell-core\BetterDesktop.Shell.Core.csproj" />
+    <!-- SettingsWindow / SettingsSectionRegistry / AppearanceService -->
+    <ProjectReference Include="..\shell-settings\BetterDesktop.Shell.Settings.csproj" />
+    <!--
+      分区来源：**引用（≠ 加载）** 各区 Section 所在的插件程序集，只为 new 出它们的 ISettingsSection。
+      不加载插件 = 不会建菜单栏/Dock/自绘桌面等重窗口（这正是"独立设置进程能省内存"的前提）。
+    -->
+    <ProjectReference Include="..\shell-taskbar\BetterDesktop.Shell.Taskbar.csproj" />
+    <ProjectReference Include="..\shell-start-menu\BetterDesktop.Shell.StartMenu.csproj" />
+    <ProjectReference Include="..\shell-menu-bar\BetterDesktop.Shell.MenuBar.csproj" />
+    <ProjectReference Include="..\shell-island\BetterDesktop.Shell.Island.csproj" />
+    <ProjectReference Include="..\shell-dock\BetterDesktop.Shell.Dock.csproj" />
+    <ProjectReference Include="..\shell-desktop\BetterDesktop.Shell.Desktop.csproj" />
+    <ProjectReference Include="..\shell-context-menu\BetterDesktop.Shell.ContextMenu.csproj" />
+    <ProjectReference Include="..\shell-clipboard\BetterDesktop.Shell.Clipboard.csproj" />
+    <ProjectReference Include="..\shell-app-source\BetterDesktop.Shell.AppSource.csproj" />
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,35 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <UseWPF>true</UseWPF>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <RootNamespace>BetterDesktop.Shell.DesktopControl</RootNamespace>
+    <AssemblyName>BetterDesktop.DesktopControl</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\api\BetterDesktop.Api.csproj" />
+    <!-- 命令桥客户端（宿主在线时热切）+ DiagnosticLog：两端协议单点维护，不自写管道协议。 -->
+    <ProjectReference Include="..\..\kernel\kernel\BetterDesktop.Kernel.csproj" />
+    <!-- kernel loader（按 desktop.yml 子集清单装配支撑插件；M2 起本进程是常驻桌面服务）。 -->
+    <ProjectReference Include="..\..\kernel\kernel-loader\BetterDesktop.Kernel.Loader.csproj" />
+    <!-- 「桌面控制」开关目录 + 免宿主原生层原语（shell-core/DesktopControl）。 -->
+    <ProjectReference Include="..\shell-core\BetterDesktop.Shell.Core.csproj" />
+    <!-- 设置读写（context 可空 → headless，与宿主/CLI 同一磁盘契约与跨进程 mutex）。 -->
+    <ProjectReference Include="..\shell-settings\BetterDesktop.Shell.Settings.csproj" />
+    <!-- 剪贴板面板定位与拉起（面板 + 引擎本就不依赖宿主）。 -->
+    <ProjectReference Include="..\shell-clipboard-ipc\BetterDesktop.Shell.Clipboard.Ipc.csproj" />
+    <!-- M2：桌面右键菜单的「剪贴板历史…」区需要 IClipboardService —— 故子集清单里要能装配 clipboard 插件。
+         shell-desktop 本身不引用 shell-clipboard（避免反向依赖），故在此显式引用。 -->
+    <ProjectReference Include="..\shell-clipboard\BetterDesktop.Shell.Clipboard.csproj" />
+    <!-- 菜单内容与渲染层：与宿主内自绘右键**同一份实现**，不复制第二套菜单。 -->
+    <ProjectReference Include="..\shell-desktop\BetterDesktop.Shell.Desktop.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- 子集插件清单（kernel loader 读它装配"服务支撑插件 + 桌面层"）。必须随输出落位。 -->
+    <Content Include="desktop.yml" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+</Project>

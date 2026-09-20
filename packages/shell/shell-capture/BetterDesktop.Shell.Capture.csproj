@@ -1,0 +1,55 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    BetterDesktop.Shell.Capture — 截图（剪贴板扩展）入口面 exe。
+    第三个入口面 exe（与剪贴板面板同构）：常驻注册全局截图热键，按需创建覆盖层窗口；
+    不依赖宿主，壳退出后截图仍可用。采集后端运行在本进程内（单帧 4K BGRA ≈ 33MB，
+    不做跨进程帧搬运）；产物走 采集 → PNG 落盘(temp) → 写系统剪贴板 → 引擎捕获入库。
+  -->
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <UseWPF>true</UseWPF>
+    <!-- 托盘图标走 WinForms NotifyIcon（仓库先例：tray/、BetterDesktop.Cli） -->
+    <UseWindowsForms>true</UseWindowsForms>
+    <RootNamespace>BetterDesktop.Shell.Capture</RootNamespace>
+    <AssemblyName>BetterDesktop.Capture</AssemblyName>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <!--
+      工程级 TFM 覆盖（Directory.Build.props 允许显式例外）：
+      19041 的 Windows SDK 投影缺 TryCreateFromWindowId/IsBorderRequired（WGC 采集必需），
+      22621 = Win11 22H2 是 WGC 关黄框/窗口采集的最低运行时；引用方（api/ipc 19041）方向兼容。
+    -->
+    <TargetFramework>net8.0-windows10.0.22621.0</TargetFramework>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+
+  <!--
+    UseWindowsForms 会注入 System.Windows.Forms / System.Drawing 全局 using，
+    与本工程大量 WPF 类型（Button/Point/Brush/Color/Image/ListBox…）冲突 → 移除全局注入，
+    需要处（TrayIcon）改为文件内显式 using（System.Drawing.* 在本工程一律全限定）。
+  -->
+  <ItemGroup>
+    <Using Remove="System.Windows.Forms" />
+    <Using Remove="System.Drawing" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\api\BetterDesktop.Api.csproj" />
+    <ProjectReference Include="..\shell-clipboard-ipc\BetterDesktop.Shell.Clipboard.Ipc.csproj" />
+    <!--
+      主题令牌与设计刻度（EntryTheme / ThemeBrushes）：与剪贴板面板**同一份实现**。
+      shell-core 自身只依赖 kernel + api + clipboard-ipc，与本工程依赖同源，不引入新的传递依赖
+      （逐字重复"读 settings.json 推导令牌"的代码会让两个 exe 的视觉各漂各的）。
+    -->
+    <ProjectReference Include="..\shell-core\BetterDesktop.Shell.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="SkiaSharp" Version="2.88.9" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Resource Include="Assets\capture.ico" />
+  </ItemGroup>
+
+</Project>

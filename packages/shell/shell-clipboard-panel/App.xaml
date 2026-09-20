@@ -1,0 +1,56 @@
+<Application x:Class="BetterDesktop.Clipboard.Panel.App"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <Application.Resources>
+        <!-- 细胶囊滚动条（全局）：WPF 默认 ScrollBar 在深色主题下是系统灰白条 + 上下箭头按钮，观感突兀
+             （2026-09-12 用户实测反馈："滚动条太难看，不符合我们的美学"）。
+             放在应用级资源是**唯一可靠**的生效点：内层 ScrollViewer 的 ScrollBar 沿视觉树向上查找，
+             经 ListBox.Resources 命中不稳定（实测面板右侧始终不显示滚动条）。
+             Thumb 走 DynamicResource 主题令牌——令牌在 OnStartup 由 PanelTheme 推入 App 资源，
+             动态解析与声明顺序无关。 -->
+        <Style TargetType="ScrollBar">
+            <Setter Property="Width" Value="8" />
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ScrollBar">
+                        <Grid Background="Transparent">
+                            <!-- ⚠️ 这四个 TemplateBinding 缺一不可：Track 靠它们拿到滚动范围与视口，
+                                 漏掉则 Maximum=0 → Thumb 高度算成 0 → 滚动条**永远不可见**
+                                 （2026-09-12 实测：滚轮能滚、但右侧怎么都看不到滚动条，根因就是这里）。
+                                 垂直滚动条 IsDirectionReversed=true 才是"向下滚 = Thumb 下移"的正向。 -->
+                            <Track x:Name="PART_Track"
+                                   IsDirectionReversed="True"
+                                   Orientation="{TemplateBinding Orientation}"
+                                   Minimum="{TemplateBinding Minimum}"
+                                   Maximum="{TemplateBinding Maximum}"
+                                   Value="{TemplateBinding Value}"
+                                   ViewportSize="{TemplateBinding ViewportSize}">
+                                <Track.Thumb>
+                                    <Thumb MinHeight="28" HorizontalAlignment="Center">
+                                        <Thumb.Template>
+                                            <ControlTemplate TargetType="Thumb">
+                                                <Border x:Name="Bar"
+                                                        Width="6"
+                                                        CornerRadius="3"
+                                                        Opacity="0.35"
+                                                        Background="{DynamicResource ThemeForeground}" />
+                                                <ControlTemplate.Triggers>
+                                                    <Trigger Property="IsMouseOver" Value="True">
+                                                        <Setter TargetName="Bar" Property="Opacity" Value="0.95" />
+                                                        <Setter TargetName="Bar" Property="Width" Value="8" />
+                                                    </Trigger>
+                                                </ControlTemplate.Triggers>
+                                            </ControlTemplate>
+                                        </Thumb.Template>
+                                    </Thumb>
+                                </Track.Thumb>
+                            </Track>
+                        </Grid>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </Application.Resources>
+</Application>

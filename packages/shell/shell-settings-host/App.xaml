@@ -1,0 +1,15 @@
+<Application x:Class="BetterDesktop.Shell.SettingsHost.App"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <!-- ShutdownMode 在 App.xaml.cs 设为 OnExplicitShutdown：窗口关闭 = 进程退出（本进程存在的理由就是"关掉即释放内存"）。 -->
+    <Application.Resources>
+        <ResourceDictionary>
+            <!-- 与宿主**同一份**外观字典（shell-core/Surface/ShellTheme.xaml）：
+                 MacToggle/MacCombo/MacButton/MacSlider + 卡片/描边/滚动条规范。
+                 不复制、不各存一份，避免样式漂移。 -->
+            <ResourceDictionary.MergedDictionaries>
+                <ResourceDictionary Source="pack://application:,,,/BetterDesktop.Shell.Core;component/Surface/ShellTheme.xaml" />
+            </ResourceDictionary.MergedDictionaries>
+        </ResourceDictionary>
+    </Application.Resources>
+</Application>
