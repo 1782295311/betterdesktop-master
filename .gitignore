@@ -57,4 +57,13 @@ build-tmp.log
 **/backups/
 
 # 第三方转换引擎完整安装包（calibre / tesseract / ffmpeg / libreoffice，体积大 + 第三方二进制与许可证）
-engines/
+#
+# 【必须锚定根目录：开头的 / 不能省】
+# 写成 `engines/` 时，gitignore 的**无斜杠模式在任意深度匹配** —— 于是
+# `packages/shell/shell-convert/Services/Engines/` 也被吞掉（Windows 下 git 的
+# 匹配对大小写不敏感，`Engines` 撞上小写规则）。后果实测：该目录里 3 个**新**文件
+# （LiteEngine.cs / LiteCapability.cs / ComPdfTwoHopEngine.cs）从未入库，
+# 而它们在磁盘上存在、本地能构建 ⇒ `git status` 干净、本地构建绿、干净检出却编译失败。
+# 这是 B1「干净检出构建不出来」的真凶：最阴的一种，因为所有本地信号都显示"正常"。
+# 锚定成 `/engines/` 后只匹配仓库根的那一份（已核对：根 engines/ 仍被忽略，不再有源文件被吞）。
+/engines/
