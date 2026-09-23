@@ -1,0 +1,160 @@
+{
+  "note": [
+    "完整性清单 —— 一个完整安装必须存在的文件。这是该语义的**唯一真相源**。",
+    "",
+    "为什么要有这个文件（2026-09-21）：'一个完整安装包含哪些文件' 曾经同时写在 4 个地方",
+    "（publish.ps1 $required / install-betterdesktop.ps1 $required / publish-modules.ps1 $required /",
+    "launcher 的 ComponentBootstrapper.RequiredFiles）。agent 退役删掉 agent.yml 时清了前 3 处，",
+    "漏了第 4 处 —— 于是每次启动都报「组件不完整：缺少 1 项 能力声明（agent.yml）」，并建议用户",
+    "「重新运行安装包」（而重装不可能造出一个已按设计删掉的文件）。4 份清单 + 1 次删除 = 1 个永久误报。",
+    "",
+    "现在：所有消费方都读这个文件，不再各自硬编码。",
+    "  · stage=main    由 scripts/publish.ps1 产出（dist/BetterDesktop-*）",
+    "  · stage=modules 由 scripts/publish-modules.ps1 产出（02/03/04/05 模块，会同时拷进 01-主程序）",
+    "  · producedBy = 该产物的来源工程/源文件，**必须真实存在**。门禁 verify-system-integration 逐个核实 ——",
+    "    这正是 agent.yml 那类'清单里还留着一个已经没人产的东西'的自动检出点。",
+    "  · why   = 它为什么必须在清单里（缺了会发生什么）。删条目之前先读这一句。",
+    "  · label = 面向用户的名称，缺件提示直接显示它（'缺少 1 项：能力声明（agent.yml）'）。"
+  ],
+  "files": [
+    {
+      "path": "BetterDesktop.exe",
+      "label": "启动器",
+      "stage": "main",
+      "producedBy": "packages/entry/launcher/BetterDesktop.Launcher.csproj",
+      "why": "用户唯一入口（拉起全部组件 + 自检修复 + 首次偏好）。缺了就没法启动。"
+    },
+    {
+      "path": "betterdesktop-core.exe",
+      "label": "常驻核心",
+      "stage": "main",
+      "producedBy": "core/Cargo.toml",
+      "why": "唯一常驻进程（托盘图标 / 全局热键 / 控制管道 / 组件监护 / 电源 / 安全）。缺了整包就**没有生命周期所有者**，按需架构等于不存在 —— 是发布阻断项，不是可选件。"
+    },
+    {
+      "path": "vcruntime140.dll",
+      "label": "VC++ 运行库",
+      "stage": "main",
+      "producedBy": "redist/vcruntime140.dll",
+      "why": "betterdesktop-core.exe 的**真实导入**（2026-09-22 直接扫其导入表确认；本仓二进制里只有它一个 import VCRUNTIME140 —— Rust 引擎、原生右键 DLL、各 .NET 组件都不依赖）。core 是生命周期所有者 ⇒ 缺了它整个产品不工作。而安装器曾把它判成「只影响第三方转换格式、从不致命」，两者差一个数量级。来源固定在入库的 redist/（14.51.36231.0）而不是发布时从 System32 现取：build-release.md M12.2 要求同一 commit 在任何机器上产出可预期产物。"
+    },
+    {
+      "path": "BetterDesktop.ico",
+      "label": "托盘图标",
+      "stage": "main",
+      "producedBy": "packages/entry/host/Assets/BetterDesktop.ico",
+      "why": "core 按 <exeDir>\\BetterDesktop.ico 找它（core/src/tray.rs）。缺了通知区显示系统默认图标 = 产品没有脸。"
+    },
+    {
+      "path": "BetterDesktop.Host.exe",
+      "label": "主程序外壳",
+      "stage": "main",
+      "producedBy": "packages/entry/host/BetterDesktop.Host.csproj"
+    },
+    {
+      "path": "BetterDesktop.Cli.exe",
+      "label": "命令行入口",
+      "stage": "main",
+      "producedBy": "packages/entry/cli/BetterDesktop.Cli.csproj",
+      "why": "必须与 Host 同目录：跨进程契约（管道 / 系统整合 / 组件控制）全走它。"
+    },
+    {
+      "path": "BetterDesktop.DesktopControl.exe",
+      "label": "桌面服务",
+      "stage": "main",
+      "producedBy": "packages/shell/shell-desktop-control/BetterDesktop.DesktopControl.csproj"
+    },
+    {
+      "path": "BetterDesktop.Settings.exe",
+      "label": "设置中心",
+      "stage": "main",
+      "producedBy": "packages/shell/shell-settings-host/BetterDesktop.Settings.csproj"
+    },
+    {
+      "path": "BetterDesktop.Updater.exe",
+      "label": "独立更新器",
+      "stage": "main",
+      "producedBy": "packages/entry/updater/BetterDesktop.Updater.csproj",
+      "why": "独立进程：主程序损坏/缺失时它仍要能工作。"
+    },
+    {
+      "path": "BetterDesktop.Recovery.exe",
+      "label": "应急恢复",
+      "stage": "main",
+      "producedBy": "packages/entry/recovery/BetterDesktop.Recovery.csproj"
+    },
+    {
+      "path": "convert-engine.exe",
+      "label": "格式转换引擎",
+      "stage": "main",
+      "producedBy": "native/convert-engine/Cargo.toml",
+      "why": "cargo 产物，本仓**不自动编译**（要先跑 cargo build --release）。曾经不在任何清单里，dev/发布目录一律缺 → 转换功能点开就弹「Rust 转换引擎未部署」。"
+    },
+    {
+      "path": "cordis.yml",
+      "label": "插件声明",
+      "stage": "main",
+      "producedBy": "packages/entry/host/cordis.yml",
+      "why": "壳的插件清单，LoaderService 靠它装配；缺了壳起来但没有插件。"
+    },
+    {
+      "path": "native\\BetterDesktopShellMenu.dll",
+      "label": "右键菜单原生扩展",
+      "stage": "main",
+      "producedBy": "packages/shell/shell-context-menu/native/build/BetterDesktopShellMenu.vcxproj",
+      "why": "B 路 in-proc COM 与 A 路 IExplorerCommand 是**同一枚** DLL。缺了就是「注册成功但没有菜单」——半成品。"
+    },
+    {
+      "path": "install-betterdesktop.ps1",
+      "label": "安装脚本",
+      "stage": "main",
+      "producedBy": "scripts/install-betterdesktop.ps1"
+    },
+    {
+      "path": "uninstall-betterdesktop.ps1",
+      "label": "卸载脚本",
+      "stage": "main",
+      "producedBy": "scripts/uninstall-betterdesktop.ps1",
+      "why": "必须是被删目录之外的独立脚本（托盘自己也在被删目录里）；托盘「卸载 BetterDesktop…」按组件目录找它。缺了用户拿到的是「卸载不了」的包。"
+    },
+    {
+      "path": "required-files.json",
+      "label": "完整性清单",
+      "stage": "main",
+      "producedBy": "packages/entry/launcher/BetterDesktop.Launcher.csproj",
+      "why": "本文件自己。启动器读它做「组件就位」核对 —— 它没随包发出去，核对就失效（那时会报「本次未做组件核对」，不报缺件）。"
+    },
+    {
+      "path": "BetterDesktop.Capture.exe",
+      "label": "截屏工具",
+      "stage": "modules",
+      "producedBy": "packages/shell/shell-capture/BetterDesktop.Shell.Capture.csproj"
+    },
+    {
+      "path": "BetterDesktop.Clipboard.Panel.exe",
+      "label": "剪贴板面板",
+      "stage": "modules",
+      "producedBy": "packages/shell/shell-clipboard-panel/BetterDesktop.Clipboard.Panel.csproj",
+      "why": "2026-09-18 真实回归：从 01-主程序 装出来的干净安装里没有它，侧边把手 / 热键 / 托盘入口全部失效，剪贴板历史「根本起不来」。所以它必须也进 01-主程序（publish-modules.ps1 会拷）。"
+    },
+    {
+      "path": "BetterDesktop.Clipboard.Engine.exe",
+      "label": "剪贴板引擎",
+      "stage": "modules",
+      "producedBy": "engine/Cargo.toml"
+    },
+    {
+      "path": "BetterDesktop.Index.Engine.exe",
+      "label": "搜索索引引擎",
+      "stage": "modules",
+      "producedBy": "engine-index/Cargo.toml"
+    },
+    {
+      "path": "BetterDesktop.Ocr.Engine.exe",
+      "label": "OCR 引擎",
+      "stage": "modules",
+      "producedBy": "engine-ocr/Cargo.toml",
+      "why": "统一 OCR 能力（计划 docs/plans/2026-09-22-rust-onnx-ocr-engine.md）。缺它时：格式转换的「识别文本 (OCR)」目标隐藏、剪贴板 OCR 退回 Windows.Media.Ocr(L1)——即降级可见、整项不坏。它的模型与 onnxruntime.dll 是可选引擎树 engines\\ocr\\（06-可选引擎），不在此清单内（与 poppler/ffmpeg 同款口径）。2026-09-22 起取代 tesseract：外部 240 MB 引擎树已退役（publish-modules.ps1 的 replacedTrees 会拦住它被误发）。"
+    }
+  ]
+}

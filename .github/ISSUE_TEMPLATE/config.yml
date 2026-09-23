@@ -1,0 +1,9 @@
+# Issue 模板配置
+# 参见 https://docs.github.com/communities/using-templates-to-encourage-useful-issues-and-pull-requests/configuring-issue-templates-for-your-repository
+
+blank_issues_enabled: false
+
+contact_links:
+  - name: 📖 故障处置手册
+    url: https://github.com/1782295311/betterdesktop-master/blob/main/docs/runbook/README.md
+    about: 遇到「装完没反应 / 右键菜单不出现 / 托盘或壳面不见了」等问题？先查 runbook，可能已有处置方案。
