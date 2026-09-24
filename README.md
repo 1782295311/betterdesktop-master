@@ -165,9 +165,15 @@ better-desktop-cordis/
 
 ## 📜 许可证
 
-**CC BY-NC 4.0**（署名-非商业使用 4.0 国际版）
+**Source Code** · [PolyForm Noncommercial License 1.0.0](https://polyformproject.org/licenses/noncommercial/1.0.0)
 
-分享与修改请注明出处，禁止商业用途。详见 [LICENSE](LICENSE)。
+> You may use, modify and distribute this software for non-commercial purposes. Any commercial use, commercial redistribution or SaaS service requires separate commercial license from the author.
+>
+> （非商业用途可免费使用、修改、分发；任何**商业使用、商业再分发或 SaaS 服务**，需向作者申请单独商业许可。）
+
+**Documentation, images and tutorials** · [CC BY-NC 4.0](https://creativecommons.org/licenses/by-nc/4.0/)（署名-非商业使用 4.0 国际版，全文见 [LICENSE-CC-BY-NC](LICENSE-CC-BY-NC)）
+
+详见 [LICENSE](LICENSE)。
 
 <div align="center">
 

@@ -27,7 +27,8 @@
 | 组件 | 用途 | 许可证 | 说明 |
 |---|---|---|---|
 | FFmpeg | 音视频（本轮菜单项隐藏，引擎树保留备将来恢复） | LGPL-2.1 / GPL-2.0 | 随 `06-可选引擎` 分发，目录内含 LICENSE |
-| Tesseract OCR | 图片 / 截图文字识别 | Apache-2.0 | 同上（tessdata 语言包为各自许可证） |
+| ONNX Runtime | OCR 推理运行时（`engines\ocr\onnxruntime.dll`，经 libloading 运行时加载） | MIT | 随 `06-可选引擎` 分发；`DirectML.dll` 复用系统自带（不随包） |
+| PP-OCRv6（det/rec ONNX 模型） | 图片 / 截图文字识别（`engines\ocr\models\`） | Apache-2.0 | 模型文件随 `06-可选引擎` 分发 |
 | Poppler | PDF 渲染与文本提取 | GPL-2.0 | 同上，目录内含 LICENSE |
 
 ## 二、.NET 依赖（NuGet）
@@ -76,4 +77,5 @@
 
 ## 四、本产品许可证
 
-Better Desktop Cordis 本体：**CC BY-NC 4.0**（署名-非商业使用）——见根目录 LICENSE。
+Better Desktop Cordis 本体（源代码）：**PolyForm Noncommercial License 1.0.0**（非商业使用/修改/分发免费；商业使用、商业再分发或 SaaS 服务需向作者申请商业许可）——见根目录 [LICENSE](LICENSE)。
+文档、图片、教程：**CC BY-NC 4.0**（署名-非商业使用 4.0 国际版）——见 [LICENSE-CC-BY-NC](LICENSE-CC-BY-NC)。
