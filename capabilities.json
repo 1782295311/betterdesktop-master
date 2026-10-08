@@ -1,0 +1,68 @@
+{
+  "_note": [
+    "分发脊柱（distribution spine）：一份“可选能力”清单 —— 一个能力 = 它的文件 + 资产树 + 由谁(core 组件)对运行态负责 + 从哪儿取。",
+    "",
+    "【三个 owner，各管一个事实，互相靠门禁钉住、不靠默契】",
+    "  ① 完整性（安装后必须存在哪些文件）= build/scripts/manifests/required-files.json（stage=main/modules），",
+    "     读者：launch/launcher 的 RequiredFilesManifest + 门禁 verify-installer-payload。本文件**不**再抄一遍“必须存在”。",
+    "  ② 生命周期（哪个组件在跑、谁拉起/谁停）= runtime/core/components.json，读它的是 core（Rust），",
+    "     本文件只**引用**它的组件名（coreComponent），绝不另写一份组件表。",
+    "  ③ 分发（哪些是可选能力、缺了去哪个 source 取）= 本文件。读者：launch/launcher 的 CapabilitiesManifest。",
+    "  门禁 verify-capabilities（见 run-gates 注册表）把三者的 join 钉死：coreComponent ∈ components.json、",
+    "  ∪files == required-files.json 的 stage=modules、source.kind ∈ 已登记 adapter。任一处静默分家 ⇒ 报红。",
+    "",
+    "【source 是“引用槽”，不是裸 URL】（用户 2026-10-08 定案：下载平台可换，今天 GitHub、明天 Steam）",
+    "  今天 kind=github-release，repo=1782295311/betterdesktop-master（我们自己的仓）。",
+    "  未来 kind=steam-depot：客户端管投递，本文件只需把 kind 换掉、登记新 adapter，coreComponent/files/tree 一字不改。",
+    "  已登记 adapter 集合 = { github-release }（门禁核对；空集/未知 kind 报红）。",
+    "",
+    "【ref + 取件通道（R1，2026-10-08）】source.ref = payload 提交在仓库里的 ref（今天 main）。",
+    "  按需取件走既有更新器通道：BetterDesktop.Updater --fetch <files> --source <raw 基址>，",
+    "  raw 基址 = https://raw.githubusercontent.com/{repo}/{ref}/（由启动器 CapabilityFetchSource 从本槽解出）。",
+    "  它只取 manifest.json 里点名能力的那几条文件、逐个 SHA256 验收，不触发整包更新。",
+    "  文件是否进清单由 verify-installer-payload 钉住；能力→文件的归属由本表 R3 钉住 —— 无第四份清单。",
+    "",
+    "【tree 字段】只有 ocr 有资产树（engines/ocr = onnxruntime.dll + PP-OCRv6 models，部署到 BaseDir\\engines\\ocr，",
+    "  与 shell-ocr-ipc/OcrEngineAssets.ResolveRoot 的判定一致）。仓库 engines/ 下其余目录（convert-engine/engine/...）",
+    "  是 Rust 源码 crate，不是随包资产树，故不进本表的 tree。"
+  ],
+  "adapters": [ "github-release" ],
+  "capabilities": [
+    {
+      "id": "ocr",
+      "label": "OCR 引擎（屏幕取词 / 截图识字）",
+      "coreComponent": "ocr-engine",
+      "files": [ "betterdesktop-ocr-engine.exe" ],
+      "tree": "engines/ocr",
+      "source": { "kind": "github-release", "repo": "1782295311/betterdesktop-master", "ref": "main" }
+    },
+    {
+      "id": "translate",
+      "label": "翻译引擎（离线 / 本地模型译文）",
+      "coreComponent": "translate-engine",
+      "files": [ "betterdesktop-translate-engine.exe" ],
+      "source": { "kind": "github-release", "repo": "1782295311/betterdesktop-master", "ref": "main" }
+    },
+    {
+      "id": "screenshot",
+      "label": "截图引擎",
+      "coreComponent": "capture",
+      "files": [ "betterdesktop-capture.exe" ],
+      "source": { "kind": "github-release", "repo": "1782295311/betterdesktop-master", "ref": "main" }
+    },
+    {
+      "id": "clipboard",
+      "label": "剪贴板历史引擎",
+      "coreComponent": "clipboard-engine",
+      "files": [ "BetterDesktop.Clipboard.Engine.exe" ],
+      "source": { "kind": "github-release", "repo": "1782295311/betterdesktop-master", "ref": "main" }
+    },
+    {
+      "id": "index",
+      "label": "搜索索引引擎",
+      "coreComponent": "index-engine",
+      "files": [ "BetterDesktop.Index.Engine.exe" ],
+      "source": { "kind": "github-release", "repo": "1782295311/betterdesktop-master", "ref": "main" }
+    }
+  ]
+}

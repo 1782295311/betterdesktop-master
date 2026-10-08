@@ -1,0 +1,34 @@
+# desktop.yml — 「桌面服务」进程（BetterDesktop.DesktopControl.exe）的插件清单
+#
+# 与宿主 host/cordis.yml、常驻能力宿主 agent/agent.yml **相互独立**。
+# 纪律（与 agent.yml 同）：只能列 Entry 里已注册工厂的 name（LoaderService 对未注册 name fail-closed）；
+#                          顺序 = 依赖顺序（提供者在前）。
+#
+# 【为什么是这几项】自绘桌面层（全屏窗口 + 图标网格 + 自绘右键菜单）运行期需要：
+#   · vibrancy         → IVibrancyService（窗口材质；DesktopPlugin 缺失时用 NullVibrancyService 兜底）
+#   · settings         → ISettingsService / IAppearanceService / ISettingsSectionRegistry（外观与设置即时生效）
+#   · context-menu     → ToolCatalog（「打开方式」应用清单）与 IFileClassifier
+#   · convert          → IConvertMenuService（「转换为 ▸」）+ IArchiveService（「压缩到 ▸ / 解压到 ▸」）
+#   · clipboard-history→ IClipboardService（「剪贴板历史…」）
+# 这五个提供者**都不创建窗口**（已逐个核对），所以放进独立进程不会把壳面拖进来。
+#
+# 【为什么没有 desktop 自己】desktop 插件由本进程**动态装载/卸载**（context.Plugin(handle) / DisposeAsync），
+# 以便 components.desktop 开关做到进程内即时启停（照 agent/Capabilities/ExclusiveCapabilityHost 的既有范式）。
+#
+# 【为什么没有菜单栏 / Dock / 开始菜单 / 灵动岛】用户 2026-09-17 定调：菜单栏与 Dock **需要主程序**；
+# 自绘桌面与连带的自绘右键菜单**不需要**。壳面插件一律不得出现在此清单。
+plugins:
+  - id: vibrancy
+    name: vibrancy
+
+  - id: settings
+    name: settings
+
+  - id: context-menu
+    name: context-menu
+
+  - id: convert
+    name: convert
+
+  - id: clipboard-history
+    name: clipboard-history

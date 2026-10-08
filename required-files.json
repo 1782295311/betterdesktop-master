@@ -1,0 +1,39 @@
+{
+  "_note": [
+    "全仓唯一一份完整性清单。运行时（launch/launcher/Services/RequiredFilesManifest.cs）、",
+    "门禁（build/scripts/verify-installer-payload.ps1 规则 2）与本文件是同一真相源的三个读者。",
+    "stage=main 由 publish.ps1 产出，stage=modules 由 publish-modules.ps1 补入 01-主程序。",
+    "入选判据：安装后必须存在、且**主组件（Components: main）无条件送达**的文件。",
+    "可选组件（.iss 里 Components: clipboard / engines）一律不得列入 —— 启动器只会",
+    "把缺件报成 Fail 并建议重装，而重装不可能造出用户主动取消勾选的东西",
+    "（2026-09-19 的 agent.yml 永久误报就是这个形状）。",
+    "2026-09-28 移除 BetterDesktop.Shell.Ocr.dll：v2 里**没有任何被发布的项目引用 shell-ocr**",
+    "（shell-ocr 的 TFM 是 10.0.22621，宿主/convert 都是 19041，引用方 TFM 不得低于被引用方 ——",
+    "这条约束写在 shell-convert 的注释里）。它曾随 02-截屏 的 shell-capture 进载荷，那个目录",
+    "2026-09-23 已退役 ⇒ 留在清单里等于让启动器每次开机都报「组件不完整」。OCR 的运行时入口是",
+    "Rust 的 betterdesktop-ocr-engine.exe（见 runtime/core/components.json 的 ocr-engine 条目）。"
+  ],
+  "files": [
+    { "path": "BetterDesktop.exe", "label": "启动器", "stage": "main" },
+    { "path": "BetterDesktop.Host.exe", "label": "主程序", "stage": "main" },
+    { "path": "BetterDesktop.Cli.exe", "label": "命令行入口（系统登记/交接都走它）", "stage": "main" },
+    { "path": "BetterDesktop.DesktopControl.exe", "label": "桌面控制菜单", "stage": "main" },
+    { "path": "BetterDesktop.Settings.exe", "label": "设置中心", "stage": "main" },
+    { "path": "BetterDesktop.LiveTranslate.exe", "label": "实时屏幕翻译覆盖层", "stage": "main" },
+    { "path": "BetterDesktop.Updater.exe", "label": "更新器", "stage": "main" },
+    { "path": "BetterDesktop.Recovery.exe", "label": "启动失败恢复", "stage": "main" },
+    { "path": "betterdesktop-core.exe", "label": "常驻核心（托盘/热键/守护）", "stage": "main" },
+    { "path": "BetterDesktop.ico", "label": "托盘图标", "stage": "main" },
+    { "path": "cordis.yml", "label": "能力声明", "stage": "main" },
+    { "path": "version.json", "label": "本次构建的版本真相源", "stage": "main" },
+    { "path": "convert-engine.exe", "label": "文档格式转换引擎", "stage": "main" },
+    { "path": "native\\BetterDesktopShellMenu.dll", "label": "系统右键菜单原生扩展", "stage": "main" },
+    { "path": "install-betterdesktop.ps1", "label": "安装脚本（用户级安装/修复入口）", "stage": "main" },
+    { "path": "uninstall-betterdesktop.ps1", "label": "卸载脚本（必须独立于被删目录）", "stage": "main" },
+    { "path": "betterdesktop-capture.exe", "label": "截图引擎", "stage": "modules" },
+    { "path": "betterdesktop-ocr-engine.exe", "label": "OCR 引擎", "stage": "modules" },
+    { "path": "betterdesktop-translate-engine.exe", "label": "翻译引擎", "stage": "modules" },
+    { "path": "BetterDesktop.Clipboard.Engine.exe", "label": "剪贴板历史引擎", "stage": "modules" },
+    { "path": "BetterDesktop.Index.Engine.exe", "label": "搜索索引引擎", "stage": "modules" }
+  ]
+}
